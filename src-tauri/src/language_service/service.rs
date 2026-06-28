@@ -1348,6 +1348,12 @@ impl LanguageService {
                 // resolve against an incomplete symbol set (order-dependent).
                 self.symbol_store
                     .backfill_unresolved_relationship_targets()?;
+                // M5.1b — then mine the STILL-NULL call edges that carry a
+                // confident recv_type via the GLOBAL cross-file receiver-type
+                // registry. Runs last so it sees the fully-committed symbol+edge
+                // set and only touches edges the prior two passes left NULL.
+                self.symbol_store
+                    .mine_receiver_type_relationship_targets()?;
             }
         }
 
@@ -2323,6 +2329,10 @@ impl LanguageService {
             // directory index has committed every file (true global COUNT(*)).
             self.symbol_store
                 .backfill_unresolved_relationship_targets()?;
+            // M5.1b — mine the still-NULL recv_type-carrying call edges against
+            // the GLOBAL receiver-type registry (runs after the back-fill).
+            self.symbol_store
+                .mine_receiver_type_relationship_targets()?;
         }
 
         stats.duration_ms = start.elapsed().as_millis() as u64;
@@ -11587,6 +11597,129 @@ mod tests {
             fs::write(temp_dir.path().join(file), source).unwrap();
             let symbols = service.index_file(file).unwrap();
             (service, temp_dir, symbols)
+        }
+
+        /// M5.1b END-TO-END: extraction → store → M2.4 back-fill → GLOBAL mining.
+        /// `Dog(Animal)` lives in a different file from `Animal`; inside `Dog.bark`
+        /// the `self.speak()` call captures recv_type `Dog`, but `speak` is NOT a
+        /// same-file/imported candidate, so the per-file resolver leaves it NULL.
+        /// A decoy `Plant.speak` makes the name ambiguous so the M2.4 name-only
+        /// back-fill cannot resolve it either — only the cross-file supertype walk
+        /// can. After the two global passes it resolves to `Animal.speak` (NOT the
+        /// decoy `Plant.speak`), proving the registry + recv_type mine win.
+        #[test]
+        fn receiver_global_cross_file_inheritance_mines_supertype_call() {
+            let (service, temp_dir) = create_test_service();
+            fs::write(
+                temp_dir.path().join("base.py"),
+                "class Animal:\n    def speak(self):\n        return 1\n",
+            )
+            .unwrap();
+            fs::write(
+                temp_dir.path().join("decoy.py"),
+                "class Plant:\n    def speak(self):\n        return 9\n",
+            )
+            .unwrap();
+            fs::write(
+                temp_dir.path().join("derived.py"),
+                "from base import Animal\n\n\nclass Dog(Animal):\n    def bark(self):\n        return self.speak()\n",
+            )
+            .unwrap();
+
+            let base_syms = service.index_file("base.py").unwrap();
+            let _decoy_syms = service.index_file("decoy.py").unwrap();
+            let derived_syms = service.index_file("derived.py").unwrap();
+
+            let dog_bark = sym(&derived_syms, "Dog.bark");
+            let animal_speak = sym(&base_syms, "Animal.speak");
+
+            // Per-file + ambiguous name → speak() is NULL before the global passes.
+            let before = resolved_call_targets(&service, dog_bark, "speak");
+            assert!(
+                !before.contains(&animal_speak.id),
+                "speak() must be unresolved before the global mining pass; got {before:?}"
+            );
+
+            service
+                .symbol_store
+                .backfill_unresolved_relationship_targets()
+                .unwrap();
+            service
+                .symbol_store
+                .mine_receiver_type_relationship_targets()
+                .unwrap();
+
+            let after = resolved_call_targets(&service, dog_bark, "speak");
+            assert!(
+                after.contains(&animal_speak.id),
+                "self.speak() in Dog(Animal) must mine-resolve to Animal.speak; got {after:?}"
+            );
+        }
+
+        /// M5.1b PRECISION BLOCKER, the reviewer's EXACT scenario, end-to-end:
+        /// `from pathlib import Path` … `def use(p: Path): return p.compute()`, and a
+        /// PROJECT `class Path: def compute(self)` in another file. The `p: Path`
+        /// receiver type is a SIMPLE NAME inferred from the annotation (NOT `self`),
+        /// so extraction tags it `recv_self = false`. The correct answer for
+        /// `p.compute()` is NULL (`p` is the library `pathlib.Path`).
+        ///
+        /// A decoy `Other.compute` makes the method name `compute` AMBIGUOUS so the
+        /// M2.4 name-only back-fill cannot resolve it — the ONLY pass that could is
+        /// the GLOBAL receiver-type mining, which is exactly where the reviewer's
+        /// blocker lived (the pre-fix miner resolved recv_type `Path` to the unique
+        /// project class `Path` and tagged `p.compute()` as `Path.compute`). After
+        /// the fix the provenance gate defers the non-self recv_type, so the edge
+        /// stays NULL through the FULL pipeline.
+        #[test]
+        fn null_mining_library_typed_param_does_not_resolve_to_project_class() {
+            let (service, temp_dir) = create_test_service();
+            fs::write(
+                temp_dir.path().join("model.py"),
+                "class Path:\n    def compute(self):\n        return 1\n",
+            )
+            .unwrap();
+            // Decoy: a second `compute` so the name is NOT globally unique → the
+            // M2.4 back-fill leaves `p.compute()` NULL, isolating the mining pass.
+            fs::write(
+                temp_dir.path().join("decoy.py"),
+                "class Other:\n    def compute(self):\n        return 9\n",
+            )
+            .unwrap();
+            fs::write(
+                temp_dir.path().join("user.py"),
+                "from pathlib import Path\n\n\ndef use(p: Path):\n    return p.compute()\n",
+            )
+            .unwrap();
+
+            let model_syms = service.index_file("model.py").unwrap();
+            let _decoy_syms = service.index_file("decoy.py").unwrap();
+            let user_syms = service.index_file("user.py").unwrap();
+
+            let use_fn = sym(&user_syms, "use");
+            let project_compute = sym(&model_syms, "Path.compute");
+
+            // Run BOTH global passes — the edge must STILL be NULL afterwards.
+            service
+                .symbol_store
+                .backfill_unresolved_relationship_targets()
+                .unwrap();
+            service
+                .symbol_store
+                .mine_receiver_type_relationship_targets()
+                .unwrap();
+
+            let after = resolved_call_targets(&service, use_fn, "compute");
+            assert!(
+                !after.contains(&project_compute.id),
+                "p.compute() on a library-typed `p: Path` param must NOT mine-resolve \
+                 to the project Path.compute; got {after:?}"
+            );
+            // The receiver IS a library type; with `compute` ambiguous nothing should
+            // confidently resolve it (the pre-fix miner wrongly tagged it).
+            assert!(
+                after.is_empty(),
+                "no compute() target should be resolved for the library-typed param; got {after:?}"
+            );
         }
 
         // A Python file where `run` is defined on BOTH `A` and `B`; `A.go` calls

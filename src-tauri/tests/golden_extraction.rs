@@ -60,7 +60,10 @@ struct SymbolView {
 /// Stable projection of a `SymbolRelationship` for snapshotting. `recv_type`
 /// (M5.1) is the receiver type captured for a method/attribute Call edge; it is
 /// `skip_serializing_if` None so existing goldens (no receiver typing) stay
-/// byte-identical and only receiver-typed calls surface it.
+/// byte-identical and only receiver-typed calls surface it. `recv_self` (M5.1b)
+/// records `self`/`this` provenance — `true` only when `recv_type` is the EXACT
+/// enclosing-class qn (the sole signal the GLOBAL miner consumes); it is omitted
+/// when false so param/constructor-typed calls stay byte-identical.
 #[derive(Serialize)]
 struct RelationshipView {
     relationship_type: String,
@@ -69,6 +72,13 @@ struct RelationshipView {
     line: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     recv_type: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    recv_self: bool,
+}
+
+/// `skip_serializing_if` predicate: omit a `bool` field when false.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Full deterministic snapshot for one fixture case.
@@ -164,6 +174,7 @@ fn snapshot_for_case(case: &str, fixture_file: &str) -> String {
             target_name: r.target_name.clone(),
             line: r.line,
             recv_type: r.recv_type.clone(),
+            recv_self: r.recv_self,
         })
         .collect();
 
@@ -253,6 +264,23 @@ fn golden_go_basic() {
 #[test]
 fn golden_python_receiver_type() {
     check_case("python-receiver-type", "python-receiver-type.py");
+}
+
+// ---- M5.1b GLOBAL receiver-type mining — extraction inputs ----
+// The golden harness snapshots EXTRACTION only (recv_type + edges), not target
+// resolution; the actual cross-file/registry mining is proven end-to-end in the
+// lib tests (`receiver_global_*` / `null_mining_*`). This fixture documents the
+// extraction signals the mine pass consumes: `Derived(Base)` yields an `extends`
+// edge Derived→Base, and `self.base_method()` inside `Derived.go` captures
+// recv_type `Derived` WITH `recv_self: true` provenance — the ONLY provenance the
+// global miner trusts (the recv_type is the EXACT enclosing-class qn, never a
+// simple name that could shadow an imported library type). The method is defined
+// only on the SUPERTYPE `Base`. If either input regresses (the extends edge, the
+// recv_type, or the self provenance) the global mining win silently disappears —
+// this golden gates that.
+#[test]
+fn golden_python_receiver_inherit() {
+    check_case("python-receiver-inherit", "python-receiver-inherit.py");
 }
 
 // ---- Scanner-offender cases (capture current behavior; see module note) ----

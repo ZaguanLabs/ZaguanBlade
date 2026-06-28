@@ -72,7 +72,8 @@
       "source_qualified_name": "A.go",
       "target_name": "run",
       "line": 5,
-      "recv_type": "A"
+      "recv_type": "A",
+      "recv_self": true
     },
     {
       "relationship_type": "call",

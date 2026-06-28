@@ -62,11 +62,245 @@ WHERE target_symbol_id IS NULL
 /// M5.1: serialize a relationship's receiver type into the `metadata_json`
 /// column (M2.3) as `{"recv_type":"<name>"}`. `None` (bare / unknown receiver) →
 /// SQL NULL, so non-receiver edges are byte-for-byte what today stores.
+///
+/// M5.1b: a `self`/`this`-derived recv_type additionally carries
+/// `"recv_self":true` — the provenance the GLOBAL miner requires (a param /
+/// constructor / annotation recv_type omits the key and stays byte-identical to
+/// what M5.1 stored, so it is never globally mined).
 fn relationship_metadata_json(relationship: &SymbolRelationship) -> Option<String> {
-    relationship
-        .recv_type
-        .as_ref()
-        .map(|recv| serde_json::json!({ "recv_type": recv }).to_string())
+    relationship.recv_type.as_ref().map(|recv| {
+        if relationship.recv_self {
+            serde_json::json!({ "recv_type": recv, "recv_self": true }).to_string()
+        } else {
+            serde_json::json!({ "recv_type": recv }).to_string()
+        }
+    })
+}
+
+/// M5.1b: the `(recv_type, recv_self)` carried in a relationship's `metadata_json`
+/// (`{"recv_type":"<name>","recv_self":<bool>}`), or `None` for malformed /
+/// receiver-less metadata. `recv_self` defaults to `false` (a legacy / param /
+/// constructor recv_type with no provenance key — NOT eligible for global mining).
+fn recv_meta_from_metadata(metadata_json: &str) -> Option<(String, bool)> {
+    let value: serde_json::Value = serde_json::from_str(metadata_json).ok()?;
+    let recv_type = value.get("recv_type")?.as_str()?.to_string();
+    let recv_self = value
+        .get("recv_self")
+        .and_then(|flag| flag.as_bool())
+        .unwrap_or(false);
+    Some((recv_type, recv_self))
+}
+
+/// M5.1b: class-like symbol kinds whose methods participate in receiver-type
+/// dispatch and whose names seed the simple-name → classQn map. Mirrors the
+/// per-file resolver's notion of a "type that owns methods" (a free function or
+/// a `Type`/`impl` symbol is deliberately excluded — it owns no dispatchable
+/// method). Kept as a single source of truth for the SQL `IN (...)` filters.
+const RECEIVER_CLASS_KINDS: &str = "'class','struct','interface','enum','trait'";
+
+/// M5.1b GLOBAL receiver-type registry, built ONCE per index over ALL committed
+/// symbols + every RESOLVED cross-file inheritance edge. Precision-first: every
+/// lookup that is not EXACTLY-ONE yields no resolution, so the caller leaves the
+/// edge NULL (unchanged). This is the structure the §13 follow-up adds on top of
+/// the M5.1 per-file `ReceiverTypeIndex` to mine the still-NULL call edges.
+///
+/// PRECISION GATES (the M5.1b reviewer blocker): the registry is keyed entirely
+/// by EXACT class qualified names — there is no simple-name → class map, so a
+/// receiver type can only enter via an exact qn. The miner only ever feeds it a
+/// `self`/`this`-derived recv_type (which IS the enclosing class's exact qn), and
+/// the supertype links are built ONLY from inheritance edges whose target
+/// RESOLVED to a real indexed class. A library/builtin type whose simple name
+/// merely collides with a project class therefore never reaches a project method.
+#[derive(Default)]
+struct GlobalReceiverRegistry {
+    /// `(classQn, methodSimpleName)` → the method symbol ids defined ON that
+    /// exact class. `len() > 1` for one key means the method is ambiguous on that
+    /// class (duplicate class qn across files, overloads, …) → NULL.
+    methods: HashMap<(String, String), Vec<String>>,
+    /// classQn → its DIRECT supertype classQns, from RESOLVED `Extends`/`Implements`
+    /// edges (cross-file) ONLY. The transitive closure is walked level-by-level at
+    /// resolve time (cycle-guarded, depth-capped).
+    supertypes: HashMap<String, HashSet<String>>,
+}
+
+impl GlobalReceiverRegistry {
+    /// Resolve a still-NULL `(recv_type_qn, method)` call edge to EXACTLY ONE
+    /// method symbol id, or `None` on ANY ambiguity (precision is the prime
+    /// directive). `recv_type_qn` MUST be a guaranteed-project class qualified
+    /// name — the miner only passes a `self`/`this`-derived recv_type, which is
+    /// the EXACT enclosing-class qn (never a simple name that could shadow an
+    /// imported library type). The walk starts from that exact qn; no simple-name
+    /// lookup is performed, so a library/builtin receiver can never enter here.
+    ///
+    /// Walk the supertype chain in derivation order (BFS by level) and take the
+    /// MOST-DERIVED level that defines `method` (a method on the class itself wins
+    /// over an inherited one — deterministic). Resolve ONLY when that winning
+    /// level yields EXACTLY ONE symbol; 0 (not a project method on the chain) or
+    /// `> 1` (diamond / parallel supertypes) → NULL.
+    fn resolve(&self, recv_type_qn: &str, method: &str) -> Option<String> {
+        // The receiver type is the EXACT enclosing-class qn (self/this provenance);
+        // start the supertype walk directly from it — no simple-name mapping.
+        let start = recv_type_qn.to_string();
+
+        // Most-derived defining level on the supertype chain.
+        let mut visited: HashSet<String> = HashSet::new();
+        visited.insert(start.clone());
+        let mut level: Vec<String> = vec![start];
+        let mut steps = 0usize;
+        while !level.is_empty() {
+            // Method ids defined at THIS derivation level (deduped across the
+            // possibly-multiple classes sharing the level).
+            let mut ids: Vec<String> = Vec::new();
+            let mut seen: HashSet<String> = HashSet::new();
+            for class_qn in &level {
+                if let Some(method_ids) =
+                    self.methods.get(&(class_qn.clone(), method.to_string()))
+                {
+                    for id in method_ids {
+                        if seen.insert(id.clone()) {
+                            ids.push(id.clone());
+                        }
+                    }
+                }
+            }
+            if !ids.is_empty() {
+                // The most-derived class(es) that define the method. EXACTLY ONE
+                // → resolve; otherwise the dispatch target is genuinely ambiguous.
+                return if ids.len() == 1 {
+                    Some(ids.remove(0))
+                } else {
+                    None
+                };
+            }
+            // Descend to the next (less-derived) level; cycle-guarded.
+            let mut next: Vec<String> = Vec::new();
+            for class_qn in &level {
+                if let Some(supers) = self.supertypes.get(class_qn) {
+                    for super_qn in supers {
+                        if visited.insert(super_qn.clone()) {
+                            next.push(super_qn.clone());
+                        }
+                    }
+                }
+            }
+            level = next;
+            steps += 1;
+            if steps > 256 {
+                break;
+            }
+        }
+        None
+    }
+}
+
+/// M5.1b: build the GLOBAL receiver-type registry from the committed DB. Three
+/// reads — class-like symbols (id → classQn), their methods (the dispatch table),
+/// and the RESOLVED inheritance edges (cross-file supertype links). An
+/// inheritance edge whose target did NOT resolve to a real indexed class is
+/// dropped, so the closure only ever omits a link — it never invents a wrong
+/// supertype by coincidental simple name (a library base has no resolved target →
+/// its methods are never pulled in).
+fn build_global_receiver_registry(
+    conn: &Connection,
+) -> Result<GlobalReceiverRegistry, SymbolStoreError> {
+    let mut registry = GlobalReceiverRegistry::default();
+
+    // class-like symbols → id → classQn (used to map BOTH the subclass and the
+    // RESOLVED inheritance target of every Extends/Implements edge to a real class).
+    let mut class_id_to_qn: HashMap<String, String> = HashMap::new();
+    {
+        let sql = format!(
+            r#"
+            SELECT id, qualified_name
+            FROM symbols
+            WHERE symbol_type IN ({RECEIVER_CLASS_KINDS})
+              AND qualified_name != ''
+              AND qualified_name != '__file__'
+            "#
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (id, qualified_name) = row?;
+            class_id_to_qn.insert(id, qualified_name);
+        }
+    }
+
+    // (a) method symbols whose PARENT is a class-like symbol → dispatch table.
+    {
+        let sql = format!(
+            r#"
+            SELECT m.id, m.name, p.qualified_name
+            FROM symbols m
+            JOIN symbols p ON m.parent_id = p.id
+            WHERE m.symbol_type = 'method'
+              AND p.symbol_type IN ({RECEIVER_CLASS_KINDS})
+              AND m.name != ''
+              AND p.qualified_name != ''
+            "#
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, method_name, class_qn) = row?;
+            registry
+                .methods
+                .entry((class_qn, method_name))
+                .or_default()
+                .push(id);
+        }
+    }
+
+    // Cross-file inheritance — INHERITANCE GATE (M5.1b precision blocker): follow
+    // an Extends/Implements edge ONLY when its `target_symbol_id` RESOLVED to a
+    // real indexed class. A link is NEVER added by coincidental simple name, so an
+    // `extends LibBase` whose simple name merely collides with a project class
+    // (unresolved target) is dropped and that project class's methods are never
+    // pulled into the subtype's dispatch.
+    {
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT source_symbol_id, target_symbol_id
+            FROM symbol_relationships
+            WHERE relationship_type IN ('extends','implements')
+              AND target_symbol_id IS NOT NULL
+            "#,
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (source_id, target_id) = row?;
+            // The subclass must itself be a known project class.
+            let Some(sub_qn) = class_id_to_qn.get(&source_id).cloned() else {
+                continue;
+            };
+            // The RESOLVED target must itself be a known project class (not, e.g.,
+            // a function the name happened to bind to). A target outside the class
+            // set is dropped — never a wrong supertype link.
+            let Some(super_qn) = class_id_to_qn.get(&target_id).cloned() else {
+                continue;
+            };
+            if super_qn == sub_qn {
+                continue;
+            }
+            registry
+                .supertypes
+                .entry(sub_qn)
+                .or_default()
+                .insert(super_qn);
+        }
+    }
+
+    Ok(registry)
 }
 
 /// SQLite-backed symbol store
@@ -1013,6 +1247,105 @@ impl SymbolStore {
         let conn = self.conn.lock().unwrap();
         let resolved = conn.execute(BACKFILL_GLOBAL_UNIQUE_SQL, [])?;
         Ok(resolved)
+    }
+
+    /// M5.1b — GLOBAL receiver-type mining of the still-NULL call edges.
+    ///
+    /// Runs AFTER the per-file resolver (`resolve_relationship_targets`) and the
+    /// M2.4 global-unique back-fill, over the call edges that are STILL
+    /// unresolved yet carry a confident `recv_type` (persisted in
+    /// `metadata_json`). Unlike M5.1's strict-superset slice this DELIBERATELY
+    /// crosses the candidate-set line — it can resolve to a method that was never
+    /// a same-file/imported candidate — so PRECISION is the prime directive:
+    /// every step is exactly-one and any ambiguity leaves the edge NULL.
+    ///
+    /// PROVENANCE GATE (M5.1b reviewer blocker): ONLY edges whose recv_type came
+    /// from a `self`/`this` receiver (`"recv_self":true` in `metadata_json`) are
+    /// mined. Such a recv_type is the EXACT enclosing-class qualified name —
+    /// guaranteed to be a project class defined in this file. A param /
+    /// constructor / annotation recv_type is only a simple name that may shadow an
+    /// imported library type of the same name (`from pathlib import Path` +
+    /// project `class Path`), so it is DEFERRED here (it still serves M5.1's
+    /// in-candidate-set disambiguation).
+    ///
+    /// Builds the GLOBAL cross-file registry once, then for each self-typed
+    /// candidate edge looks up `(enclosingClassQn + its RESOLVED supertype chain,
+    /// methodName)`, taking the MOST-DERIVED class that defines the method and
+    /// resolving ONLY when that level yields EXACTLY ONE symbol.
+    /// On success: `target_symbol_id` set, `resolution_strategy =
+    /// 'receiver_type_global'`, `confidence = 0.7` (below M5.1 `receiver_type`'s
+    /// 0.8 since it is less constrained). Only NULL call edges are ever touched;
+    /// non-call edges, recv_type-less edges, non-self-typed edges, already-resolved
+    /// edges, and every ambiguous lookup are left exactly as they were. Idempotent:
+    /// a re-run only ever turns a NULL edge into a single confident match. Returns
+    /// the number of edges newly resolved.
+    pub fn mine_receiver_type_relationship_targets(&self) -> Result<usize, SymbolStoreError> {
+        let mut conn = self.conn.lock().unwrap();
+        let registry = build_global_receiver_registry(&conn)?;
+
+        // The still-NULL, recv_type-carrying call edges, keyed by stable rowid.
+        let candidates: Vec<(i64, String, String)> = {
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT rowid, target_name, metadata_json
+                FROM symbol_relationships
+                WHERE target_symbol_id IS NULL
+                  AND relationship_type = 'call'
+                  AND metadata_json IS NOT NULL
+                  AND target_name != ''
+                "#,
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        // Resolve in memory first; only EXACTLY-ONE outcomes are kept.
+        let mut resolved: Vec<(i64, String)> = Vec::new();
+        for (rowid, method_name, metadata_json) in candidates {
+            let Some((recv_type, recv_self)) = recv_meta_from_metadata(&metadata_json) else {
+                continue;
+            };
+            // PROVENANCE GATE: only a `self`/`this`-derived recv_type (the exact
+            // enclosing-class qn) is globally mined. Param/constructor recv_types
+            // are deferred — they could shadow an imported library type.
+            if !recv_self {
+                continue;
+            }
+            if let Some(target_id) = registry.resolve(&recv_type, &method_name) {
+                resolved.push((rowid, target_id));
+            }
+        }
+
+        if resolved.is_empty() {
+            return Ok(0);
+        }
+
+        // Write back under one transaction. The `target_symbol_id IS NULL` guard
+        // makes the write a strict NULL→value transition (never an overwrite).
+        let tx = conn.transaction()?;
+        let mut count = 0usize;
+        {
+            let mut update = tx.prepare(
+                r#"
+                UPDATE symbol_relationships
+                SET target_symbol_id = ?1,
+                    resolution_strategy = 'receiver_type_global',
+                    confidence = 0.7
+                WHERE rowid = ?2 AND target_symbol_id IS NULL
+                "#,
+            )?;
+            for (rowid, target_id) in &resolved {
+                count += update.execute(params![target_id, rowid])?;
+            }
+        }
+        tx.commit()?;
+        Ok(count)
     }
 
     pub fn get_relationship_targets(
@@ -2609,6 +2942,516 @@ mod tests {
             )
             .unwrap();
         assert_eq!(target.as_deref(), Some("d.ts::decoy#function"));
+    }
+
+    // ---- M5.1b GLOBAL receiver-type mining (`receiver_global` / `null_mining`) ----
+    //
+    // These drive `mine_receiver_type_relationship_targets` directly over a
+    // hand-built symbol+edge set so the registry shape, cross-file inheritance,
+    // and the precision gates are tested in isolation (no extraction coupling).
+    // PRECISION is the prime directive: a wrong, confidently-tagged resolution is
+    // the exact bug class these guard against — every negative MUST stay NULL.
+
+    /// A class-like symbol with an explicit qualified name (so simple-name
+    /// collisions can be modelled by giving two classes distinct qns).
+    fn mining_class(qn: &str, name: &str, file: &str) -> Symbol {
+        Symbol {
+            id: format!("{file}::{qn}#class"),
+            name: name.to_string(),
+            qualified_name: qn.to_string(),
+            symbol_type: SymbolType::Class,
+            file_path: file.to_string(),
+            range: Range {
+                start: Position {
+                    line: 1,
+                    character: 0,
+                },
+                end: Position {
+                    line: 10,
+                    character: 0,
+                },
+            },
+            byte_offset: 0,
+            byte_length: 0,
+            parent_id: None,
+            docstring: None,
+            signature: None,
+            content_hash: "hash".to_string(),
+        }
+    }
+
+    /// A method symbol parented to the class whose qn is `class_qn`.
+    fn mining_method(method: &str, class_qn: &str, file: &str) -> Symbol {
+        Symbol {
+            id: format!("{file}::{class_qn}.{method}#method"),
+            name: method.to_string(),
+            qualified_name: format!("{class_qn}.{method}"),
+            symbol_type: SymbolType::Method,
+            file_path: file.to_string(),
+            range: Range {
+                start: Position {
+                    line: 2,
+                    character: 4,
+                },
+                end: Position {
+                    line: 3,
+                    character: 4,
+                },
+            },
+            byte_offset: 0,
+            byte_length: 0,
+            parent_id: Some(format!("{file}::{class_qn}#class")),
+            docstring: None,
+            signature: None,
+            content_hash: "hash".to_string(),
+        }
+    }
+
+    /// A `self`/`this`-derived (still-NULL) Call edge: inside a method on
+    /// `enclosing_class_qn`, `self.method()` — `recv_type` IS that exact enclosing
+    /// class qn and `recv_self` is set, so the GLOBAL miner is eligible to mine it.
+    fn mining_self_call(
+        source_id: &str,
+        file: &str,
+        method: &str,
+        enclosing_class_qn: &str,
+    ) -> SymbolRelationship {
+        SymbolRelationship {
+            source_symbol_id: source_id.to_string(),
+            source_file_path: file.to_string(),
+            target_name: method.to_string(),
+            target_symbol_id: None,
+            relationship_type: SymbolRelationshipType::Call,
+            line: 5,
+            recv_type: Some(enclosing_class_qn.to_string()),
+            recv_self: true,
+            ..Default::default()
+        }
+    }
+
+    /// A param/constructor/annotation-derived (still-NULL) Call edge: the receiver
+    /// type is only a SIMPLE NAME that may shadow an imported library type, so
+    /// `recv_self` is false and the GLOBAL miner MUST DEFER it (provenance gate).
+    fn mining_typed_call(
+        source_id: &str,
+        file: &str,
+        method: &str,
+        recv_type: &str,
+    ) -> SymbolRelationship {
+        SymbolRelationship {
+            source_symbol_id: source_id.to_string(),
+            source_file_path: file.to_string(),
+            target_name: method.to_string(),
+            target_symbol_id: None,
+            relationship_type: SymbolRelationshipType::Call,
+            line: 5,
+            recv_type: Some(recv_type.to_string()),
+            recv_self: false,
+            ..Default::default()
+        }
+    }
+
+    /// An inheritance (Extends) edge `sub_class_id` → `super_name`. `super_id` is
+    /// the RESOLVED target symbol id — the inheritance gate follows ONLY resolved
+    /// edges, so pass `None` to model an UNRESOLVED edge (e.g. a library base whose
+    /// simple name merely collides with a project class) that must NOT be followed.
+    fn mining_extends(
+        sub_class_id: &str,
+        file: &str,
+        super_name: &str,
+        super_id: Option<&str>,
+    ) -> SymbolRelationship {
+        SymbolRelationship {
+            source_symbol_id: sub_class_id.to_string(),
+            source_file_path: file.to_string(),
+            target_name: super_name.to_string(),
+            target_symbol_id: super_id.map(|id| id.to_string()),
+            relationship_type: SymbolRelationshipType::Extends,
+            line: 1,
+            ..Default::default()
+        }
+    }
+
+    /// Read one edge's `(target_symbol_id, resolution_strategy, confidence)`.
+    fn edge_resolution(
+        store: &SymbolStore,
+        source_id: &str,
+        target_name: &str,
+    ) -> (Option<String>, Option<String>, Option<f64>) {
+        let conn = store.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT target_symbol_id, resolution_strategy, confidence
+             FROM symbol_relationships
+             WHERE source_symbol_id = ?1 AND target_name = ?2",
+            params![source_id, target_name],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
+    }
+
+    /// THE CROSS-FILE WIN: `B extends A` (in another file, a RESOLVED inheritance
+    /// edge), and inside `B.go` a `self`-typed receiver calls `base`, which is
+    /// defined ONLY on `A`. The name `base` is deliberately NON-unique (a decoy
+    /// `C.base` exists) so the M2.4 name-only back-fill could never resolve it —
+    /// only the supertype walk can. Mining resolves it to `A.base`, tagged
+    /// `receiver_type_global` / 0.7, and is idempotent.
+    #[test]
+    fn receiver_global_self_cross_file_inheritance_resolves_supertype_method() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                mining_class("A", "A", "a.py"),
+                mining_method("base", "A", "a.py"),
+                mining_class("B", "B", "b.py"),
+                mining_method("go", "B", "b.py"),
+                // Decoy: makes `base` ambiguous by name so only typing can resolve.
+                mining_class("C", "C", "c.py"),
+                mining_method("base", "C", "c.py"),
+            ])
+            .unwrap();
+
+        let b_go = "b.py::B.go#method";
+        store
+            .replace_relationships_for_file(
+                "b.py",
+                &[
+                    // RESOLVED extends B → A (target pinned to A's class symbol).
+                    mining_extends("b.py::B#class", "b.py", "A", Some("a.py::A#class")),
+                    // `self.base()` inside B.go — self-typed, recv_type is B's qn.
+                    mining_self_call(b_go, "b.py", "base", "B"),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.mine_receiver_type_relationship_targets().unwrap(),
+            1,
+            "self.base() in B must resolve via the B→A supertype walk"
+        );
+
+        let (target, strategy, confidence) = edge_resolution(&store, b_go, "base");
+        assert_eq!(
+            target.as_deref(),
+            Some("a.py::A.base#method"),
+            "self.base() on a B receiver must resolve to the inherited A.base, not C.base"
+        );
+        assert_eq!(strategy.as_deref(), Some("receiver_type_global"));
+        assert_eq!(confidence, Some(0.7));
+
+        // Idempotent: a second pass turns nothing new (the edge is non-NULL now).
+        assert_eq!(store.mine_receiver_type_relationship_targets().unwrap(), 0);
+    }
+
+    /// MOST-DERIVED WINS: `B extends A` (resolved), both define `run`; a `self`
+    /// receiver inside `B` resolves to `B.run` (the override), deterministically —
+    /// never `A.run`.
+    #[test]
+    fn receiver_global_most_derived_override_beats_inherited() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                mining_class("A", "A", "a.py"),
+                mining_method("run", "A", "a.py"),
+                mining_class("B", "B", "b.py"),
+                mining_method("run", "B", "b.py"),
+                mining_method("go", "B", "b.py"),
+            ])
+            .unwrap();
+
+        let b_go = "b.py::B.go#method";
+        store
+            .replace_relationships_for_file(
+                "b.py",
+                &[
+                    mining_extends("b.py::B#class", "b.py", "A", Some("a.py::A#class")),
+                    mining_self_call(b_go, "b.py", "run", "B"),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(store.mine_receiver_type_relationship_targets().unwrap(), 1);
+        let (target, _, _) = edge_resolution(&store, b_go, "run");
+        assert_eq!(
+            target.as_deref(),
+            Some("b.py::B.run#method"),
+            "the most-derived B.run override must win over the inherited A.run"
+        );
+    }
+
+    /// PROVENANCE GATE (the M5.1b reviewer blocker, isolated): the SAME project
+    /// class + method + recv_type NAME resolves ONLY through a `self` receiver, and
+    /// NEVER through a param/constructor receiver — because the latter's simple
+    /// name could shadow an imported library type. Two `Foo`-receiver calls of
+    /// `act`: the self-typed one resolves to `Foo.act`; the param-typed one (even
+    /// though `Foo` is an exact project class name) stays NULL.
+    #[test]
+    fn null_mining_non_self_typed_recv_is_deferred() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                mining_class("Foo", "Foo", "foo.py"),
+                mining_method("act", "Foo", "foo.py"),
+                create_test_symbol("user", "user.py"),
+            ])
+            .unwrap();
+
+        let foo_method = "foo.py::Foo.act#method"; // a self call FROM inside Foo
+        let user = "user.py::user#function"; // a param-typed call from elsewhere
+        store
+            .replace_relationships_for_file(
+                "foo.py",
+                &[mining_self_call(foo_method, "foo.py", "act", "Foo")],
+            )
+            .unwrap();
+        store
+            .replace_relationships_for_file(
+                "user.py",
+                // `def user(f: Foo): f.act()` — recv_type `Foo` from a param/import.
+                &[mining_typed_call(user, "user.py", "act", "Foo")],
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.mine_receiver_type_relationship_targets().unwrap(),
+            1,
+            "only the self-typed edge is eligible; the param-typed edge is deferred"
+        );
+        assert_eq!(
+            edge_resolution(&store, foo_method, "act").0.as_deref(),
+            Some("foo.py::Foo.act#method"),
+            "the self.act() edge must mine-resolve to Foo.act"
+        );
+        assert!(
+            edge_resolution(&store, user, "act").0.is_none(),
+            "a param/constructor recv_type matching a project class name must NOT be mined"
+        );
+    }
+
+    /// NEGATIVE (a) — REVIEWER'S EXACT SCENARIO, library-typed PARAM collision:
+    /// `from pathlib import Path` … `def use(p: Path): return p.compute()`, with a
+    /// project `class Path: def compute(self)`. The `p: Path` recv_type is a SIMPLE
+    /// NAME inferred from the annotation (not self), so even though it collides
+    /// exactly with the project `Path`, mining DEFERS it → the edge stays NULL
+    /// (CORRECT — `p` is the library `pathlib.Path`, not the project class).
+    #[test]
+    fn null_mining_library_typed_param_collision_stays_unresolved() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                mining_class("Path", "Path", "model.py"),
+                mining_method("compute", "Path", "model.py"),
+                create_test_symbol("use", "user.py"),
+            ])
+            .unwrap();
+
+        let use_fn = "user.py::use#function";
+        store
+            .replace_relationships_for_file(
+                "user.py",
+                &[mining_typed_call(use_fn, "user.py", "compute", "Path")],
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.mine_receiver_type_relationship_targets().unwrap(),
+            0,
+            "a library-typed `p: Path` param must NOT mine-resolve to project Path.compute"
+        );
+        let (target, strategy, _) = edge_resolution(&store, use_fn, "compute");
+        assert!(target.is_none(), "must stay NULL, got {target:?}");
+        assert!(strategy.is_none());
+    }
+
+    /// NEGATIVE (b) — library-typed CONSTRUCTOR / local collision: `x = Path();
+    /// x.compute()` where the file imported `Path` from a library and a project
+    /// `Path` exists. The constructor-bound recv_type is again a simple name (not
+    /// self) → mining DEFERS it → NULL.
+    #[test]
+    fn null_mining_library_typed_constructor_collision_stays_unresolved() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                mining_class("Path", "Path", "model.py"),
+                mining_method("compute", "Path", "model.py"),
+                create_test_symbol("make", "user.py"),
+            ])
+            .unwrap();
+
+        let make_fn = "user.py::make#function";
+        store
+            .replace_relationships_for_file(
+                "user.py",
+                &[mining_typed_call(make_fn, "user.py", "compute", "Path")],
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.mine_receiver_type_relationship_targets().unwrap(),
+            0,
+            "a library-typed `x = Path()` local must NOT mine-resolve to project Path.compute"
+        );
+        assert!(edge_resolution(&store, make_fn, "compute").0.is_none());
+    }
+
+    /// NEGATIVE (c) — INHERITANCE GATE, library base whose simple name collides
+    /// with a project class: `class Derived(LibBase)` where the `extends` target is
+    /// UNRESOLVED (a library base is not an indexed project symbol), while a
+    /// coincidental project `class LibBase: def m(self)` exists. `self.m()` inside
+    /// `Derived` is self-typed, but the unresolved `extends` edge is NOT followed,
+    /// so `Derived` has no project supertype → `m` is not on its chain → NULL.
+    #[test]
+    fn null_mining_library_base_inheritance_no_wrong_resolution() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                mining_class("Derived", "Derived", "d.py"),
+                mining_method("go", "Derived", "d.py"),
+                // Coincidental project class sharing the library base's simple name.
+                mining_class("LibBase", "LibBase", "proj.py"),
+                mining_method("m", "LibBase", "proj.py"),
+            ])
+            .unwrap();
+
+        let d_go = "d.py::Derived.go#method";
+        store
+            .replace_relationships_for_file(
+                "d.py",
+                &[
+                    // Extends a LIBRARY base — target did NOT resolve (None).
+                    mining_extends("d.py::Derived#class", "d.py", "LibBase", None),
+                    mining_self_call(d_go, "d.py", "m", "Derived"),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.mine_receiver_type_relationship_targets().unwrap(),
+            0,
+            "an unresolved library-base extends must NOT pull in the coincidental project LibBase.m"
+        );
+        assert!(edge_resolution(&store, d_go, "m").0.is_none());
+    }
+
+    /// NEGATIVE — LIBRARY / NON-PROJECT METHOD: the receiver IS a project class
+    /// (`Widget`, via `self`), but the called method `commit` is not defined on it
+    /// or any RESOLVED supertype (it is a library method). 0 candidates on the
+    /// chain → NULL.
+    #[test]
+    fn null_mining_library_method_stays_unresolved() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                mining_class("Widget", "Widget", "w.py"),
+                mining_method("spin", "Widget", "w.py"),
+            ])
+            .unwrap();
+
+        let widget_spin = "w.py::Widget.spin#method";
+        store
+            .replace_relationships_for_file(
+                "w.py",
+                // `self.commit()` inside Widget — `commit` is not a Widget method.
+                &[mining_self_call(widget_spin, "w.py", "commit", "Widget")],
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.mine_receiver_type_relationship_targets().unwrap(),
+            0,
+            "a method absent from the receiver class + chain must never resolve"
+        );
+        assert!(edge_resolution(&store, widget_spin, "commit").0.is_none());
+    }
+
+    /// NEGATIVE — AMBIGUOUS (class, method): a diamond where `B` implements BOTH
+    /// `A1` and `A2` (both RESOLVED), each defining `m`, and `B` does not. A `self`
+    /// receiver inside `B` reaches a most-derived defining level with TWO unrelated
+    /// candidates → NULL.
+    #[test]
+    fn null_mining_ambiguous_class_method_stays_unresolved() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                mining_class("A1", "A1", "a1.py"),
+                mining_method("m", "A1", "a1.py"),
+                mining_class("A2", "A2", "a2.py"),
+                mining_method("m", "A2", "a2.py"),
+                mining_class("B", "B", "b.py"),
+                mining_method("go", "B", "b.py"),
+            ])
+            .unwrap();
+
+        let b_go = "b.py::B.go#method";
+        store
+            .replace_relationships_for_file(
+                "b.py",
+                &[
+                    mining_extends("b.py::B#class", "b.py", "A1", Some("a1.py::A1#class")),
+                    mining_extends("b.py::B#class", "b.py", "A2", Some("a2.py::A2#class")),
+                    mining_self_call(b_go, "b.py", "m", "B"),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.mine_receiver_type_relationship_targets().unwrap(),
+            0,
+            "two equally-derived A1.m / A2.m candidates must stay ambiguous"
+        );
+        assert!(edge_resolution(&store, b_go, "m").0.is_none());
+    }
+
+    /// REGRESSION GUARD: mining only ever flips NULL→value. An already-resolved
+    /// edge (even a self-typed one) is left byte-for-byte untouched, and a
+    /// recv_type-less NULL edge is ignored entirely.
+    #[test]
+    fn null_mining_preserves_already_resolved_and_ignores_plain_edges() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                mining_class("A", "A", "a.py"),
+                mining_method("run", "A", "a.py"),
+                mining_class("B", "B", "b.py"),
+                mining_method("go", "B", "b.py"),
+            ])
+            .unwrap();
+
+        let b_go = "b.py::B.go#method";
+        // (1) A self-typed edge PINNED to a deliberately "wrong" target.
+        let mut pinned = mining_self_call(b_go, "b.py", "run", "B");
+        pinned.target_symbol_id = Some("a.py::A.run#method".to_string());
+        // (2) A recv_type-less (plain) NULL call edge — mining must ignore it.
+        let plain = SymbolRelationship {
+            source_symbol_id: b_go.to_string(),
+            source_file_path: "b.py".to_string(),
+            target_name: "helper".to_string(),
+            target_symbol_id: None,
+            relationship_type: SymbolRelationshipType::Call,
+            line: 6,
+            ..Default::default()
+        };
+        store
+            .replace_relationships_for_file(
+                "b.py",
+                &[
+                    mining_extends("b.py::B#class", "b.py", "A", Some("a.py::A#class")),
+                    pinned,
+                    plain,
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.mine_receiver_type_relationship_targets().unwrap(),
+            0,
+            "mining must not touch already-resolved or recv_type-less edges"
+        );
+        // The pinned edge is unchanged and stays untagged by mining.
+        let (target, strategy, _) = edge_resolution(&store, b_go, "run");
+        assert_eq!(target.as_deref(), Some("a.py::A.run#method"));
+        assert!(strategy.is_none());
+        // The plain edge is still NULL.
+        assert!(edge_resolution(&store, b_go, "helper").0.is_none());
     }
 
     fn coverage_symbol(

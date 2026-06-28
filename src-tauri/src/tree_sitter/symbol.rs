@@ -318,6 +318,12 @@ impl std::str::FromStr for SymbolRelationshipType {
     }
 }
 
+/// `skip_serializing_if` predicate for a `bool` field that is omitted when false
+/// (serde needs a `fn(&bool) -> bool`; `std::ops::Not::not` takes `bool` by value).
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SymbolRelationship {
     pub source_symbol_id: String,
@@ -334,6 +340,17 @@ pub struct SymbolRelationship {
     /// to the `metadata_json` column as `{"recv_type":"<name>"}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recv_type: Option<String>,
+    /// M5.1b provenance gate. `true` ONLY when `recv_type` was derived from a
+    /// `self`/`this` receiver — i.e. it is the EXACT enclosing-class qualified
+    /// name, guaranteed to be a real project class defined in THIS file, never a
+    /// simple name inferred from a typed param / constructor / annotation (which
+    /// may shadow an imported library type of the same simple name). Only
+    /// self-typed Call edges are eligible for the GLOBAL receiver-type mining
+    /// (`SymbolStore::mine_receiver_type_relationship_targets`); param/constructor
+    /// recv_types stay usable for M5.1's in-candidate-set disambiguation but are
+    /// NOT globally mined. Persisted to `metadata_json` as `"recv_self":true`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub recv_self: bool,
     /// M5.1 audit tag. Set to `Some("receiver_type")` ONLY when the per-file
     /// resolver disambiguated an otherwise-ambiguous candidate set by `recv_type`.
     /// `None` everywhere else (matching today's per-file resolutions, which carry
@@ -356,6 +373,7 @@ impl Default for SymbolRelationship {
             relationship_type: SymbolRelationshipType::Call,
             line: 0,
             recv_type: None,
+            recv_self: false,
             resolution_strategy: None,
             confidence: None,
         }
@@ -821,8 +839,14 @@ impl SymbolExtractor {
         if rel.seen.insert(key) {
             // M5.1: evaluate the receiver's type (self/this → enclosing class;
             // constructor-bound / typed local → its type). `None` for bare calls
-            // and unknown receivers → downstream resolution unchanged.
-            let recv_type = self.eval_call_receiver_type(node, source, language, state);
+            // and unknown receivers → downstream resolution unchanged. M5.1b: the
+            // bool records `self`/`this` provenance (the type IS the exact
+            // enclosing-class qn) so the GLOBAL miner can restrict to those.
+            let (recv_type, recv_self) =
+                match self.eval_call_receiver_type(node, source, language, state) {
+                    Some((name, is_self)) => (Some(name), is_self),
+                    None => (None, false),
+                };
             rel.relationships.push(SymbolRelationship {
                 source_symbol_id: source_id,
                 source_file_path: self.file_path.clone(),
@@ -831,6 +855,7 @@ impl SymbolExtractor {
                 relationship_type: SymbolRelationshipType::Call,
                 line,
                 recv_type,
+                recv_self,
                 ..Default::default()
             });
         }
@@ -838,18 +863,23 @@ impl SymbolExtractor {
 
     /// M5.1: evaluate the TYPE of a call's receiver, if the call is a method/
     /// attribute access whose receiver is `self`/`this`, or a local variable whose
-    /// type is known. Returns the base type NAME (`TypeRep::Named`), or `None`
-    /// (`TypeRep::Unknown` / bare call) → the resolver falls through unchanged.
+    /// type is known. Returns `(base type NAME, is_self)` where `is_self` is `true`
+    /// ONLY for a `self`/`this` receiver (M5.1b provenance — then the NAME is the
+    /// exact enclosing-class qualified name). `None` for `TypeRep::Unknown` / bare
+    /// call → the resolver falls through unchanged.
     fn eval_call_receiver_type(
         &self,
         node: &Node,
         source: &str,
         language: Language,
         state: &WalkState,
-    ) -> Option<String> {
+    ) -> Option<(String, bool)> {
         let receiver = call_receiver_node(node, language)?;
         match eval_receiver_type_rep(&receiver, source, language, state) {
-            TypeRep::Named(name) => Some(name),
+            // A `self`/`this` receiver yields the enclosing-class qn; record that
+            // provenance. (A `this` rebound by a plain function already evaluated to
+            // `Unknown` above and never reaches here, so it is never self-tagged.)
+            TypeRep::Named(name) => Some((name, receiver_is_self(&receiver, source))),
             TypeRep::Unknown => None,
         }
     }
@@ -3057,6 +3087,20 @@ fn call_receiver_node<'tree>(call_node: &Node<'tree>, _language: Language) -> Op
         "field_expression" => callee.child_by_field_name("value"),
         _ => None,
     }
+}
+
+/// M5.1b: whether a call's receiver node is a literal `self`/`this` (the only
+/// provenance the GLOBAL miner trusts — its type is the EXACT enclosing class).
+/// Determined the same way `eval_receiver_type_rep` does: by the receiver TEXT
+/// (Python `self` is an `identifier`; Rust `self` / TS `this` are dedicated kinds).
+fn receiver_is_self(receiver: &Node, source: &str) -> bool {
+    matches!(
+        receiver.kind(),
+        "identifier" | "self" | "this" | "shorthand_property_identifier"
+    ) && matches!(
+        receiver.utf8_text(source.as_bytes()),
+        Ok("self") | Ok("this")
+    )
 }
 
 /// Evaluate a receiver node to a `TypeRep`: `self`/`this` → the nearest enclosing
