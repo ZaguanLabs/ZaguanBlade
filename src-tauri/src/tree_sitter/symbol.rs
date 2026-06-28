@@ -648,12 +648,14 @@ impl SymbolExtractor {
     fn node_to_symbol(&self, node: &Node, source: &str, language: Language) -> Option<Symbol> {
         match language {
             Language::TypeScript | Language::Tsx | Language::Astro => {
-                self.typescript_node_to_symbol(node, source)
+                self.typescript_node_to_symbol(node, source, language)
             }
-            Language::JavaScript | Language::Jsx => self.javascript_node_to_symbol(node, source),
-            Language::Python => self.python_node_to_symbol(node, source),
-            Language::Rust => self.rust_node_to_symbol(node, source),
-            Language::Go => self.go_node_to_symbol(node, source),
+            Language::JavaScript | Language::Jsx => {
+                self.javascript_node_to_symbol(node, source, language)
+            }
+            Language::Python => self.python_node_to_symbol(node, source, language),
+            Language::Rust => self.rust_node_to_symbol(node, source, language),
+            Language::Go => self.go_node_to_symbol(node, source, language),
             Language::Markdown
             | Language::Css
             | Language::Scss
@@ -678,57 +680,85 @@ impl SymbolExtractor {
         }
     }
 
-    fn typescript_node_to_symbol(&self, node: &Node, source: &str) -> Option<Symbol> {
+    fn typescript_node_to_symbol(
+        &self,
+        node: &Node,
+        source: &str,
+        language: Language,
+    ) -> Option<Symbol> {
         let kind = node.kind();
+        let kind_id = node.kind_id();
+        let bits = lang_bitsets(language, &node.language());
         let range = Range::from_node(node);
 
+        if bits.import.contains(kind_id) {
+            let text = node.utf8_text(source.as_bytes()).ok()?;
+            let name = self.extract_quoted_text(text)?;
+            return Some(Symbol::new(
+                name,
+                SymbolType::Import,
+                self.file_path.clone(),
+                range,
+            ));
+        }
+        if bits.function.contains(kind_id) {
+            let name = self.get_child_text(node, "name", source)?;
+            return Some(Symbol::new(
+                name,
+                SymbolType::Function,
+                self.file_path.clone(),
+                range,
+            ));
+        }
+        if bits.method.contains(kind_id) {
+            let name = self.get_child_text(node, "name", source)?;
+            return Some(Symbol::new(
+                name,
+                SymbolType::Method,
+                self.file_path.clone(),
+                range,
+            ));
+        }
+        if bits.class.contains(kind_id) {
+            let name = self.get_child_text(node, "name", source)?;
+            return Some(Symbol::new(
+                name,
+                SymbolType::Class,
+                self.file_path.clone(),
+                range,
+            ));
+        }
+        if bits.enum_variant.contains(kind_id) {
+            let name = self.get_child_text(node, "name", source)?;
+            return Some(Symbol::new(
+                name,
+                SymbolType::EnumMember,
+                self.file_path.clone(),
+                range,
+            ));
+        }
+        if bits.field.contains(kind_id) {
+            let name_node = node.child_by_field_name("name")?;
+            let name = self.extract_js_ts_property_name(&name_node, source)?;
+            let symbol_type = node
+                .child_by_field_name("value")
+                .as_ref()
+                .filter(|value| self.is_js_ts_function_value(value, source))
+                .map(|_| SymbolType::Method)
+                .unwrap_or(SymbolType::Property);
+            return Some(Symbol::new(
+                name,
+                symbol_type,
+                self.file_path.clone(),
+                range,
+            ));
+        }
+
+        // Kinds with bespoke extraction (no simple kind→concern classification)
+        // keep their inline logic: interface/type/enum declarations, the
+        // variable-declarator function/const/variable split, object-literal
+        // method `pair`s, and namespaces.
         match kind {
-            "import_statement" => {
-                let text = node.utf8_text(source.as_bytes()).ok()?;
-                let name = self.extract_quoted_text(text)?;
-                Some(Symbol::new(
-                    name,
-                    SymbolType::Import,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
-            "function_declaration" | "generator_function_declaration" | "function_signature" => {
-                let name = self.get_child_text(node, "name", source)?;
-                Some(Symbol::new(
-                    name,
-                    SymbolType::Function,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
-            "function" | "generator_function" => {
-                let name = self.get_child_text(node, "name", source)?;
-                Some(Symbol::new(
-                    name,
-                    SymbolType::Function,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
-            "method_definition" | "method_signature" | "abstract_method_signature" => {
-                let name = self.get_child_text(node, "name", source)?;
-                Some(Symbol::new(
-                    name,
-                    SymbolType::Method,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
-            "class_declaration" | "class" => {
-                let name = self.get_child_text(node, "name", source)?;
-                Some(Symbol::new(
-                    name,
-                    SymbolType::Class,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
             "interface_declaration" => {
                 let name = self.get_child_text(node, "name", source)?;
                 Some(Symbol::new(
@@ -752,15 +782,6 @@ impl SymbolExtractor {
                 Some(Symbol::new(
                     name,
                     SymbolType::Enum,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
-            "enum_assignment" => {
-                let name = self.get_child_text(node, "name", source)?;
-                Some(Symbol::new(
-                    name,
-                    SymbolType::EnumMember,
                     self.file_path.clone(),
                     range,
                 ))
@@ -805,22 +826,6 @@ impl SymbolExtractor {
                     range,
                 ))
             }
-            "public_field_definition" | "field_definition" | "property_signature" => {
-                let name_node = node.child_by_field_name("name")?;
-                let name = self.extract_js_ts_property_name(&name_node, source)?;
-                let symbol_type = node
-                    .child_by_field_name("value")
-                    .as_ref()
-                    .filter(|value| self.is_js_ts_function_value(value, source))
-                    .map(|_| SymbolType::Method)
-                    .unwrap_or(SymbolType::Property);
-                Some(Symbol::new(
-                    name,
-                    symbol_type,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
             "namespace_declaration" | "internal_module" => {
                 let name = self.get_child_text(node, "name", source)?;
                 Some(Symbol::new(
@@ -834,111 +839,128 @@ impl SymbolExtractor {
         }
     }
 
-    fn javascript_node_to_symbol(&self, node: &Node, source: &str) -> Option<Symbol> {
+    fn javascript_node_to_symbol(
+        &self,
+        node: &Node,
+        source: &str,
+        language: Language,
+    ) -> Option<Symbol> {
         // JavaScript uses similar structure to TypeScript
-        self.typescript_node_to_symbol(node, source)
+        self.typescript_node_to_symbol(node, source, language)
     }
 
-    fn python_node_to_symbol(&self, node: &Node, source: &str) -> Option<Symbol> {
+    fn python_node_to_symbol(
+        &self,
+        node: &Node,
+        source: &str,
+        language: Language,
+    ) -> Option<Symbol> {
         let kind = node.kind();
+        let kind_id = node.kind_id();
+        let bits = lang_bitsets(language, &node.language());
         let range = Range::from_node(node);
 
-        match kind {
-            "import_statement" => {
-                let text = node.utf8_text(source.as_bytes()).ok()?;
-                let name = self.extract_python_import_target(text)?;
-                Some(Symbol::new(
-                    name,
-                    SymbolType::Import,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
-            "import_from_statement" => {
-                let text = node.utf8_text(source.as_bytes()).ok()?;
-                let name = self.extract_python_from_import_target(text)?;
-                Some(Symbol::new(
-                    name,
-                    SymbolType::Import,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
-            "function_definition" => {
-                let name = self.get_child_text(node, "name", source)?;
-                // Check if it's a method (inside a class)
-                let is_method = node
-                    .parent()
-                    .and_then(|p| p.parent())
-                    .map(|gp| gp.kind() == "class_definition")
-                    .unwrap_or(false);
-                Some(Symbol::new(
-                    name,
-                    if is_method {
-                        SymbolType::Method
-                    } else {
-                        SymbolType::Function
-                    },
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
-            "class_definition" => {
-                let name = self.get_child_text(node, "name", source)?;
-                Some(Symbol::new(
-                    name,
-                    SymbolType::Class,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
-            _ => None,
+        if bits.import.contains(kind_id) {
+            // `import X` and `from Y import Z` are both imports but parse their
+            // target name differently — classification is table-driven, the name
+            // extraction stays per-kind.
+            let text = node.utf8_text(source.as_bytes()).ok()?;
+            let name = if kind == "import_from_statement" {
+                self.extract_python_from_import_target(text)?
+            } else {
+                self.extract_python_import_target(text)?
+            };
+            return Some(Symbol::new(
+                name,
+                SymbolType::Import,
+                self.file_path.clone(),
+                range,
+            ));
         }
-    }
-
-    fn rust_node_to_symbol(&self, node: &Node, source: &str) -> Option<Symbol> {
-        let kind = node.kind();
-        let range = Range::from_node(node);
-
-        match kind {
-            "use_declaration" => {
-                let text = node.utf8_text(source.as_bytes()).ok()?;
-                let name = self.extract_rust_use_target(text)?;
-                Some(Symbol::new(
-                    name,
-                    SymbolType::Import,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
-            "function_item" => {
-                let name = self.get_child_text(node, "name", source)?;
-                // A `function_item` directly inside an `impl` block is a method.
-                let symbol_type = if is_rust_impl_method(node) {
+        if bits.function.contains(kind_id) {
+            let name = self.get_child_text(node, "name", source)?;
+            // Check if it's a method (inside a class)
+            let is_method = node
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|gp| gp.kind() == "class_definition")
+                .unwrap_or(false);
+            return Some(Symbol::new(
+                name,
+                if is_method {
                     SymbolType::Method
                 } else {
                     SymbolType::Function
-                };
-                Some(Symbol::new(name, symbol_type, self.file_path.clone(), range))
-            }
-            "field_declaration" => {
-                let name = self.get_child_text(node, "name", source)?;
-                Some(Symbol::new(
-                    name,
-                    SymbolType::Property,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
-            "enum_variant" => {
-                let name = self.get_child_text(node, "name", source)?;
-                Some(Symbol::new(
-                    name,
-                    SymbolType::EnumMember,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
+                },
+                self.file_path.clone(),
+                range,
+            ));
+        }
+        if bits.class.contains(kind_id) {
+            let name = self.get_child_text(node, "name", source)?;
+            return Some(Symbol::new(
+                name,
+                SymbolType::Class,
+                self.file_path.clone(),
+                range,
+            ));
+        }
+        None
+    }
+
+    fn rust_node_to_symbol(
+        &self,
+        node: &Node,
+        source: &str,
+        language: Language,
+    ) -> Option<Symbol> {
+        let kind = node.kind();
+        let kind_id = node.kind_id();
+        let bits = lang_bitsets(language, &node.language());
+        let range = Range::from_node(node);
+
+        if bits.import.contains(kind_id) {
+            let text = node.utf8_text(source.as_bytes()).ok()?;
+            let name = self.extract_rust_use_target(text)?;
+            return Some(Symbol::new(
+                name,
+                SymbolType::Import,
+                self.file_path.clone(),
+                range,
+            ));
+        }
+        if bits.function.contains(kind_id) {
+            let name = self.get_child_text(node, "name", source)?;
+            // A `function_item` directly inside an `impl` block is a method.
+            let symbol_type = if is_rust_impl_method(node) {
+                SymbolType::Method
+            } else {
+                SymbolType::Function
+            };
+            return Some(Symbol::new(name, symbol_type, self.file_path.clone(), range));
+        }
+        if bits.field.contains(kind_id) {
+            let name = self.get_child_text(node, "name", source)?;
+            return Some(Symbol::new(
+                name,
+                SymbolType::Property,
+                self.file_path.clone(),
+                range,
+            ));
+        }
+        if bits.enum_variant.contains(kind_id) {
+            let name = self.get_child_text(node, "name", source)?;
+            return Some(Symbol::new(
+                name,
+                SymbolType::EnumMember,
+                self.file_path.clone(),
+                range,
+            ));
+        }
+
+        // Type-level declarations carry no shared LangSpec concern (no
+        // struct/enum/trait/impl/type/const/module fields) — kept inline.
+        match kind {
             "struct_item" => {
                 let name = self.get_child_text(node, "name", source)?;
                 Some(Symbol::new(
@@ -1011,39 +1033,49 @@ impl SymbolExtractor {
         }
     }
 
-    fn go_node_to_symbol(&self, node: &Node, source: &str) -> Option<Symbol> {
+    fn go_node_to_symbol(
+        &self,
+        node: &Node,
+        source: &str,
+        language: Language,
+    ) -> Option<Symbol> {
         let kind = node.kind();
+        let kind_id = node.kind_id();
+        let bits = lang_bitsets(language, &node.language());
         let range = Range::from_node(node);
 
+        if bits.import.contains(kind_id) {
+            let text = node.utf8_text(source.as_bytes()).ok()?;
+            let name = self.extract_quoted_text(text)?;
+            return Some(Symbol::new(
+                name,
+                SymbolType::Import,
+                self.file_path.clone(),
+                range,
+            ));
+        }
+        if bits.function.contains(kind_id) {
+            let name = self.get_child_text(node, "name", source)?;
+            return Some(Symbol::new(
+                name,
+                SymbolType::Function,
+                self.file_path.clone(),
+                range,
+            ));
+        }
+        if bits.method.contains(kind_id) {
+            let name = self.get_child_text(node, "name", source)?;
+            return Some(Symbol::new(
+                name,
+                SymbolType::Method,
+                self.file_path.clone(),
+                range,
+            ));
+        }
+
+        // `type_spec`/`const_spec`/`var_spec` need bespoke sub-classification
+        // (struct vs interface vs alias) — no shared concern — kept inline.
         match kind {
-            "import_spec" => {
-                let text = node.utf8_text(source.as_bytes()).ok()?;
-                let name = self.extract_quoted_text(text)?;
-                Some(Symbol::new(
-                    name,
-                    SymbolType::Import,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
-            "function_declaration" => {
-                let name = self.get_child_text(node, "name", source)?;
-                Some(Symbol::new(
-                    name,
-                    SymbolType::Function,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
-            "method_declaration" => {
-                let name = self.get_child_text(node, "name", source)?;
-                Some(Symbol::new(
-                    name,
-                    SymbolType::Method,
-                    self.file_path.clone(),
-                    range,
-                ))
-            }
             "type_spec" => {
                 let name = self.get_child_text(node, "name", source)?;
                 let symbol_type = match node.child_by_field_name("type")?.kind() {
@@ -1934,6 +1966,227 @@ fn decode_python_string(text: &str) -> String {
     s.trim().to_string()
 }
 
+/// Per-language node-kind classification table (M3.1 / 3.1g).
+///
+/// Each field lists the tree-sitter node-kind strings that one extraction
+/// *concern* matches for a `Language`. This `&'static [&str]` set is the source
+/// of truth; it is compiled once into O(1) `kind_id` bitsets (`LangBitsets`,
+/// 3.1b). Only the kind→concern *classification* lives here — per-kind
+/// name/signature extraction and the M1.2 special cases (Rust impl-method
+/// retyping, Python method detection, the JS/TS field Property-vs-Method split,
+/// `Type::method` parenting, Go receiver/embedding) stay in the extractors.
+struct LangSpec {
+    function_kinds: &'static [&'static str],
+    method_kinds: &'static [&'static str],
+    class_kinds: &'static [&'static str],
+    field_kinds: &'static [&'static str],
+    enum_variant_kinds: &'static [&'static str],
+    call_kinds: &'static [&'static str],
+    macro_call_kinds: &'static [&'static str],
+    import_kinds: &'static [&'static str],
+    decorator_kinds: &'static [&'static str],
+}
+
+/// Languages with no full-grammar extractor (scanners / anchors only).
+static EMPTY_SPEC: LangSpec = LangSpec {
+    function_kinds: &[],
+    method_kinds: &[],
+    class_kinds: &[],
+    field_kinds: &[],
+    enum_variant_kinds: &[],
+    call_kinds: &[],
+    macro_call_kinds: &[],
+    import_kinds: &[],
+    decorator_kinds: &[],
+};
+
+/// TypeScript family — TS / TSX / Astro / JavaScript / JSX all funnel through
+/// `typescript_node_to_symbol`, so they share these rows (each still compiles to
+/// its own grammar's bitset). `interface`/`type`/`enum` declarations,
+/// `variable_declarator`, object-literal `pair`s and namespaces are NOT concerns
+/// (bespoke extraction) and stay inline.
+static TS_SPEC: LangSpec = LangSpec {
+    function_kinds: &[
+        "function_declaration",
+        "generator_function_declaration",
+        "function_signature",
+        "function",
+        "generator_function",
+    ],
+    method_kinds: &[
+        "method_definition",
+        "method_signature",
+        "abstract_method_signature",
+    ],
+    class_kinds: &["class_declaration", "class"],
+    field_kinds: &[
+        "public_field_definition",
+        "field_definition",
+        "property_signature",
+    ],
+    enum_variant_kinds: &["enum_assignment"],
+    call_kinds: &["call_expression"],
+    macro_call_kinds: &[],
+    import_kinds: &["import_statement"],
+    decorator_kinds: &[],
+};
+
+/// Python. `function_definition` is reclassified to a method inline when nested
+/// in a class; `class_definition` is the only class kind.
+static PYTHON_SPEC: LangSpec = LangSpec {
+    function_kinds: &["function_definition"],
+    method_kinds: &[],
+    class_kinds: &["class_definition"],
+    field_kinds: &[],
+    enum_variant_kinds: &[],
+    call_kinds: &["call"],
+    macro_call_kinds: &[],
+    import_kinds: &["import_statement", "import_from_statement"],
+    decorator_kinds: &[],
+};
+
+/// Rust. `function_item` is the only function kind and is retyped to a method
+/// inline when directly inside an `impl`. Struct/enum/trait/impl/type/const/mod
+/// declarations are not concerns (no matching `LangSpec` field) and stay inline.
+static RUST_SPEC: LangSpec = LangSpec {
+    function_kinds: &["function_item"],
+    method_kinds: &[],
+    class_kinds: &[],
+    field_kinds: &["field_declaration"],
+    enum_variant_kinds: &["enum_variant"],
+    call_kinds: &["call_expression"],
+    macro_call_kinds: &["macro_invocation"],
+    import_kinds: &["use_declaration"],
+    decorator_kinds: &[],
+};
+
+/// Go. `type_spec` (struct/interface/alias), `const_spec` and `var_spec` are
+/// bespoke and stay inline.
+static GO_SPEC: LangSpec = LangSpec {
+    function_kinds: &["function_declaration"],
+    method_kinds: &["method_declaration"],
+    class_kinds: &[],
+    field_kinds: &[],
+    enum_variant_kinds: &[],
+    call_kinds: &["call_expression"],
+    macro_call_kinds: &[],
+    import_kinds: &["import_spec"],
+    decorator_kinds: &[],
+};
+
+/// The `LangSpec` for a language. The TS variants share `TS_SPEC`; languages
+/// without a full grammar get the empty spec.
+fn lang_spec(language: Language) -> &'static LangSpec {
+    match language {
+        Language::TypeScript
+        | Language::Tsx
+        | Language::Astro
+        | Language::JavaScript
+        | Language::Jsx => &TS_SPEC,
+        Language::Python => &PYTHON_SPEC,
+        Language::Rust => &RUST_SPEC,
+        Language::Go => &GO_SPEC,
+        _ => &EMPTY_SPEC,
+    }
+}
+
+/// O(1) `kind_id` membership test compiled from a `&[&str]` of node-kind names
+/// (3.1b). Backed by a `Vec<bool>` sized to the grammar's `node_kind_count()`
+/// (the fastest dep-free form). Both the named and anonymous symbol id of each
+/// name are set, so anonymous-token nodes match their string form exactly as the
+/// old `node.kind() == "..."` tests did.
+struct KindSet {
+    bits: Vec<bool>,
+}
+
+impl KindSet {
+    fn build(grammar: &tree_sitter::Language, names: &[&str]) -> Self {
+        let count = grammar.node_kind_count();
+        let mut bits = vec![false; count];
+        for &name in names {
+            // Try both the named and the anonymous form; a kind may exist as
+            // either (or neither, in which case `id_for_node_kind` returns 0).
+            for named in [true, false] {
+                let id = grammar.id_for_node_kind(name, named);
+                // 0 is the "no such kind" sentinel (and the end token) — skip.
+                if id != 0 && (id as usize) < count {
+                    bits[id as usize] = true;
+                }
+            }
+        }
+        Self { bits }
+    }
+
+    #[inline]
+    fn contains(&self, kind_id: u16) -> bool {
+        self.bits.get(kind_id as usize).copied().unwrap_or(false)
+    }
+}
+
+/// All nine `LangSpec` concerns compiled to `KindSet`s for one grammar.
+struct LangBitsets {
+    function: KindSet,
+    method: KindSet,
+    class: KindSet,
+    field: KindSet,
+    enum_variant: KindSet,
+    call: KindSet,
+    macro_call: KindSet,
+    import: KindSet,
+    /// Kept for the committed `LangSpec` field set; no language emits decorator
+    /// edges yet (that is Phase 4), so this compiled set is intentionally unread.
+    #[allow(dead_code)]
+    decorator: KindSet,
+}
+
+impl LangBitsets {
+    fn build(grammar: &tree_sitter::Language, spec: &LangSpec) -> Self {
+        Self {
+            function: KindSet::build(grammar, spec.function_kinds),
+            method: KindSet::build(grammar, spec.method_kinds),
+            class: KindSet::build(grammar, spec.class_kinds),
+            field: KindSet::build(grammar, spec.field_kinds),
+            enum_variant: KindSet::build(grammar, spec.enum_variant_kinds),
+            call: KindSet::build(grammar, spec.call_kinds),
+            macro_call: KindSet::build(grammar, spec.macro_call_kinds),
+            import: KindSet::build(grammar, spec.import_kinds),
+            decorator: KindSet::build(grammar, spec.decorator_kinds),
+        }
+    }
+}
+
+/// Compiled-bitset cache: one `LangBitsets` per `Language`, built lazily from the
+/// node's own grammar (`node.language()`) so the TS/JS variants — which share
+/// `LangSpec` rows but use *different* grammars (distinct `kind_id`s) — each get
+/// a correctly-keyed set. Languages with no rows share one inert (all-false)
+/// cell. `#[allow(unused)]` on `decorator` keeps the committed field set whole
+/// (no language populates it yet).
+fn lang_bitsets(language: Language, grammar: &tree_sitter::Language) -> &'static LangBitsets {
+    use std::sync::OnceLock;
+    static TS: OnceLock<LangBitsets> = OnceLock::new();
+    static TSX: OnceLock<LangBitsets> = OnceLock::new();
+    static ASTRO: OnceLock<LangBitsets> = OnceLock::new();
+    static JS: OnceLock<LangBitsets> = OnceLock::new();
+    static JSX: OnceLock<LangBitsets> = OnceLock::new();
+    static PY: OnceLock<LangBitsets> = OnceLock::new();
+    static RS: OnceLock<LangBitsets> = OnceLock::new();
+    static GO: OnceLock<LangBitsets> = OnceLock::new();
+    static OTHER: OnceLock<LangBitsets> = OnceLock::new();
+
+    let cell = match language {
+        Language::TypeScript => &TS,
+        Language::Tsx => &TSX,
+        Language::Astro => &ASTRO,
+        Language::JavaScript => &JS,
+        Language::Jsx => &JSX,
+        Language::Python => &PY,
+        Language::Rust => &RS,
+        Language::Go => &GO,
+        _ => &OTHER,
+    };
+    cell.get_or_init(|| LangBitsets::build(grammar, lang_spec(language)))
+}
+
 fn extract_relationship_target_name(
     node: &Node,
     source: &str,
@@ -1944,39 +2197,23 @@ fn extract_relationship_target_name(
         | Language::Tsx
         | Language::Astro
         | Language::JavaScript
-        | Language::Jsx => {
-            if node.kind() != "call_expression" {
-                return None;
-            }
-            let callee = node.child_by_field_name("function")?;
-            extract_callable_name(&callee, source)
-        }
-        Language::Python => {
-            if node.kind() != "call" {
-                return None;
-            }
-            let callee = node.child_by_field_name("function")?;
-            extract_callable_name(&callee, source)
-        }
-        Language::Rust => match node.kind() {
-            "call_expression" => {
+        | Language::Jsx
+        | Language::Python
+        | Language::Rust
+        | Language::Go => {
+            let bits = lang_bitsets(language, &node.language());
+            let kind_id = node.kind_id();
+            if bits.call.contains(kind_id) {
                 let callee = node.child_by_field_name("function")?;
                 extract_callable_name(&callee, source)
-            }
-            // `println!(...)`, `anyhow!(...)`, `tracing::info!(...)` etc. emit a
-            // Call edge from the macro path child.
-            "macro_invocation" => {
+            } else if bits.macro_call.contains(kind_id) {
+                // `println!(...)`, `anyhow!(...)`, `tracing::info!(...)` etc. emit
+                // a Call edge from the macro path child (Rust only today).
                 let macro_node = node.child_by_field_name("macro")?;
                 extract_callable_name(&macro_node, source)
+            } else {
+                None
             }
-            _ => None,
-        },
-        Language::Go => {
-            if node.kind() != "call_expression" {
-                return None;
-            }
-            let callee = node.child_by_field_name("function")?;
-            extract_callable_name(&callee, source)
         }
         Language::Markdown
         | Language::Css
