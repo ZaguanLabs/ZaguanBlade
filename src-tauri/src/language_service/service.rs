@@ -1584,9 +1584,12 @@ impl LanguageService {
             });
         }
         if language.is_config_scanner() {
+            let symbols = extract_config_symbols(file_path, content, language);
+            // M4.3 PART 2 — surface kustomize `Import` symbols as Import edges.
+            let relationships = derive_config_import_relationships(file_path, &symbols);
             return Ok(SymbolExtraction {
-                symbols: extract_config_symbols(file_path, content, language),
-                relationships: Vec::new(),
+                symbols,
+                relationships,
                 content: Cow::Borrowed(content),
                 language,
             });
@@ -7421,11 +7424,18 @@ fn push_markup_selector_token(
 struct ConfigKeyEntry {
     key_path: String,
     leaf_key: String,
+    /// Exact (line, char) of the key when a span-preserving parser resolved it
+    /// (M4.3: YAML via `marked-yaml`, TOML via the line scan). `None` falls back
+    /// to the legacy `locate_config_key` re-find — retained only for JSON, whose
+    /// span-accuracy is deferred (§13: no clean spanned JSON reader without
+    /// another dependency).
+    position: Option<(u32, u32)>,
 }
 
 const CONFIG_SYMBOL_LIMIT: usize = 2048;
 
 fn extract_config_symbols(file_path: &str, content: &str, language: Language) -> Vec<Symbol> {
+    let mut symbols = Vec::new();
     let mut entries = Vec::with_capacity(CONFIG_SYMBOL_LIMIT.min(256));
     match language {
         Language::Json => {
@@ -7440,13 +7450,36 @@ fn extract_config_symbols(file_path: &str, content: &str, language: Language) ->
             }
         }
         Language::Yaml => {
-            if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(content) {
-                if is_github_actions_workflow_path(file_path) {
-                    collect_github_actions_workflow_config_keys(&value, &mut entries);
-                } else if is_docker_compose_path(file_path) {
-                    collect_docker_compose_config_keys(&value, &mut entries);
+            // M4.3 PART 1/2 — Kubernetes manifests collapse to a single `Resource`
+            // node ("<kind>/<metadata.name>") instead of a bag of repeated
+            // spec/metadata keys; Kustomize overlays expand to `Import`s. (A
+            // `kustomization.yaml` also carries apiVersion/kind but is handled as
+            // imports below, not a Resource.)
+            if is_kustomization_path(file_path) {
+                // M4.3 PART 2 — Kustomize overlays emit an Import per entry in the
+                // `resources`/`bases`/`components` lists (target = the path), PLUS
+                // their flat config keys (apiVersion/kind/namespace, …).
+                symbols.extend(collect_kustomize_import_symbols(file_path, content));
+                collect_yaml_config_entries(file_path, content, &mut entries);
+            } else {
+                let resources = collect_k8s_resource_symbols(file_path, content);
+                if resources.is_empty() {
+                    // No manifest docs — span-accurate flat config keys over the
+                    // whole file. Covers a single top-level mapping AND, via the
+                    // serde fallback inside `collect_yaml_config_entries`, a
+                    // top-level sequence/scalar that `marked-yaml`'s mapping-root
+                    // loader rejects (BUG 1 regression fix: those keys must still
+                    // be extracted).
+                    collect_yaml_config_entries(file_path, content, &mut entries);
                 } else {
-                    collect_yaml_config_keys(&value, &mut Vec::new(), &mut entries);
+                    // BUG 2 — a multi-document file with at least one manifest doc:
+                    // emit a `Resource` per manifest doc AND still extract the flat
+                    // config keys from the NON-manifest docs (a pure-manifest file
+                    // adds no extra keys). Positions for those keys are best-effort
+                    // (`locate_config_key`): a whole-file `marked-yaml` parse only
+                    // spans the first document, so per-doc spans aren't recoverable.
+                    symbols.extend(resources);
+                    collect_non_manifest_doc_config_keys(content, &mut entries);
                 }
             }
         }
@@ -7456,32 +7489,359 @@ fn extract_config_symbols(file_path: &str, content: &str, language: Language) ->
         _ => {}
     }
 
-    let mut symbols = Vec::new();
     let mut seen = HashSet::new();
     let lines = content.lines().collect::<Vec<_>>();
     let line_start_offsets = line_start_offsets(content);
     for entry in entries {
-        let location = locate_config_key(content, &entry.key_path, &entry.leaf_key);
-        let line_text = lines
-            .get(location.line as usize)
-            .copied()
-            .unwrap_or_default();
-        let line_start_byte = line_start_offsets
-            .get(location.line as usize)
-            .copied()
-            .unwrap_or(0);
+        // Span-accurate position when a span-preserving parser resolved it
+        // (YAML/TOML); JSON still falls back to the legacy re-find (§13 deferral).
+        let (line, character) = entry.position.unwrap_or_else(|| {
+            let location = locate_config_key(content, &entry.key_path, &entry.leaf_key);
+            (location.line, location.character)
+        });
+        let line_text = lines.get(line as usize).copied().unwrap_or_default();
+        let line_start_byte = line_start_offsets.get(line as usize).copied().unwrap_or(0);
         push_config_symbol(
             &mut symbols,
             &mut seen,
             file_path,
             &entry.key_path,
-            location.line,
-            location.character as usize,
+            line,
+            character as usize,
             line_start_byte,
             line_text,
         );
     }
     symbols
+}
+
+/// M4.3 PART 3 — span-accurate flat config keys for a (single-document) YAML
+/// file, appended to `entries`.
+///
+/// Parses with `marked-yaml` (per-node line/col, duplicate-key tolerant),
+/// converts to a `serde_yaml::Value` so the existing collectors produce the
+/// exact same key set, then resolves each newly-added key's real (line, col)
+/// from the marked tree — replacing the wrong-line `locate_config_key` re-find.
+///
+/// BUG 1 regression fix: `marked_yaml::parse_yaml` defaults to a mapping root and
+/// returns `Err` for a top-level SEQUENCE or scalar (e.g. an Ansible playbook or
+/// any top-level-list `.yml`). The pre-M4.3 path used `serde_yaml::from_str` and
+/// still extracted those keys, so on that error we FALL BACK to the same
+/// serde-based extraction — the keys are preserved (positions degrade to the
+/// legacy `locate_config_key` re-find, acceptable for non-mapping roots).
+fn collect_yaml_config_entries(
+    file_path: &str,
+    content: &str,
+    entries: &mut Vec<ConfigKeyEntry>,
+) {
+    let start = entries.len();
+    match marked_yaml::parse_yaml(0usize, content) {
+        Ok(root) => {
+            let value = marked_yaml_to_serde(&root);
+            dispatch_yaml_config_collector(file_path, &value, entries);
+            let mut positions = HashMap::new();
+            collect_marked_yaml_key_positions(&root, &mut Vec::new(), &mut positions);
+            for entry in &mut entries[start..] {
+                if let Some(position) = positions
+                    .get_mut(&entry.key_path)
+                    .and_then(VecDeque::pop_front)
+                {
+                    entry.position = Some(position);
+                }
+            }
+        }
+        Err(_) => {
+            // Non-mapping root: marked-yaml rejects it. Preserve the key set via
+            // the legacy serde path (positions left `None` → `locate_config_key`).
+            if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(content) {
+                dispatch_yaml_config_collector(file_path, &value, entries);
+            }
+        }
+    }
+}
+
+/// Route a parsed YAML value to the right flat-key collector (GitHub Actions /
+/// Docker Compose specializations, else the generic walk). Shared by the
+/// span-accurate path and the BUG 1 serde fallback so both produce one key set.
+fn dispatch_yaml_config_collector(
+    file_path: &str,
+    value: &serde_yaml::Value,
+    entries: &mut Vec<ConfigKeyEntry>,
+) {
+    if is_github_actions_workflow_path(file_path) {
+        collect_github_actions_workflow_config_keys(value, entries);
+    } else if is_docker_compose_path(file_path) {
+        collect_docker_compose_config_keys(value, entries);
+    } else {
+        collect_yaml_config_keys(value, &mut Vec::new(), entries);
+    }
+}
+
+/// BUG 2 — for a multi-document YAML file that contains at least one Kubernetes
+/// manifest doc (each already represented by a `Resource` symbol), extract flat
+/// config keys from the NON-manifest documents. Positions are best-effort (left
+/// `None` → `locate_config_key`), since a whole-file `marked-yaml` parse only
+/// covers the first document.
+fn collect_non_manifest_doc_config_keys(content: &str, entries: &mut Vec<ConfigKeyEntry>) {
+    for document in serde_yaml::Deserializer::from_str(content) {
+        let Ok(value) = serde_yaml::Value::deserialize(document) else {
+            continue;
+        };
+        if yaml_value_is_manifest(&value) {
+            continue;
+        }
+        collect_yaml_config_keys(&value, &mut Vec::new(), entries);
+    }
+}
+
+/// A YAML document is a Kubernetes manifest when its top-level mapping carries
+/// BOTH a non-empty `apiVersion` and `kind` (the same test used to mint a
+/// `Resource` symbol in `collect_k8s_resource_symbols`).
+fn yaml_value_is_manifest(value: &serde_yaml::Value) -> bool {
+    let Some(map) = value.as_mapping() else {
+        return false;
+    };
+    let api_version = yaml_mapping_get(map, "apiVersion")
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim);
+    let kind = yaml_mapping_get(map, "kind")
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim);
+    matches!((api_version, kind), (Some(api), Some(kind)) if !api.is_empty() && !kind.is_empty())
+}
+
+/// M4.3 PART 1 — emit one `Resource` symbol per Kubernetes manifest document.
+///
+/// A document is a manifest when its top-level mapping has BOTH `apiVersion`
+/// and `kind`. The symbol is named `"<kind>/<metadata.name>"` (falling back to
+/// `"<kind>/<unnamed>"` when `metadata.name` is absent). Multi-document files
+/// (`---` separated) yield one `Resource` per manifest doc. Spans are not
+/// required for resources, so each is anchored at the file start (line 0).
+fn collect_k8s_resource_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    let mut symbols = Vec::new();
+    let mut seen = HashSet::new();
+    for document in serde_yaml::Deserializer::from_str(content) {
+        let Ok(value) = serde_yaml::Value::deserialize(document) else {
+            continue;
+        };
+        let Some(map) = value.as_mapping() else {
+            continue;
+        };
+        let api_version = yaml_mapping_get(map, "apiVersion").and_then(serde_yaml::Value::as_str);
+        let kind = yaml_mapping_get(map, "kind").and_then(serde_yaml::Value::as_str);
+        let (Some(api_version), Some(kind)) = (api_version, kind) else {
+            continue;
+        };
+        if api_version.trim().is_empty() || kind.trim().is_empty() {
+            continue;
+        }
+        let name = yaml_mapping_get(map, "metadata")
+            .and_then(serde_yaml::Value::as_mapping)
+            .and_then(|metadata| yaml_mapping_get(metadata, "name"))
+            .and_then(serde_yaml::Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or("<unnamed>");
+        let resource_name = format!("{kind}/{name}");
+        if seen.insert(resource_name.clone()) {
+            symbols.push(make_config_node_symbol(
+                file_path,
+                &resource_name,
+                SymbolType::Resource,
+                0,
+                0,
+                0,
+            ));
+        }
+    }
+    symbols
+}
+
+/// M4.3 PART 2 — expand a `kustomization.yaml`'s `resources`/`bases`/`components`
+/// list entries into one `Import` symbol each (target = the referenced path),
+/// pinned to the exact list-item line/col via `marked-yaml`.
+fn collect_kustomize_import_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    let mut symbols = Vec::new();
+    let mut seen = HashSet::new();
+    let Ok(root) = marked_yaml::parse_yaml(0usize, content) else {
+        return symbols;
+    };
+    let Some(map) = root.as_mapping() else {
+        return symbols;
+    };
+    let line_start_offsets = line_start_offsets(content);
+    for section in ["resources", "bases", "components"] {
+        let Some(sequence) = map.get_node(section).and_then(marked_yaml::types::Node::as_sequence)
+        else {
+            continue;
+        };
+        for item in sequence.iter() {
+            let Some(scalar) = item.as_scalar() else {
+                continue;
+            };
+            let target = scalar.as_str().trim();
+            if target.is_empty() || target.len() > 240 {
+                continue;
+            }
+            if !seen.insert(target.to_string()) {
+                continue;
+            }
+            let (line, character) = marked_marker_position(scalar.span().start());
+            let line_start_byte = line_start_offsets.get(line as usize).copied().unwrap_or(0);
+            symbols.push(make_config_node_symbol(
+                file_path,
+                target,
+                SymbolType::Import,
+                line,
+                character,
+                line_start_byte,
+            ));
+        }
+    }
+    symbols
+}
+
+/// Build a `Resource`/`Import` node symbol for the config scanner.
+fn make_config_node_symbol(
+    file_path: &str,
+    name: &str,
+    symbol_type: SymbolType,
+    line: u32,
+    character: u32,
+    line_start_byte: usize,
+) -> Symbol {
+    let end_char = character.saturating_add(name.len() as u32);
+    Symbol {
+        id: format!("{}::{}#{}", file_path, name, symbol_type),
+        name: name.to_string(),
+        qualified_name: name.to_string(),
+        symbol_type,
+        file_path: file_path.to_string(),
+        range: Range {
+            start: Position::new(line, character),
+            end: Position::new(line, end_char),
+        },
+        byte_offset: line_start_byte.saturating_add(character as usize),
+        byte_length: name.len(),
+        parent_id: None,
+        docstring: None,
+        signature: None,
+        content_hash: compute_hash(name),
+    }
+}
+
+/// M4.3 PART 2 — Import edges for the config scanner: mirror the tree-sitter
+/// import-relationship derivation so kustomize `Import` symbols also surface as
+/// `Import` relationships (target = the referenced path). Other config symbols
+/// (`Property`/`Resource`) are not imports and produce no edges.
+fn derive_config_import_relationships(
+    file_path: &str,
+    symbols: &[Symbol],
+) -> Vec<SymbolRelationship> {
+    let mut relationships = Vec::new();
+    let mut seen = HashSet::new();
+    for symbol in symbols {
+        if symbol.symbol_type != SymbolType::Import || symbol.name.is_empty() {
+            continue;
+        }
+        if !seen.insert((symbol.id.clone(), symbol.name.clone(), symbol.range.start.line)) {
+            continue;
+        }
+        relationships.push(SymbolRelationship {
+            source_symbol_id: symbol.id.clone(),
+            source_file_path: file_path.to_string(),
+            target_name: symbol.name.clone(),
+            target_symbol_id: None,
+            relationship_type: SymbolRelationshipType::Import,
+            line: symbol.range.start.line,
+        });
+    }
+    relationships
+}
+
+/// Recursively convert a `marked-yaml` node into a `serde_yaml::Value` (dropping
+/// the span markers), so the existing serde-based config-key collectors run
+/// unchanged on YAML that `serde_yaml::from_str` would reject (e.g. duplicate
+/// keys). All scalars become strings — the collectors key off structure and
+/// mapping keys, never scalar value types.
+fn marked_yaml_to_serde(node: &marked_yaml::types::Node) -> serde_yaml::Value {
+    use marked_yaml::types::Node;
+    match node {
+        Node::Scalar(scalar) => serde_yaml::Value::String(scalar.as_str().to_string()),
+        Node::Mapping(map) => {
+            let mut mapping = serde_yaml::Mapping::new();
+            for (key, value) in map.iter() {
+                mapping.insert(
+                    serde_yaml::Value::String(key.as_str().to_string()),
+                    marked_yaml_to_serde(value),
+                );
+            }
+            serde_yaml::Value::Mapping(mapping)
+        }
+        Node::Sequence(sequence) => {
+            serde_yaml::Value::Sequence(sequence.iter().map(marked_yaml_to_serde).collect())
+        }
+    }
+}
+
+/// Build a `key_path -> [(line, char), …]` index from a `marked-yaml` tree,
+/// mirroring `collect_yaml_config_keys`' traversal (same `is_config_key_segment`
+/// filter, mappings + sequences) so each config key resolves to its OWN source
+/// position. Positions are queued in document order; the consumer pops the front
+/// so repeated paths (e.g. the same leaf key in two sub-trees) line up with the
+/// collector's document-order entries.
+fn collect_marked_yaml_key_positions(
+    node: &marked_yaml::types::Node,
+    path: &mut Vec<String>,
+    positions: &mut HashMap<String, VecDeque<(u32, u32)>>,
+) {
+    use marked_yaml::types::Node;
+    match node {
+        Node::Mapping(map) => {
+            for (key, value) in map.iter() {
+                let segment = key.as_str();
+                if !is_config_key_segment(segment) {
+                    continue;
+                }
+                path.push(segment.to_string());
+                let position = marked_marker_position(key.span().start());
+                positions
+                    .entry(path.join("."))
+                    .or_default()
+                    .push_back(position);
+                collect_marked_yaml_key_positions(value, path, positions);
+                path.pop();
+            }
+        }
+        Node::Sequence(sequence) => {
+            for item in sequence.iter() {
+                collect_marked_yaml_key_positions(item, path, positions);
+            }
+        }
+        Node::Scalar(_) => {}
+    }
+}
+
+/// Convert a `marked-yaml` start marker to the crate's 0-indexed (line, char).
+/// `marked-yaml` reports 1-indexed line and column.
+fn marked_marker_position(marker: Option<&marked_yaml::Marker>) -> (u32, u32) {
+    marker
+        .map(|marker| {
+            (
+                marker.line().saturating_sub(1) as u32,
+                marker.column().saturating_sub(1) as u32,
+            )
+        })
+        .unwrap_or((0, 0))
+}
+
+/// A `kustomization.yaml`/`.yml` (routed to YAML by M1.3) — the Kustomize
+/// overlay entry-point whose `resources`/`bases`/`components` lists are imports.
+fn is_kustomization_path(file_path: &str) -> bool {
+    matches!(
+        config_file_name(file_path).as_str(),
+        "kustomization.yaml" | "kustomization.yml"
+    )
 }
 
 fn parse_json_config_value(file_path: &str, content: &str) -> Option<serde_json::Value> {
@@ -7984,6 +8344,13 @@ fn collect_github_actions_step_keys(
     steps: &[serde_yaml::Value],
     entries: &mut Vec<ConfigKeyEntry>,
 ) {
+    // NOTE (§13, best-effort): the leaf segment here is the step's VALUE (its
+    // `name`/`uses`/`run`), not a literal mapping key, so `jobs.<id>.steps.<name>`
+    // is NOT present in the literal key-path index built by
+    // `collect_marked_yaml_key_positions`. These entries therefore carry no span
+    // and fall back to `locate_config_key` — value-keyed GitHub-Actions step
+    // positions remain best-effort. (The GENERIC repeated-leaf-key case — the same
+    // literal key under two sub-trees — IS span-accurate via the position queue.)
     for step in steps {
         let Some(step_map) = step.as_mapping() else {
             continue;
@@ -8014,8 +8381,12 @@ fn yaml_mapping_get<'a>(map: &'a serde_yaml::Mapping, key: &str) -> Option<&'a s
 }
 
 fn collect_toml_config_keys(content: &str, entries: &mut Vec<ConfigKeyEntry>) {
+    // M4.3 PART 3 — span-accurate by construction: this is a physical line scan,
+    // so each key entry carries the line it was seen on (and the column where the
+    // key starts), instead of being re-found by `locate_config_key` (which pins
+    // every duplicate-named key to its first occurrence).
     let mut table_path = Vec::<String>::new();
-    for line in content.lines() {
+    for (line_index, line) in content.lines().enumerate() {
         if entries.len() >= CONFIG_SYMBOL_LIMIT {
             break;
         }
@@ -8042,11 +8413,26 @@ fn collect_toml_config_keys(content: &str, entries: &mut Vec<ConfigKeyEntry>) {
         let Some(leaf_key) = path.last().cloned() else {
             continue;
         };
-        push_config_key_entry(&path, &leaf_key, entries);
+        let column = line.len().saturating_sub(line.trim_start().len()) as u32;
+        push_config_key_entry_at(
+            &path,
+            &leaf_key,
+            Some((line_index as u32, column)),
+            entries,
+        );
     }
 }
 
 fn push_config_key_entry(path: &[String], leaf_key: &str, entries: &mut Vec<ConfigKeyEntry>) {
+    push_config_key_entry_at(path, leaf_key, None, entries);
+}
+
+fn push_config_key_entry_at(
+    path: &[String],
+    leaf_key: &str,
+    position: Option<(u32, u32)>,
+    entries: &mut Vec<ConfigKeyEntry>,
+) {
     if entries.len() >= CONFIG_SYMBOL_LIMIT || path.is_empty() {
         return;
     }
@@ -8054,6 +8440,7 @@ fn push_config_key_entry(path: &[String], leaf_key: &str, entries: &mut Vec<Conf
     entries.push(ConfigKeyEntry {
         key_path: path.join("."),
         leaf_key: leaf_key.to_string(),
+        position,
     });
 }
 
@@ -12379,6 +12766,207 @@ testpaths = ["tests"]
 
         let symbols = extract_config_symbols("large.json", &content, Language::Json);
         assert!(symbols.len() <= CONFIG_SYMBOL_LIMIT);
+    }
+
+    // ---- M4.3 — K8s Resource nodes + Kustomize IMPORTS + span-accurate config ----
+
+    #[test]
+    fn test_k8s_manifest_emits_single_resource_symbol() {
+        let manifest = "\
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27
+";
+        let symbols = extract_config_symbols("deploy.yaml", manifest, Language::Yaml);
+        // ONE Resource node, not a bag of repeated spec/metadata keys.
+        assert_eq!(
+            symbols.len(),
+            1,
+            "K8s manifest should collapse to a single Resource node, got {symbols:?}"
+        );
+        assert_eq!(symbols[0].symbol_type, SymbolType::Resource);
+        assert_eq!(symbols[0].name, "Deployment/web");
+        assert_eq!(symbols[0].qualified_name, "Deployment/web");
+
+        // A multi-document file yields one Resource per manifest doc.
+        let multi = "\
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+";
+        let resources = collect_k8s_resource_symbols("stack.yaml", multi);
+        assert_eq!(resources.len(), 2);
+        assert!(resources.iter().any(|s| s.name == "Service/web"));
+        assert!(resources.iter().any(|s| s.name == "Deployment/web"));
+        assert!(resources
+            .iter()
+            .all(|s| s.symbol_type == SymbolType::Resource));
+
+        // Missing metadata.name falls back to a stable placeholder.
+        let unnamed = collect_k8s_resource_symbols(
+            "cm.yaml",
+            "apiVersion: v1\nkind: ConfigMap\ndata:\n  key: value\n",
+        );
+        assert_eq!(unnamed.len(), 1);
+        assert_eq!(unnamed[0].name, "ConfigMap/<unnamed>");
+    }
+
+    #[test]
+    fn test_kustomization_emits_import_symbols_and_edges() {
+        let kustomization = "\
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: prod
+resources:
+  - ../base
+  - service.yaml
+bases:
+  - ../legacy
+components:
+  - ../components/logging
+";
+        let symbols = extract_config_symbols("kustomization.yaml", kustomization, Language::Yaml);
+        let imports: Vec<&str> = symbols
+            .iter()
+            .filter(|s| s.symbol_type == SymbolType::Import)
+            .map(|s| s.name.as_str())
+            .collect();
+        assert!(imports.contains(&"../base"), "imports: {imports:?}");
+        assert!(imports.contains(&"service.yaml"), "imports: {imports:?}");
+        assert!(imports.contains(&"../legacy"), "imports: {imports:?}");
+        assert!(
+            imports.contains(&"../components/logging"),
+            "imports: {imports:?}"
+        );
+        // A kustomization is imports, not a Resource manifest.
+        assert!(symbols.iter().all(|s| s.symbol_type != SymbolType::Resource));
+
+        // Each list entry becomes an Import edge (target = the referenced path).
+        let relationships = derive_config_import_relationships("kustomization.yaml", &symbols);
+        assert!(relationships
+            .iter()
+            .all(|r| r.relationship_type == SymbolRelationshipType::Import));
+        let targets: Vec<&str> = relationships
+            .iter()
+            .map(|r| r.target_name.as_str())
+            .collect();
+        assert_eq!(
+            targets.len(),
+            4,
+            "one Import edge per resources/bases/components entry, got {targets:?}"
+        );
+        assert!(targets.contains(&"../base"));
+        assert!(targets.contains(&"../components/logging"));
+    }
+
+    #[test]
+    fn test_yaml_duplicate_leaf_key_reports_its_own_line() {
+        // The leaf key `name` appears at the top level (line 0) and nested under
+        // `service` (line 2). The legacy `locate_config_key` re-find pinned
+        // `service.name` to the FIRST `name:` (line 0); the span-preserving
+        // parser pins each key to its OWN source line.
+        let yaml = "\
+name: top
+service:
+  name: inner
+  port: 9090
+";
+        let symbols = extract_config_symbols("app.yaml", yaml, Language::Yaml);
+
+        let top = symbols
+            .iter()
+            .find(|s| s.name == "name")
+            .expect("top-level `name`");
+        assert_eq!(top.range.start.line, 0);
+        assert_eq!(top.range.start.character, 0);
+
+        let nested = symbols
+            .iter()
+            .find(|s| s.name == "service.name")
+            .expect("nested `service.name`");
+        assert_eq!(
+            nested.range.start.line, 2,
+            "the second `name` key must report its own line, not the first"
+        );
+        assert_eq!(nested.range.start.character, 2, "nested key column");
+    }
+
+    #[test]
+    fn test_top_level_sequence_yaml_still_extracts_keys() {
+        // BUG 1 regression: `marked_yaml::parse_yaml` defaults to a mapping root
+        // and returns Err for a TOP-LEVEL SEQUENCE. The pre-M4.3 serde path
+        // extracted these keys; the span path must fall back to it so the key set
+        // is preserved (positions degrade to best-effort — that's acceptable for a
+        // non-mapping root). Drives the real scanner entry point.
+        let yaml = "\
+- name: alpha
+  port: 8080
+- name: beta
+  port: 9090
+";
+        let symbols = extract_scanner_symbols("list.yaml", yaml, Language::Yaml);
+        assert!(
+            !symbols.is_empty(),
+            "top-level-sequence YAML must still yield config keys, got none"
+        );
+        assert!(
+            symbols.iter().any(|s| s.name == "name"),
+            "expected the `name` key, got {symbols:?}"
+        );
+        assert!(
+            symbols.iter().any(|s| s.name == "port"),
+            "expected the `port` key, got {symbols:?}"
+        );
+        assert!(symbols
+            .iter()
+            .all(|s| s.symbol_type == SymbolType::Property));
+    }
+
+    #[test]
+    fn test_mixed_multidoc_yaml_emits_resource_and_non_manifest_keys() {
+        // BUG 2 regression: a manifest doc collapses to a `Resource`, but the
+        // OTHER `---`-separated (non-manifest) doc's flat config keys must still
+        // be extracted — not dropped by an early `return resources`.
+        let yaml = "\
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+---
+server:
+  port: 8080
+  host: localhost
+";
+        let symbols = extract_config_symbols("mixed.yaml", yaml, Language::Yaml);
+
+        let resource = symbols
+            .iter()
+            .find(|s| s.symbol_type == SymbolType::Resource)
+            .expect("manifest doc must still emit a Resource");
+        assert_eq!(resource.name, "ConfigMap/app-config");
+
+        for key in ["server", "server.port", "server.host"] {
+            assert!(
+                symbols
+                    .iter()
+                    .any(|s| s.name == key && s.symbol_type == SymbolType::Property),
+                "non-manifest doc key `{key}` must be extracted, got {symbols:?}"
+            );
+        }
     }
 
     #[test]

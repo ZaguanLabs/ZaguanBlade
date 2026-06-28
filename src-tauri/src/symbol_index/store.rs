@@ -179,6 +179,7 @@ const ALL_SYMBOL_TYPES: &[SymbolType] = &[
     SymbolType::CssAtRule,
     SymbolType::CssLayer,
     SymbolType::CssFontFace,
+    SymbolType::Resource,
 ];
 
 /// Every `SymbolRelationshipType` variant, for the same zero back-fill.
@@ -232,7 +233,8 @@ fn coverage_variant_drift_guard(
         | SymbolType::CssKeyframes
         | SymbolType::CssAtRule
         | SymbolType::CssLayer
-        | SymbolType::CssFontFace => {}
+        | SymbolType::CssFontFace
+        | SymbolType::Resource => {}
     }
     match relationship_type {
         SymbolRelationshipType::Call

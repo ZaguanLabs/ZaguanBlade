@@ -39,6 +39,9 @@ pub enum SymbolType {
     CssAtRule,
     CssLayer,
     CssFontFace,
+    /// A declarative infrastructure resource (e.g. a Kubernetes manifest doc
+    /// with both `apiVersion` and `kind`), named `"<kind>/<metadata.name>"`.
+    Resource,
 }
 
 impl std::fmt::Display for SymbolType {
@@ -68,6 +71,7 @@ impl std::fmt::Display for SymbolType {
             SymbolType::CssAtRule => "css_at_rule",
             SymbolType::CssLayer => "css_layer",
             SymbolType::CssFontFace => "css_font_face",
+            SymbolType::Resource => "resource",
         };
         write!(f, "{}", s)
     }
@@ -133,6 +137,7 @@ impl std::str::FromStr for SymbolType {
             "css_at_rule" => Ok(SymbolType::CssAtRule),
             "css_layer" => Ok(SymbolType::CssLayer),
             "css_font_face" => Ok(SymbolType::CssFontFace),
+            "resource" => Ok(SymbolType::Resource),
             _ => Err(format!("Unknown symbol type: {}", s)),
         }
     }

@@ -1,0 +1,58 @@
+{
+  "case": "yaml-mixed-multidoc",
+  "language": "Yaml",
+  "parse_status": "scanner",
+  "symbol_count": 4,
+  "relationship_count": 0,
+  "symbols": [
+    {
+      "name": "ConfigMap/app-config",
+      "kind": "resource",
+      "qualified_name": "ConfigMap/app-config",
+      "start_line": 0,
+      "start_col": 0,
+      "end_line": 0,
+      "end_col": 20,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "server",
+      "kind": "property",
+      "qualified_name": "server",
+      "start_line": 5,
+      "start_col": 0,
+      "end_line": 5,
+      "end_col": 6,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "server.port",
+      "kind": "property",
+      "qualified_name": "server.port",
+      "start_line": 6,
+      "start_col": 2,
+      "end_line": 6,
+      "end_col": 13,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "server.host",
+      "kind": "property",
+      "qualified_name": "server.host",
+      "start_line": 7,
+      "start_col": 2,
+      "end_line": 7,
+      "end_col": 13,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    }
+  ],
+  "relationships": []
+}

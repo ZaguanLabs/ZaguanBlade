@@ -1,5 +1,5 @@
 {
-  "case": "yaml-duplicate-key",
+  "case": "yaml-toplevel-sequence",
   "language": "Yaml",
   "parse_status": "scanner",
   "symbol_count": 2,
@@ -10,9 +10,9 @@
       "kind": "property",
       "qualified_name": "name",
       "start_line": 0,
-      "start_col": 0,
+      "start_col": 2,
       "end_line": 0,
-      "end_col": 4,
+      "end_col": 6,
       "parent_qualified_name": null,
       "docstring": null,
       "signature": null
@@ -22,9 +22,9 @@
       "kind": "property",
       "qualified_name": "port",
       "start_line": 1,
-      "start_col": 0,
+      "start_col": 2,
       "end_line": 1,
-      "end_col": 4,
+      "end_col": 6,
       "parent_qualified_name": null,
       "docstring": null,
       "signature": null

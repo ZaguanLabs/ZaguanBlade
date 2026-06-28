@@ -1,0 +1,118 @@
+{
+  "case": "kustomization",
+  "language": "Yaml",
+  "parse_status": "scanner",
+  "symbol_count": 9,
+  "relationship_count": 0,
+  "symbols": [
+    {
+      "name": "apiVersion",
+      "kind": "property",
+      "qualified_name": "apiVersion",
+      "start_line": 0,
+      "start_col": 0,
+      "end_line": 0,
+      "end_col": 10,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "kind",
+      "kind": "property",
+      "qualified_name": "kind",
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 1,
+      "end_col": 4,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "namespace",
+      "kind": "property",
+      "qualified_name": "namespace",
+      "start_line": 2,
+      "start_col": 0,
+      "end_line": 2,
+      "end_col": 9,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "resources",
+      "kind": "property",
+      "qualified_name": "resources",
+      "start_line": 3,
+      "start_col": 0,
+      "end_line": 3,
+      "end_col": 9,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "../../base",
+      "kind": "import",
+      "qualified_name": "../../base",
+      "start_line": 4,
+      "start_col": 4,
+      "end_line": 4,
+      "end_col": 14,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "service.yaml",
+      "kind": "import",
+      "qualified_name": "service.yaml",
+      "start_line": 5,
+      "start_col": 4,
+      "end_line": 5,
+      "end_col": 16,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "deployment.yaml",
+      "kind": "import",
+      "qualified_name": "deployment.yaml",
+      "start_line": 6,
+      "start_col": 4,
+      "end_line": 6,
+      "end_col": 19,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "components",
+      "kind": "property",
+      "qualified_name": "components",
+      "start_line": 7,
+      "start_col": 0,
+      "end_line": 7,
+      "end_col": 10,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "../../components/monitoring",
+      "kind": "import",
+      "qualified_name": "../../components/monitoring",
+      "start_line": 8,
+      "start_col": 4,
+      "end_line": 8,
+      "end_col": 31,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    }
+  ],
+  "relationships": []
+}

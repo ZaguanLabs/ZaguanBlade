@@ -275,3 +275,29 @@ fn golden_json_duplicate_key() {
 fn golden_yaml_duplicate_key() {
     check_case("yaml-duplicate-key", "yaml-duplicate-key.yaml");
 }
+
+// ---- M4.3 — K8s Resource nodes + Kustomize IMPORTS ----
+
+#[test]
+fn golden_k8s_deployment() {
+    check_case("k8s-deployment", "k8s-deployment.yaml");
+}
+
+#[test]
+fn golden_kustomization() {
+    check_case("kustomization", "kustomization.yaml");
+}
+
+// Regression: a TOP-LEVEL SEQUENCE root (which `marked-yaml`'s mapping-root
+// loader rejects) must still yield config keys via the serde fallback — BUG 1.
+#[test]
+fn golden_yaml_toplevel_sequence() {
+    check_case("yaml-toplevel-sequence", "yaml-toplevel-sequence.yaml");
+}
+
+// Regression: a MIXED multi-document file must emit the manifest doc's Resource
+// AND the non-manifest doc's flat config keys (server/server.port/…) — BUG 2.
+#[test]
+fn golden_yaml_mixed_multidoc() {
+    check_case("yaml-mixed-multidoc", "yaml-mixed-multidoc.yaml");
+}
