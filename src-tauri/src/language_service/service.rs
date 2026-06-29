@@ -1640,14 +1640,6 @@ impl LanguageService {
                 language,
             });
         }
-        if language.is_cpp_scanner() {
-            return Ok(SymbolExtraction {
-                symbols: extract_cpp_symbols(file_path, content),
-                relationships: Vec::new(),
-                content: Cow::Borrowed(content),
-                language,
-            });
-        }
         if language.is_shell_scanner() {
             return Ok(SymbolExtraction {
                 symbols: extract_shell_symbols(file_path, content),
@@ -8902,16 +8894,6 @@ const RUBY_LEX: LexSpec = LexSpec {
     heredoc: HeredocStyle::None,
     attr_hash_guard: false,
 };
-// C/C++ reads `#include "x"` out of a string → track but do not blank strings.
-// `#` is a preprocessor sigil here, not a comment marker.
-const CPP_LEX: LexSpec = LexSpec {
-    line_comments: &["//"],
-    block_comment: Some(("/*", "*/")),
-    strings: STR_DQ_SQ,
-    blank_strings: false,
-    heredoc: HeredocStyle::None,
-    attr_hash_guard: false,
-};
 // Shell reads `source "x"` out of a string → track but do not blank strings.
 const SHELL_LEX: LexSpec = LexSpec {
     line_comments: &["#"],
@@ -9224,9 +9206,6 @@ pub fn extract_scanner_symbols(file_path: &str, content: &str, language: Languag
     }
     if language.is_ruby_scanner() {
         return extract_ruby_symbols(file_path, content);
-    }
-    if language.is_cpp_scanner() {
-        return extract_cpp_symbols(file_path, content);
     }
     if language.is_shell_scanner() {
         return extract_shell_symbols(file_path, content);
@@ -10159,256 +10138,6 @@ fn ruby_read_method_name(text: &str) -> Option<(String, usize)> {
         }
     }
     (end > 0).then(|| (text[..end].to_string(), end))
-}
-
-fn extract_cpp_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, &CPP_LEX, cpp_declarations_in_line)
-}
-
-fn cpp_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
-    let code = cpp_line_code(line);
-    if code.is_empty() {
-        return Vec::new();
-    }
-    let code_start = line.find(code).unwrap_or(0);
-
-    if let Some(declaration) = cpp_include_declaration(code, code_start) {
-        return vec![declaration];
-    }
-
-    let mut declarations = Vec::new();
-    if let Some(declaration) = cpp_namespace_declaration(code, code_start) {
-        declarations.push(declaration);
-    }
-    let has_enum_class = code.contains("enum class") || code.contains("enum struct");
-    for (keyword, symbol_type) in [
-        ("class", SymbolType::Class),
-        ("struct", SymbolType::Struct),
-        ("union", SymbolType::Struct),
-    ] {
-        if keyword == "class" && has_enum_class {
-            continue;
-        }
-        if let Some(declaration) = cpp_keyword_declaration(code, code_start, keyword, symbol_type) {
-            declarations.push(declaration);
-        }
-    }
-    if let Some(declaration) = cpp_enum_declaration(code, code_start) {
-        declarations.push(declaration);
-    }
-    if declarations.is_empty() {
-        if let Some(declaration) = cpp_function_declaration(code, code_start) {
-            declarations.push(declaration);
-        }
-    }
-
-    declarations
-}
-
-fn cpp_line_code(line: &str) -> &str {
-    let trimmed = line.trim_start();
-    if trimmed.starts_with("//") || trimmed.starts_with('*') || trimmed.starts_with("/*") {
-        ""
-    } else {
-        trimmed.split("//").next().unwrap_or(trimmed).trim_end()
-    }
-}
-
-fn cpp_include_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
-    let rest = code.strip_prefix("#include ")?;
-    let rest = rest.trim_start();
-    let (name_start, name_end) = if let Some(after_quote) = rest.strip_prefix('"') {
-        (1usize, after_quote.find('"')? + 1)
-    } else if let Some(after_angle) = rest.strip_prefix('<') {
-        (1usize, after_angle.find('>')? + 1)
-    } else {
-        return None;
-    };
-    let name = rest[name_start..name_end].to_string();
-    let leading_ws = code.len().saturating_sub(rest.len());
-    let start_char = code_start + leading_ws + name_start;
-    Some(LineScannerDeclaration {
-        name,
-        symbol_type: SymbolType::Import,
-        start_char,
-        end_char: start_char + name_end.saturating_sub(name_start),
-    })
-}
-
-fn cpp_namespace_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
-    let rest = code.strip_prefix("namespace ")?;
-    let name_start = code.len().saturating_sub(rest.len());
-    let rest = rest.trim_start();
-    if rest.starts_with('{') {
-        return None;
-    }
-    let leading_ws = code[name_start..].len().saturating_sub(rest.len());
-    let (name, name_len) = cpp_read_qualified_name(rest)?;
-    let start_char = code_start + name_start + leading_ws;
-    Some(LineScannerDeclaration {
-        name,
-        symbol_type: SymbolType::Namespace,
-        start_char,
-        end_char: start_char + name_len,
-    })
-}
-
-fn cpp_keyword_declaration(
-    code: &str,
-    code_start: usize,
-    keyword: &str,
-    symbol_type: SymbolType,
-) -> Option<LineScannerDeclaration> {
-    let keyword_start = java_find_keyword(code, keyword)?;
-    let after_keyword = keyword_start + keyword.len();
-    let rest = code[after_keyword..].trim_start();
-    let leading_ws = code[after_keyword..].len().saturating_sub(rest.len());
-    let (name, name_len) = cpp_read_identifier(rest)?;
-    let after_name = rest[name_len..].trim_start();
-    if !(after_name.is_empty()
-        || after_name.starts_with('{')
-        || after_name.starts_with(';')
-        || after_name.starts_with(':'))
-    {
-        return None;
-    }
-    let start_char = code_start + after_keyword + leading_ws;
-    Some(LineScannerDeclaration {
-        name,
-        symbol_type,
-        start_char,
-        end_char: start_char + name_len,
-    })
-}
-
-fn cpp_enum_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
-    let enum_start = java_find_keyword(code, "enum")?;
-    let after_enum = enum_start + "enum".len();
-    let mut rest = code[after_enum..].trim_start();
-    if let Some(after_kind) = rest
-        .strip_prefix("class ")
-        .or_else(|| rest.strip_prefix("struct "))
-    {
-        rest = after_kind.trim_start();
-    }
-    let leading_ws = code[after_enum..].len().saturating_sub(rest.len());
-    let (name, name_len) = cpp_read_identifier(rest)?;
-    let start_char = code_start + after_enum + leading_ws;
-    Some(LineScannerDeclaration {
-        name,
-        symbol_type: SymbolType::Enum,
-        start_char,
-        end_char: start_char + name_len,
-    })
-}
-
-fn cpp_function_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
-    if code.starts_with('#') || cpp_starts_with_statement_keyword(code) || code.contains('=') {
-        return None;
-    }
-    let paren_index = code.find('(')?;
-    let before_paren = code[..paren_index].trim_end();
-    let (name, name_start) = cpp_read_identifier_before(before_paren)?;
-    if cpp_is_control_or_builtin(&name) {
-        return None;
-    }
-    let before_name = before_paren[..name_start].trim_end();
-    if before_name.is_empty() || before_name.ends_with('.') || before_name.ends_with("->") {
-        return None;
-    }
-
-    let symbol_type = if code_start > 0 || before_name.ends_with("::") {
-        SymbolType::Method
-    } else {
-        SymbolType::Function
-    };
-    let start_char = code_start + name_start;
-    Some(LineScannerDeclaration {
-        name,
-        symbol_type,
-        start_char,
-        end_char: start_char + before_paren[name_start..].len(),
-    })
-}
-
-fn cpp_read_identifier(text: &str) -> Option<(String, usize)> {
-    let mut end = 0usize;
-    for (index, ch) in text.char_indices() {
-        if index == 0 && !(ch == '_' || ch.is_ascii_alphabetic()) {
-            return None;
-        }
-        if ch == '_' || ch.is_ascii_alphanumeric() {
-            end = index + ch.len_utf8();
-        } else {
-            break;
-        }
-    }
-    (end > 0).then(|| (text[..end].to_string(), end))
-}
-
-fn cpp_read_identifier_before(text: &str) -> Option<(String, usize)> {
-    let trimmed_len = text.trim_end().len();
-    let trimmed = &text[..trimmed_len];
-    let mut start = trimmed.len();
-    for (index, ch) in trimmed.char_indices().rev() {
-        if ch == '_' || ch.is_ascii_alphanumeric() {
-            start = index;
-        } else {
-            break;
-        }
-    }
-    if start == trimmed.len() {
-        return None;
-    }
-    let name = &trimmed[start..];
-    name.chars()
-        .next()
-        .filter(|ch| *ch == '_' || ch.is_ascii_alphabetic())?;
-    Some((name.to_string(), start))
-}
-
-fn cpp_read_qualified_name(text: &str) -> Option<(String, usize)> {
-    let mut end = 0usize;
-    for (index, ch) in text.char_indices() {
-        if index == 0 && !(ch == '_' || ch.is_ascii_alphabetic()) {
-            return None;
-        }
-        if ch == '_' || ch == ':' || ch.is_ascii_alphanumeric() {
-            end = index + ch.len_utf8();
-        } else {
-            break;
-        }
-    }
-    (end > 0).then(|| (text[..end].trim_end_matches(':').to_string(), end))
-}
-
-fn cpp_starts_with_statement_keyword(text: &str) -> bool {
-    [
-        "if",
-        "for",
-        "while",
-        "switch",
-        "catch",
-        "return",
-        "throw",
-        "static_assert",
-    ]
-    .iter()
-    .any(|keyword| text.trim_start().starts_with(keyword))
-}
-
-fn cpp_is_control_or_builtin(name: &str) -> bool {
-    matches!(
-        name,
-        "if" | "for"
-            | "while"
-            | "switch"
-            | "catch"
-            | "return"
-            | "sizeof"
-            | "alignof"
-            | "static_assert"
-    )
 }
 
 fn extract_shell_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
@@ -12190,8 +11919,6 @@ class B {
         "csharp/UserService.cs",
         "kotlin/UserService.kt",
         "ruby/user_service.rb",
-        "cpp/user_service.cpp",
-        "c/user_service.c",
         "shell/deploy.sh",
         "docker/Dockerfile",
         "sql/001_users.sql",
@@ -12684,72 +12411,6 @@ class B {
                 ],
             },
             SymbolFixture {
-                path: "cpp/user_service.cpp",
-                expected_symbols: &[
-                    ExpectedSymbol {
-                        name: "string",
-                        symbol_type: SymbolType::Import,
-                    },
-                    ExpectedSymbol {
-                        name: "user_service.hpp",
-                        symbol_type: SymbolType::Import,
-                    },
-                    ExpectedSymbol {
-                        name: "Example::Users",
-                        symbol_type: SymbolType::Namespace,
-                    },
-                    ExpectedSymbol {
-                        name: "UserView",
-                        symbol_type: SymbolType::Struct,
-                    },
-                    ExpectedSymbol {
-                        name: "UserStatus",
-                        symbol_type: SymbolType::Enum,
-                    },
-                    ExpectedSymbol {
-                        name: "UserService",
-                        symbol_type: SymbolType::Class,
-                    },
-                    ExpectedSymbol {
-                        name: "find_user",
-                        symbol_type: SymbolType::Method,
-                    },
-                    ExpectedSymbol {
-                        name: "normalize_user_id",
-                        symbol_type: SymbolType::Function,
-                    },
-                ],
-            },
-            SymbolFixture {
-                path: "c/user_service.c",
-                expected_symbols: &[
-                    ExpectedSymbol {
-                        name: "stdbool.h",
-                        symbol_type: SymbolType::Import,
-                    },
-                    ExpectedSymbol {
-                        name: "user_service.h",
-                        symbol_type: SymbolType::Import,
-                    },
-                    ExpectedSymbol {
-                        name: "user_view",
-                        symbol_type: SymbolType::Struct,
-                    },
-                    ExpectedSymbol {
-                        name: "user_status",
-                        symbol_type: SymbolType::Enum,
-                    },
-                    ExpectedSymbol {
-                        name: "find_user",
-                        symbol_type: SymbolType::Function,
-                    },
-                    ExpectedSymbol {
-                        name: "user_is_active",
-                        symbol_type: SymbolType::Function,
-                    },
-                ],
-            },
-            SymbolFixture {
                 path: "shell/deploy.sh",
                 expected_symbols: &[
                     ExpectedSymbol {
@@ -12941,12 +12602,6 @@ class B {
                 "normalizeUserId",
             ),
             ("active?", "ruby/user_service.rb", "active?"),
-            (
-                "normalize_user_id",
-                "cpp/user_service.cpp",
-                "normalize_user_id",
-            ),
-            ("user_is_active", "c/user_service.c", "user_is_active"),
             ("cleanup-trap", "shell/deploy.sh", "cleanup-trap"),
             ("APP_VERSION", "docker/Dockerfile", "APP_VERSION"),
             (
@@ -13021,7 +12676,6 @@ class B {
             ("C#", 1),
             ("Kotlin", 1),
             ("Ruby", 1),
-            ("C/C++", 2),
             ("Shell", 1),
             ("Dockerfile", 1),
             ("SQL", 1),

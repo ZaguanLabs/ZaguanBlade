@@ -256,6 +256,17 @@ fn golden_go_basic() {
     check_case("go-basic", "go-basic.go");
 }
 
+// M5.3 — C/C++ graduated to the real `tree-sitter-cpp` grammar (definitions-only,
+// N8). Exercises macros, typedefs (incl. function-pointer + the named-struct-typedef
+// idiom that must collapse to one symbol), struct/union/enum + members, function
+// definitions vs prototypes, the skipped variable/usage declarations, namespaces,
+// a class with ctor/dtor/inline+declared methods/fields, an enum class, and an
+// out-of-line qualified method definition. Relationship list MUST be empty (N8).
+#[test]
+fn golden_cpp_basic() {
+    check_case("cpp-basic", "cpp-basic.cpp");
+}
+
 // ---- M5.1 receiver-type dispatch case ----
 // Two classes `A` and `B` each define `run`. Inside `A.go`, `self.run()` captures
 // recv_type `A` and the constructor-bound `x = B(); x.run()` captures recv_type

@@ -1081,6 +1081,7 @@ impl SymbolExtractor {
             Language::Python => self.python_node_to_symbol(node, source, language),
             Language::Rust => self.rust_node_to_symbol(node, source, language),
             Language::Go => self.go_node_to_symbol(node, source, language),
+            Language::Cpp => self.cpp_node_to_symbol(node, source, language),
             Language::Markdown
             | Language::Css
             | Language::Scss
@@ -1097,7 +1098,6 @@ impl SymbolExtractor {
             | Language::CSharp
             | Language::Kotlin
             | Language::Ruby
-            | Language::Cpp
             | Language::Shell
             | Language::Dockerfile
             | Language::Sql
@@ -1537,6 +1537,106 @@ impl SymbolExtractor {
         }
     }
 
+    /// C/C++ (M5.3): definitions-only extraction from the real `tree-sitter-cpp`
+    /// grammar (replaces the old regex line-scanner). Names are dug out of the
+    /// nested `declarator` chains the C grammar uses. NO relationships are emitted
+    /// (N8 — the whole relationship walk is gated off for C/C++ at the public
+    /// entry). Aggregates (struct/union/class/enum) and namespaces only produce a
+    /// symbol when they carry a body, so usages and forward declarations are
+    /// skipped; bare declarations produce a symbol only when they are function
+    /// prototypes (plain variables/globals are intentionally dropped as noise).
+    fn cpp_node_to_symbol(&self, node: &Node, source: &str, _language: Language) -> Option<Symbol> {
+        let range = Range::from_node(node);
+        let mk =
+            |name: String, ty: SymbolType| Some(Symbol::new(name, ty, self.file_path.clone(), range));
+        match node.kind() {
+            // `#define X` / `#define X(...)` → macro, modeled as a Constant.
+            "preproc_def" | "preproc_function_def" => {
+                mk(self.get_child_text(node, "name", source)?, SymbolType::Constant)
+            }
+            // `namespace ns { … }` → Namespace; members nest via the scope stack.
+            "namespace_definition" => {
+                mk(self.get_child_text(node, "name", source)?, SymbolType::Namespace)
+            }
+            // struct / union WITH a body → Struct (the body gate skips usages such
+            // as `struct Foo x;` and forward declarations `struct Foo;`).
+            "struct_specifier" | "union_specifier" => {
+                node.child_by_field_name("body")?;
+                mk(self.get_child_text(node, "name", source)?, SymbolType::Struct)
+            }
+            // class WITH a body → Class.
+            "class_specifier" => {
+                node.child_by_field_name("body")?;
+                mk(self.get_child_text(node, "name", source)?, SymbolType::Class)
+            }
+            // enum WITH a body → Enum; its `enumerator`s are handled below and nest
+            // under it via the scope stack.
+            "enum_specifier" => {
+                node.child_by_field_name("body")?;
+                mk(self.get_child_text(node, "name", source)?, SymbolType::Enum)
+            }
+            "enumerator" => {
+                mk(self.get_child_text(node, "name", source)?, SymbolType::EnumMember)
+            }
+            // typedef → Type, EXCEPT when it merely names an aggregate that already
+            // produces its own symbol (named struct/union/enum/class WITH a body):
+            // defer to that aggregate so the ubiquitous `typedef struct Foo {…} Foo;`
+            // idiom yields ONE clean `Foo` (no duplicate Type, no double nesting).
+            "type_definition" => {
+                if let Some(t) = node.child_by_field_name("type") {
+                    if matches!(
+                        t.kind(),
+                        "struct_specifier"
+                            | "union_specifier"
+                            | "enum_specifier"
+                            | "class_specifier"
+                    ) && t.child_by_field_name("body").is_some()
+                        && t.child_by_field_name("name").is_some()
+                    {
+                        return None;
+                    }
+                }
+                let decl = node.child_by_field_name("declarator")?;
+                let name = cpp_clean_declarator_name(&cpp_innermost_declarator_name(&decl)?, source)?;
+                mk(name, SymbolType::Type)
+            }
+            // function definition (has a body) → Function (free) or Method (member).
+            "function_definition" => {
+                let decl = node.child_by_field_name("declarator")?;
+                let name_node = cpp_innermost_declarator_name(&decl)?;
+                let name = cpp_clean_declarator_name(&name_node, source)?;
+                mk(name, cpp_callable_symbol_type(&name_node, node))
+            }
+            // A bare declaration is a symbol only when it is a function PROTOTYPE
+            // (its declarator subtree reaches a `function_declarator`). Variable /
+            // global / usage declarations are intentionally skipped.
+            "declaration" => {
+                let decl = node.child_by_field_name("declarator")?;
+                if !cpp_declarator_is_function(&decl) {
+                    return None;
+                }
+                let name_node = cpp_innermost_declarator_name(&decl)?;
+                let name = cpp_clean_declarator_name(&name_node, source)?;
+                mk(name, cpp_callable_symbol_type(&name_node, node))
+            }
+            // Inside a struct/class body: a `field_declaration` whose declarator is a
+            // function is a Method (e.g. `void run();`), otherwise a Property (data
+            // member). The name-node kind is `field_identifier` either way, so the
+            // declarator shape — not the name kind — decides here.
+            "field_declaration" => {
+                let decl = node.child_by_field_name("declarator")?;
+                let name = cpp_clean_declarator_name(&cpp_innermost_declarator_name(&decl)?, source)?;
+                let ty = if cpp_declarator_is_function(&decl) {
+                    SymbolType::Method
+                } else {
+                    SymbolType::Property
+                };
+                mk(name, ty)
+            }
+            _ => None,
+        }
+    }
+
     fn get_child_text(&self, node: &Node, field_name: &str, source: &str) -> Option<String> {
         node.child_by_field_name(field_name)
             .and_then(|n| n.utf8_text(source.as_bytes()).ok())
@@ -1696,6 +1796,12 @@ impl SymbolExtractor {
                 .extract_python_docstring(node, source)
                 .or_else(|| self.extract_prev_comment_docstring(node, source)),
             Language::Go => self.extract_go_docstring(node, source),
+            // M5.3: C/C++ takes NO docstring. The generic "previous comment" grab
+            // would attach license headers (every kernel file opens with a GPL
+            // block), `} // namespace X` closing comments, and section banners as
+            // docstrings — pure noise at the kernel's scale. Proper `/** … */` /
+            // `///` doc-comment extraction is deferred (§13).
+            Language::Cpp => None,
             _ => self.extract_prev_comment_docstring(node, source),
         }
     }
@@ -1927,6 +2033,84 @@ fn append_route_symbols(
     }
 }
 
+/// Follow the C/C++ `declarator` nesting (pointer / reference / array / function /
+/// init / parenthesized declarators) down to the innermost *name* node — an
+/// `identifier`, `field_identifier`, `qualified_identifier`, `type_identifier`,
+/// `destructor_name`, `operator_name` or `operator_cast`. Returns `None` for an
+/// abstract declarator that names nothing. (M5.3)
+fn cpp_innermost_declarator_name<'a>(node: &Node<'a>) -> Option<Node<'a>> {
+    match node.kind() {
+        "identifier" | "field_identifier" | "qualified_identifier" | "type_identifier"
+        | "destructor_name" | "operator_name" | "operator_cast" => Some(*node),
+        "function_declarator" | "pointer_declarator" | "reference_declarator"
+        | "array_declarator" | "init_declarator" => {
+            let child = node.child_by_field_name("declarator")?;
+            cpp_innermost_declarator_name(&child)
+        }
+        "parenthesized_declarator" => {
+            let mut cursor = node.walk();
+            let found = node
+                .named_children(&mut cursor)
+                .find_map(|child| cpp_innermost_declarator_name(&child));
+            found
+        }
+        _ => None,
+    }
+}
+
+/// Whether a declarator subtree declares a function — it reaches a
+/// `function_declarator` through pointer / reference / array / init wrappers. A
+/// function POINTER (`(*fp)(int)`, i.e. via a `parenthesized_declarator`) is
+/// deliberately NOT a function here: it is a variable or typedef, not a callable
+/// definition. (M5.3)
+fn cpp_declarator_is_function(node: &Node) -> bool {
+    match node.kind() {
+        "function_declarator" => true,
+        "pointer_declarator" | "reference_declarator" | "array_declarator"
+        | "init_declarator" => node
+            .child_by_field_name("declarator")
+            .map(|child| cpp_declarator_is_function(&child))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// A callable's symbol type. It is a Method when either its innermost name-node
+/// kind marks a member (`field_identifier`, `qualified_identifier`,
+/// `destructor_name`, `operator_name`, `operator_cast`) OR the callable sits
+/// directly in a class/struct body (`field_declaration_list`) — the latter
+/// catches constructors, whose name is a plain `identifier` matching the type.
+/// Otherwise it is a free Function. (M5.3)
+/// Text of a declarator name node, defensively reduced to its last
+/// whitespace-delimited token. The C grammar, lacking a preprocessor, sometimes
+/// folds a macro modifier into the declarator (`bool __cold foo(...)` parses the
+/// name as `__cold foo`); keeping only the trailing token recovers the real name
+/// — `foo`. A no-op for ordinary single-token identifiers and `a::b::c` qualified
+/// names (no embedded whitespace). Returns `None` if nothing usable remains. (M5.3)
+fn cpp_clean_declarator_name(name_node: &Node, source: &str) -> Option<String> {
+    let text = name_node.utf8_text(source.as_bytes()).ok()?;
+    let name = text.split_whitespace().next_back()?;
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+fn cpp_callable_symbol_type(name_node: &Node, callable_node: &Node) -> SymbolType {
+    let is_member = matches!(
+        name_node.kind(),
+        "field_identifier"
+            | "qualified_identifier"
+            | "destructor_name"
+            | "operator_name"
+            | "operator_cast"
+    ) || callable_node
+        .parent()
+        .is_some_and(|p| p.kind() == "field_declaration_list");
+    if is_member {
+        SymbolType::Method
+    } else {
+        SymbolType::Function
+    }
+}
+
 pub fn extract_symbol_relationships(
     tree: &Tree,
     source: &str,
@@ -1934,6 +2118,16 @@ pub fn extract_symbol_relationships(
     file_path: &str,
     symbols: &[Symbol],
 ) -> Vec<SymbolRelationship> {
+    // M5.3 / N8: a language whose capability declares no relationship extraction
+    // (graduated C/C++ is definitions-only until source-attribution fixtures
+    // exist) skips the ENTIRE edge walk — calls, uses_type, reads_env, structural,
+    // imports and routes. One capability-driven gate keeps every concern off for
+    // such languages instead of auditing each concern for safety. No-op for the
+    // five full grammars (all declare `relationships: true`).
+    if !language.capability().extracts.relationships {
+        return Vec::new();
+    }
+
     let extractor = SymbolExtractor::new(file_path.to_string());
     // M5.1 (FIX 4): the simple names of every class-like symbol in this file, so
     // `x = Foo()` is only constructor-typed when `Foo` is a real class/struct —

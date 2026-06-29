@@ -55,6 +55,7 @@ pub enum TreeSitterGrammar {
     Python,
     Rust,
     Go,
+    Cpp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -341,10 +342,15 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         language: Language::Cpp,
         display_name: "C/C++",
         extensions: &["c", "h", "cc", "cxx", "cpp", "hpp", "hxx"],
-        parser: ParserKind::Scanner,
+        // M5.3: graduated from the regex line-scanner to the real `tree-sitter-cpp`
+        // grammar. DEFINITIONS-ONLY (N8): no call graph / relationships until
+        // source-attribution fixtures exist — so `relationships: false`, which the
+        // N8 gate in `extract_symbol_relationships` reads to skip the whole edge
+        // walk. Stays `Partial` (Full is reserved for defs+imports+relationships).
+        parser: ParserKind::TreeSitter(TreeSitterGrammar::Cpp),
         support: SupportLevel::Partial,
-        extractor_version: 1,
-        extracts: ExtractionCapabilities::scanner(true),
+        extractor_version: 2,
+        extracts: ExtractionCapabilities::code(true, false, false),
     },
     LanguageCapability {
         language: Language::Shell,
@@ -591,10 +597,6 @@ impl Language {
         matches!(self, Language::Kotlin)
     }
 
-    pub fn is_cpp_scanner(self) -> bool {
-        matches!(self, Language::Cpp)
-    }
-
     pub fn is_dockerfile_scanner(self) -> bool {
         matches!(self, Language::Dockerfile)
     }
@@ -691,6 +693,7 @@ impl TreeSitterParser {
             }
             TreeSitterGrammar::Rust => parser.set_language(&tree_sitter_rust::LANGUAGE.into())?,
             TreeSitterGrammar::Go => parser.set_language(&tree_sitter_go::LANGUAGE.into())?,
+            TreeSitterGrammar::Cpp => parser.set_language(&tree_sitter_cpp::LANGUAGE.into())?,
         }
         Ok(parser)
     }
