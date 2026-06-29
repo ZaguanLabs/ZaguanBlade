@@ -291,6 +291,19 @@ struct SymbolExtraction<'a> {
     language: Language,
 }
 
+/// M5.7 — full-reconcile streaming. The reconcile stages each file's extraction
+/// (symbols + the full source `String` + an `Arc<BufferSnapshot>`) before writing
+/// it. Accumulating ALL files before a single commit blew memory to 14 GiB on the
+/// Linux kernel (77k files). Instead we commit in bounded batches of this many
+/// files and drop each batch, so peak memory is O(batch), not O(repo).
+const RECONCILE_BATCH_SIZE: usize = 1_000;
+
+/// M5.7 — defensive per-file cap. A pathological/generated file can declare an
+/// absurd number of symbols; we truncate (with a log) so a single file cannot
+/// spike a batch's memory. Real source files are far below this (the kernel's
+/// largest hand-written files are in the hundreds).
+const MAX_SYMBOLS_PER_FILE: usize = 50_000;
+
 struct StagedFileIndex {
     file_path: String,
     hash: String,
@@ -1250,108 +1263,141 @@ impl LanguageService {
                 Finished(String, Result<StagedFileIndex, String>),
             }
 
-            let worker_count = indexing_worker_count(total_queued);
-            let (tx, rx) = mpsc::channel::<IndexWorkerEvent>();
             let mut completed_files = 0usize;
-            let mut active_files = HashSet::new();
-            let mut staged_files = Vec::with_capacity(total_queued);
+            let mut committed_any = false;
 
-            std::thread::scope(|scope| {
-                for worker_index in 0..worker_count {
-                    let tx = tx.clone();
-                    let worker_files = queued_files
-                        .iter()
-                        .skip(worker_index)
-                        .step_by(worker_count)
-                        .cloned()
-                        .collect::<Vec<_>>();
+            // M5.7 — stream the reconcile in bounded batches: index a chunk in
+            // parallel, COMMIT it, then drop its staged data before the next chunk.
+            // Peak memory is O(RECONCILE_BATCH_SIZE), not O(total_queued) — what
+            // kept the Linux kernel (77k files) from blowing to 14 GiB. Each batch
+            // is its own committed transaction, so an interruption leaves a valid,
+            // partially-populated DB rather than a corrupt stub.
+            for batch in queued_files.chunks(RECONCILE_BATCH_SIZE) {
+                let worker_count = indexing_worker_count(batch.len());
+                let (tx, rx) = mpsc::channel::<IndexWorkerEvent>();
+                let mut active_files = HashSet::new();
+                let mut staged_files = Vec::with_capacity(batch.len());
+                let mut batch_completed = 0usize;
 
-                    scope.spawn(move || {
-                        for file_path in worker_files {
-                            let _ = tx.send(IndexWorkerEvent::Started(file_path.clone()));
-                            let result = self
-                                .stage_file_index(&file_path)
-                                .map_err(|error| error.to_string());
-                            let _ = tx.send(IndexWorkerEvent::Finished(file_path, result));
-                        }
-                    });
-                }
-                drop(tx);
+                std::thread::scope(|scope| {
+                    for worker_index in 0..worker_count {
+                        let tx = tx.clone();
+                        let worker_files = batch
+                            .iter()
+                            .skip(worker_index)
+                            .step_by(worker_count)
+                            .cloned()
+                            .collect::<Vec<_>>();
 
-                while completed_files < total_queued {
-                    let Ok(event) = rx.recv() else {
-                        break;
-                    };
-                    match event {
-                        IndexWorkerEvent::Started(file_path) => {
-                            active_files.insert(file_path.clone());
-                            health.current_file = Some(file_path.clone());
-                            health.active_workers = active_files.len();
-                            health.queued_files = total_queued.saturating_sub(completed_files);
-                            health.message = format!(
-                                "Indexing {}... {}/{} files ({} workers)",
-                                file_path, completed_files, total_queued, worker_count
-                            );
-                            self.set_index_health(health.clone());
-                            progress(&health);
-                        }
-                        IndexWorkerEvent::Finished(file_path, result) => {
-                            active_files.remove(&file_path);
-                            completed_files += 1;
-                            match result {
-                                Ok(staged_file) => {
-                                    staged_files.push(staged_file);
-                                    files_indexed += 1;
+                        // M5.7 — index workers get a large (virtual, lazily-committed)
+                        // stack: symbol/relationship extraction walks the AST
+                        // recursively, and real C files (e.g. the kernel's deeply
+                        // nested generated tables / macro expansions) can be deep
+                        // enough to overflow the default 2 MB thread stack and abort
+                        // the process.
+                        std::thread::Builder::new()
+                            .stack_size(256 * 1024 * 1024)
+                            .spawn_scoped(scope, move || {
+                                for file_path in worker_files {
+                                    let _ = tx.send(IndexWorkerEvent::Started(file_path.clone()));
+                                    let result = self
+                                        .stage_file_index(&file_path)
+                                        .map_err(|error| error.to_string());
+                                    let _ = tx.send(IndexWorkerEvent::Finished(file_path, result));
                                 }
-                                Err(error) => {
-                                    eprintln!(
-                                        "[LanguageService] Failed to index {}: {}",
-                                        file_path, error
-                                    );
-                                }
-                            }
-                            health.queued_files = total_queued.saturating_sub(completed_files);
-                            health.active_workers = active_files.len();
-                            health.current_file = active_files.iter().next().cloned();
-                            health.message = if let Some(current_file) = &health.current_file {
-                                format!(
+                            })
+                            .expect("spawn index worker thread");
+                    }
+                    drop(tx);
+
+                    while batch_completed < batch.len() {
+                        let Ok(event) = rx.recv() else {
+                            break;
+                        };
+                        match event {
+                            IndexWorkerEvent::Started(file_path) => {
+                                let done = completed_files + batch_completed;
+                                active_files.insert(file_path.clone());
+                                health.current_file = Some(file_path.clone());
+                                health.active_workers = active_files.len();
+                                health.queued_files = total_queued.saturating_sub(done);
+                                health.message = format!(
                                     "Indexing {}... {}/{} files ({} workers)",
-                                    current_file, completed_files, total_queued, worker_count
-                                )
-                            } else {
-                                format!(
-                                    "Building symbol index... {}/{} files",
-                                    completed_files, total_queued
-                                )
-                            };
-                            self.set_index_health(health.clone());
-                            progress(&health);
+                                    file_path, done, total_queued, worker_count
+                                );
+                                self.set_index_health(health.clone());
+                                progress(&health);
+                            }
+                            IndexWorkerEvent::Finished(file_path, result) => {
+                                active_files.remove(&file_path);
+                                batch_completed += 1;
+                                match result {
+                                    Ok(staged_file) => {
+                                        staged_files.push(staged_file);
+                                        files_indexed += 1;
+                                    }
+                                    Err(error) => {
+                                        eprintln!(
+                                            "[LanguageService] Failed to index {}: {}",
+                                            file_path, error
+                                        );
+                                    }
+                                }
+                                let done = completed_files + batch_completed;
+                                health.queued_files = total_queued.saturating_sub(done);
+                                health.active_workers = active_files.len();
+                                health.current_file = active_files.iter().next().cloned();
+                                health.message = if let Some(current_file) = &health.current_file {
+                                    format!(
+                                        "Indexing {}... {}/{} files ({} workers)",
+                                        current_file, done, total_queued, worker_count
+                                    )
+                                } else {
+                                    format!(
+                                        "Building symbol index... {}/{} files",
+                                        done, total_queued
+                                    )
+                                };
+                                self.set_index_health(health.clone());
+                                progress(&health);
+                            }
                         }
                     }
-                }
-            });
+                });
 
-            if !staged_files.is_empty() {
-                health.active_workers = 1;
-                health.current_file = None;
-                health.message = format!(
-                    "Writing symbol index... {} files staged",
-                    staged_files.len()
-                );
-                self.set_index_health(health.clone());
-                progress(&health);
-                suppressed_external_relationships +=
-                    self.commit_staged_file_indexes(&staged_files)?;
-                // M2.4 — run the global-unique back-fill exactly once, after the
-                // full reconcile has committed every file. Only now is COUNT(*)
-                // truly global; running it per-batch or on single-file paths would
-                // resolve against an incomplete symbol set (order-dependent).
+                completed_files += batch_completed;
+
+                if !staged_files.is_empty() {
+                    health.active_workers = 1;
+                    health.current_file = None;
+                    health.message = format!(
+                        "Writing symbol index... {}/{} files",
+                        completed_files, total_queued
+                    );
+                    self.set_index_health(health.clone());
+                    progress(&health);
+                    suppressed_external_relationships +=
+                        self.commit_staged_file_indexes(&staged_files)?;
+                    committed_any = true;
+                }
+
+                // Free this batch's staged data (symbols + full source text +
+                // buffer snapshots) before indexing the next batch — the whole
+                // point of streaming.
+                drop(staged_files);
+            }
+
+            if committed_any {
+                // M2.4 — run the global-unique back-fill exactly once, after EVERY
+                // batch has committed. Only now is COUNT(*) truly global; running it
+                // per-batch would resolve against an incomplete symbol set
+                // (order-dependent).
                 self.symbol_store
                     .backfill_unresolved_relationship_targets()?;
-                // M5.1b — then mine the STILL-NULL call edges that carry a
-                // confident recv_type via the GLOBAL cross-file receiver-type
-                // registry. Runs last so it sees the fully-committed symbol+edge
-                // set and only touches edges the prior two passes left NULL.
+                // M5.1b — then mine the STILL-NULL call edges that carry a confident
+                // recv_type via the GLOBAL cross-file receiver-type registry. Runs
+                // last so it sees the fully-committed symbol+edge set and only
+                // touches edges the prior two passes left NULL.
                 self.symbol_store
                     .mine_receiver_type_relationship_targets()?;
             }
@@ -1882,6 +1928,19 @@ impl LanguageService {
             content: extraction_content,
             language: extraction_language,
         } = self.extract_file_symbols_and_relationships(file_path, &content, language)?;
+        // M5.7 — cap pathological files before adding the file-root symbol (so the
+        // root is always retained). Truncated symbols simply aren't indexed; any
+        // relationship pointing at a dropped symbol stays unresolved (handled).
+        let mut extracted_symbols = extracted_symbols;
+        if extracted_symbols.len() > MAX_SYMBOLS_PER_FILE {
+            eprintln!(
+                "[LanguageService] {} produced {} symbols; capping to {} (pathological/generated file)",
+                file_path,
+                extracted_symbols.len(),
+                MAX_SYMBOLS_PER_FILE
+            );
+            extracted_symbols.truncate(MAX_SYMBOLS_PER_FILE);
+        }
         let symbols = self.with_file_root_symbol(file_path, &content, extracted_symbols);
         let parse_extract_ms = parse_extract_start.elapsed().as_millis() as u64;
 
@@ -2066,6 +2125,19 @@ impl LanguageService {
             content: extraction_content,
             language: extraction_language,
         } = self.extract_file_symbols_and_relationships(file_path, &content, language)?;
+        // M5.7 — cap pathological files before adding the file-root symbol (so the
+        // root is always retained). Truncated symbols simply aren't indexed; any
+        // relationship pointing at a dropped symbol stays unresolved (handled).
+        let mut extracted_symbols = extracted_symbols;
+        if extracted_symbols.len() > MAX_SYMBOLS_PER_FILE {
+            eprintln!(
+                "[LanguageService] {} produced {} symbols; capping to {} (pathological/generated file)",
+                file_path,
+                extracted_symbols.len(),
+                MAX_SYMBOLS_PER_FILE
+            );
+            extracted_symbols.truncate(MAX_SYMBOLS_PER_FILE);
+        }
         let symbols = self.with_file_root_symbol(file_path, &content, extracted_symbols);
         self.canonicalize_import_relationships(file_path, &mut relationships);
         let anchors = extract_semantic_anchors(file_path, &content);
@@ -2231,7 +2303,6 @@ impl LanguageService {
             .map(|record| (record.file_path.as_str(), record))
             .collect::<HashMap<_, _>>();
         let mut files_to_stage = Vec::new();
-        let mut staged_files = Vec::new();
 
         for relative_path in &files {
             if let Some(record) = indexed_map.get(relative_path.as_str()) {
@@ -2248,37 +2319,49 @@ impl LanguageService {
             files_to_stage.push(relative_path.clone());
         }
 
-        if !files_to_stage.is_empty() {
-            enum IndexDirectoryStageEvent {
-                Finished(String, Result<StagedFileIndexOutcome, String>),
-            }
+        // M5.7 — stream in bounded batches (same rationale as the reconcile path):
+        // index a chunk, COMMIT it, then DROP its staged data so peak memory is
+        // O(RECONCILE_BATCH_SIZE), not O(repo). Workers get a large (virtual,
+        // lazily-committed) stack because symbol extraction walks the AST
+        // recursively and deep real C files (the kernel) can overflow the default
+        // 2 MB thread stack and abort the process.
+        enum IndexDirectoryStageEvent {
+            Finished(String, Result<StagedFileIndexOutcome, String>),
+        }
+        let mut committed_any = false;
 
-            let worker_count = indexing_worker_count(files_to_stage.len());
+        for batch in files_to_stage.chunks(RECONCILE_BATCH_SIZE) {
+            let worker_count = indexing_worker_count(batch.len());
             let (tx, rx) = mpsc::channel::<IndexDirectoryStageEvent>();
             let mut completed_files = 0usize;
+            let mut staged_files = Vec::with_capacity(batch.len());
 
             std::thread::scope(|scope| {
                 for worker_index in 0..worker_count {
                     let tx = tx.clone();
-                    let worker_files = files_to_stage
+                    let worker_files = batch
                         .iter()
                         .skip(worker_index)
                         .step_by(worker_count)
                         .cloned()
                         .collect::<Vec<_>>();
 
-                    scope.spawn(move || {
-                        for file_path in worker_files {
-                            let result = self
-                                .stage_file_index_with_metrics(&file_path)
-                                .map_err(|error| error.to_string());
-                            let _ = tx.send(IndexDirectoryStageEvent::Finished(file_path, result));
-                        }
-                    });
+                    std::thread::Builder::new()
+                        .stack_size(256 * 1024 * 1024)
+                        .spawn_scoped(scope, move || {
+                            for file_path in worker_files {
+                                let result = self
+                                    .stage_file_index_with_metrics(&file_path)
+                                    .map_err(|error| error.to_string());
+                                let _ = tx
+                                    .send(IndexDirectoryStageEvent::Finished(file_path, result));
+                            }
+                        })
+                        .expect("spawn index worker thread");
                 }
                 drop(tx);
 
-                while completed_files < files_to_stage.len() {
+                while completed_files < batch.len() {
                     let Ok(event) = rx.recv() else {
                         break;
                     };
@@ -2309,16 +2392,23 @@ impl LanguageService {
                     }
                 }
             });
+
+            if !staged_files.is_empty() {
+                let commit_metrics =
+                    self.commit_staged_file_indexes_with_metrics(&staged_files)?;
+                stats.relationships_extracted += commit_metrics.relationship_count;
+                stats.relationship_enrichment_ms += commit_metrics.relationship_enrichment_ms;
+                stats.db_write_ms += commit_metrics.db_write_ms;
+                stats.cache_update_ms += commit_metrics.cache_update_ms;
+                committed_any = true;
+            }
+            // Free this batch's staged data before the next chunk.
+            drop(staged_files);
         }
 
-        if !staged_files.is_empty() {
-            let commit_metrics = self.commit_staged_file_indexes_with_metrics(&staged_files)?;
-            stats.relationships_extracted += commit_metrics.relationship_count;
-            stats.relationship_enrichment_ms += commit_metrics.relationship_enrichment_ms;
-            stats.db_write_ms += commit_metrics.db_write_ms;
-            stats.cache_update_ms += commit_metrics.cache_update_ms;
-            // M2.4 — run the global-unique back-fill exactly once, after the full
-            // directory index has committed every file (true global COUNT(*)).
+        if committed_any {
+            // M2.4 — run the global-unique back-fill exactly once, after EVERY
+            // batch has committed (true global COUNT(*)).
             self.symbol_store
                 .backfill_unresolved_relationship_targets()?;
             // M5.1b — mine the still-NULL recv_type-carrying call edges against
