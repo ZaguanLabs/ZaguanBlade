@@ -528,6 +528,36 @@ fn query_scoped_count(
     .map_err(SymbolStoreError::from)
 }
 
+/// M5.4 — bulk-write performance PRAGMAs for the symbol-index connection.
+///
+/// The symbol index is a DERIVED, fully rebuildable cache, so we trade the
+/// SQLite defaults' maximal durability for write throughput. On a cold index the
+/// DB write is 60–95% of wall time (278k INSERT-OR-REPLACE on a TEXT PK, each
+/// maintaining every secondary index), and the defaults make it worst-case:
+///   * `journal_mode = WAL` — faster than the default DELETE journal (no
+///     per-transaction journal create/delete) and lets UI reads run concurrently
+///     with the indexer's writes instead of blocking on them.
+///   * `synchronous = NORMAL` — safe under WAL (no corruption on power loss; at
+///     worst the last in-flight commit is lost, and the index just re-reconciles
+///     it), without the fsync-per-commit of FULL.
+///   * `cache_size = -65536` — a 64 MiB page cache (a BOUNDED amount of RAM,
+///     unlike `mmap_size`) keeps the index B-trees hot through the insert storm
+///     instead of thrashing the 2 MiB default cache to disk.
+///   * `temp_store = MEMORY` — build transient indexes/sorts in RAM.
+///
+/// Deliberately NOT set: `mmap_size` — mapping the DB into the process address
+/// space inflates RSS, the memory bloat we already fought, and buys little for a
+/// write-bound workload.
+fn configure_index_pragmas(conn: &Connection) -> Result<(), SymbolStoreError> {
+    conn.execute_batch(
+        "PRAGMA journal_mode = WAL;\n\
+         PRAGMA synchronous = NORMAL;\n\
+         PRAGMA temp_store = MEMORY;\n\
+         PRAGMA cache_size = -65536;",
+    )?;
+    Ok(())
+}
+
 impl SymbolStore {
     /// Create a new symbol store at the given path
     pub fn new(db_path: &Path) -> Result<Self, SymbolStoreError> {
@@ -537,6 +567,7 @@ impl SymbolStore {
         }
 
         let conn = Connection::open(db_path)?;
+        configure_index_pragmas(&conn)?;
         let store = Self {
             conn: Mutex::new(conn),
         };

@@ -312,6 +312,14 @@ const MAX_SYMBOLS_PER_FILE: usize = 25_000;
 /// of how large files are distributed.
 const BATCH_BYTE_BUDGET: u64 = 24 * 1024 * 1024;
 
+/// M5.4 — minimum wall-clock between progress (IPC) emits during the parallel
+/// extraction pass. With the worker pool saturating every core, the main drain
+/// thread sees a firehose of start/finish events (Firefox ≈ 450k); emitting one
+/// IPC status per event would melt the main thread and flood the webview. We
+/// keep the in-memory health snapshot current per event (cheap) but throttle the
+/// expensive string-build + emit to ~10/s. Batch boundaries always emit.
+const UI_EMIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// M5.7 — files larger than this are indexed ANCHOR-ONLY (the recursive symbol
 /// walk is skipped). They are almost always generated data — e.g. the kernel's
 /// AMD register-mask headers, 2–24 MB with 50k–190k `#define`s — whose macro
@@ -1327,6 +1335,9 @@ impl LanguageService {
                 let mut active_files = HashSet::new();
                 let mut staged_files = Vec::with_capacity(batch.len());
                 let mut batch_completed = 0usize;
+                // M5.4 — throttle the IPC progress emits (reset per batch so each
+                // batch's first event paints immediately).
+                let mut last_emit: Option<std::time::Instant> = None;
 
                 std::thread::scope(|scope| {
                     for worker_index in 0..worker_count {
@@ -1363,19 +1374,15 @@ impl LanguageService {
                         let Ok(event) = rx.recv() else {
                             break;
                         };
+                        // Keep the drain loop LEAN. With the pool saturating every
+                        // core this thread must keep up with the event firehose, so
+                        // per-event work is just cheap bookkeeping — no string
+                        // formatting, no IPC. The expensive status build + emit is
+                        // throttled below (UI_EMIT_INTERVAL).
                         match event {
                             IndexWorkerEvent::Started(file_path) => {
-                                let done = completed_files + batch_completed;
                                 active_files.insert(file_path.clone());
-                                health.current_file = Some(file_path.clone());
-                                health.active_workers = active_files.len();
-                                health.queued_files = total_queued.saturating_sub(done);
-                                health.message = format!(
-                                    "Indexing {}... {}/{} files ({} workers)",
-                                    file_path, done, total_queued, worker_count
-                                );
-                                self.set_index_health(health.clone());
-                                progress(&health);
+                                health.current_file = Some(file_path);
                             }
                             IndexWorkerEvent::Finished(file_path, result) => {
                                 active_files.remove(&file_path);
@@ -1394,24 +1401,32 @@ impl LanguageService {
                                         failed_files.push(file_path.clone());
                                     }
                                 }
-                                let done = completed_files + batch_completed;
-                                health.queued_files = total_queued.saturating_sub(done);
-                                health.active_workers = active_files.len();
                                 health.current_file = active_files.iter().next().cloned();
-                                health.message = if let Some(current_file) = &health.current_file {
-                                    format!(
-                                        "Indexing {}... {}/{} files ({} workers)",
-                                        current_file, done, total_queued, worker_count
-                                    )
-                                } else {
-                                    format!(
-                                        "Building symbol index... {}/{} files",
-                                        done, total_queued
-                                    )
-                                };
-                                self.set_index_health(health.clone());
-                                progress(&health);
                             }
+                        }
+
+                        // Throttled UI update (~10/s) — plus an unconditional emit on
+                        // the batch's final event so the bar lands exactly on N/N.
+                        let final_event = batch_completed == batch.len();
+                        let should_emit = final_event
+                            || last_emit.map_or(true, |at| at.elapsed() >= UI_EMIT_INTERVAL);
+                        if should_emit {
+                            let done = completed_files + batch_completed;
+                            health.queued_files = total_queued.saturating_sub(done);
+                            health.active_workers = active_files.len();
+                            health.message = match &health.current_file {
+                                Some(current_file) => format!(
+                                    "Indexing {}... {}/{} files ({} workers)",
+                                    current_file, done, total_queued, worker_count
+                                ),
+                                None => format!(
+                                    "Building symbol index... {}/{} files",
+                                    done, total_queued
+                                ),
+                            };
+                            self.set_index_health(health.clone());
+                            progress(&health);
+                            last_emit = Some(std::time::Instant::now());
                         }
                     }
                 });
@@ -7534,7 +7549,23 @@ fn indexing_worker_count(total_queued: usize) -> usize {
     let cpu_count = std::thread::available_parallelism()
         .map(|count| count.get())
         .unwrap_or(4);
-    total_queued.min(cpu_count).min(8).max(1)
+    // M5.4 — saturate the machine for the CPU-bound extraction pass. The old hard
+    // cap of 8 left most of a modern many-core CPU idle (e.g. 24 of 32 threads on
+    // a Ryzen 5950X). Reserve ONE core for the main/drain thread so the channel
+    // keeps draining and the UI stays responsive while indexing. The per-batch
+    // byte budget (BATCH_BYTE_BUDGET) bounds peak memory regardless of worker
+    // count, and oversized files are anchor-only, so more workers does not blow
+    // the transient-AST footprint. Still bounded by the batch size.
+    //
+    // `ZBLADE_INDEX_WORKERS` overrides the pool size (benchmarking / tuning on
+    // memory-constrained machines); a value of 0 or an unparseable value falls
+    // back to the auto default.
+    let workers = std::env::var("ZBLADE_INDEX_WORKERS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or_else(|| cpu_count.saturating_sub(1).max(1));
+    total_queued.min(workers).max(1)
 }
 
 fn extract_markdown_header_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
