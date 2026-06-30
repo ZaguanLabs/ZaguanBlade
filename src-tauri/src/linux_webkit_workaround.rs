@@ -101,23 +101,23 @@ pub fn apply() {
     maybe_disable_compositing("unknown-session/NVIDIA");
 }
 
-/// `WEBKIT_DISABLE_COMPOSITING_MODE=1` papers over some NVIDIA/X11 rendering
-/// glitches, but it makes WebKitGTK fall back to a path that REPAINTS THE VIEW
-/// CONTINUOUSLY, pegging one CPU core (~80%) even when the app is idle — confirmed
-/// via gdb: the GTK main loop spins in `gtk_main_iteration_do` with no real events.
-/// Keep compositing ENABLED by default (disabling the DMABUF renderer alone fixes
-/// most NVIDIA cases without the spin); opt back in only if rendering still
-/// misbehaves, via `ZBLADE_WEBKIT_DISABLE_COMPOSITING=1`.
+/// Disabling accelerated compositing avoids a black-screen-after-inactivity hang on
+/// NVIDIA/X11 (the GPU context is lost when the display sleeps, and WebKitGTK can't
+/// restore the composited surface). It falls back to a software path. The idle-CPU
+/// spin once blamed on this was actually the file watcher rebuilding the worktree
+/// on `.git` churn (fixed in fs_watcher.rs), so we keep the safe default of
+/// disabling compositing. Opt OUT — GPU compositing, accepting the black-screen
+/// risk — via `ZBLADE_WEBKIT_KEEP_COMPOSITING=1`.
 #[cfg(target_os = "linux")]
 fn maybe_disable_compositing(context: &str) {
-    if env_truthy("ZBLADE_WEBKIT_DISABLE_COMPOSITING") {
-        set_env_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+    if env_truthy("ZBLADE_WEBKIT_KEEP_COMPOSITING") {
         eprintln!(
-            "[LINUX WEBKIT] {context}: DMABUF renderer disabled + compositing disabled (ZBLADE_WEBKIT_DISABLE_COMPOSITING=1 — note: high idle CPU)"
+            "[LINUX WEBKIT] {context}: DMABUF renderer disabled; compositing KEPT ENABLED (ZBLADE_WEBKIT_KEEP_COMPOSITING=1 — GPU rendering; black-screen-after-inactivity risk)"
         );
     } else {
+        set_env_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
         eprintln!(
-            "[LINUX WEBKIT] {context}: DMABUF renderer disabled (compositing kept enabled to avoid the idle-CPU repaint spin; set ZBLADE_WEBKIT_DISABLE_COMPOSITING=1 if rendering glitches)"
+            "[LINUX WEBKIT] {context}: DMABUF renderer + compositing disabled (avoids the black-screen-after-inactivity hang; set ZBLADE_WEBKIT_KEEP_COMPOSITING=1 for GPU compositing)"
         );
     }
 }

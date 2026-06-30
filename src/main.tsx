@@ -41,15 +41,14 @@ window.__ZBLADE_DEBUG_FLAGS__ = {
     debugPerf: undefined,
 };
 
-// NVIDIA/X11 WebKitGTK recovery. With accelerated compositing kept ON (so the app
-// does NOT spin a CPU core at idle — see src-tauri/src/linux_webkit_workaround.rs),
-// the GPU context can be lost after the screen blanks for a long time, leaving a
-// stale/black surface when the window is resumed. Forcing a full webview repaint
-// when the window regains focus / becomes visible re-paints the compositor layer
-// and recovers the view. Best-effort: this only helps if the view is black-but-
-// alive (events still flow); a hard GPU hang needs the compositing-disable
-// fallback (ZBLADE_WEBKIT_DISABLE_COMPOSITING=1). Harmless elsewhere — at most one
-// imperceptible repaint per focus event.
+// NVIDIA/X11 WebKitGTK recovery (safety net). On NVIDIA/X11 the GPU context can be
+// lost after the display sleeps for a long time, leaving a stale/black surface when
+// the window is resumed. Forcing a full webview repaint when the window regains
+// focus / becomes visible re-paints the layer and recovers the view. Most useful
+// when GPU compositing is enabled (ZBLADE_WEBKIT_KEEP_COMPOSITING=1 — see
+// src-tauri/src/linux_webkit_workaround.rs); harmless otherwise. Best-effort: only
+// helps if the view is black-but-alive (events still flow); a hard GPU hang needs
+// the default (compositing disabled). At most one imperceptible repaint per focus.
 function forceWebviewRepaint() {
     try {
         const root = document.documentElement;
