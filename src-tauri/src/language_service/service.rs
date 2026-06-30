@@ -302,7 +302,24 @@ const RECONCILE_BATCH_SIZE: usize = 1_000;
 /// absurd number of symbols; we truncate (with a log) so a single file cannot
 /// spike a batch's memory. Real source files are far below this (the kernel's
 /// largest hand-written files are in the hundreds).
-const MAX_SYMBOLS_PER_FILE: usize = 50_000;
+const MAX_SYMBOLS_PER_FILE: usize = 25_000;
+
+/// M5.7 — a single batch never stages more than this many BYTES of file content
+/// (whichever comes first with `RECONCILE_BATCH_SIZE`). Batching by file COUNT
+/// alone does not bound memory when file sizes vary by 1000× — the kernel's
+/// generated multi-MB headers mean a 1000-file batch landing in such a directory
+/// holds gigabytes. Bounding by content bytes keeps peak memory flat regardless
+/// of how large files are distributed.
+const BATCH_BYTE_BUDGET: u64 = 24 * 1024 * 1024;
+
+/// M5.7 — files larger than this are indexed ANCHOR-ONLY (the recursive symbol
+/// walk is skipped). They are almost always generated data — e.g. the kernel's
+/// AMD register-mask headers, 2–24 MB with 50k–190k `#define`s — whose macro
+/// "symbols" bloat the DB (to multiple GB), spike memory, and have no
+/// navigational value. The file still gets a root symbol so it stays
+/// discoverable by path. Real hand-written source is virtually always well under
+/// 1 MiB, so this spares real code while catching generated data.
+const MAX_EXTRACT_BYTES: usize = 1024 * 1024;
 
 struct StagedFileIndex {
     file_path: String,
@@ -1272,7 +1289,8 @@ impl LanguageService {
             // kept the Linux kernel (77k files) from blowing to 14 GiB. Each batch
             // is its own committed transaction, so an interruption leaves a valid,
             // partially-populated DB rather than a corrupt stub.
-            for batch in queued_files.chunks(RECONCILE_BATCH_SIZE) {
+            for (batch_start, batch_end) in self.size_bounded_batch_ranges(&queued_files) {
+                let batch = &queued_files[batch_start..batch_end];
                 let worker_count = indexing_worker_count(batch.len());
                 let (tx, rx) = mpsc::channel::<IndexWorkerEvent>();
                 let mut active_files = HashSet::new();
@@ -2057,6 +2075,36 @@ impl LanguageService {
         Ok(Vec::new())
     }
 
+    /// M5.7 — split `files` (in order) into contiguous batches each bounded by
+    /// `BATCH_BYTE_BUDGET` of on-disk content AND `RECONCILE_BATCH_SIZE` files,
+    /// whichever comes first, returning `(start, end)` index ranges into `files`.
+    /// A single file larger than the byte budget becomes its own batch. Bounding by
+    /// bytes (not just count) keeps peak staging memory flat even where file sizes
+    /// vary by 1000× (e.g. the kernel's generated multi-MB headers).
+    fn size_bounded_batch_ranges(&self, files: &[String]) -> Vec<(usize, usize)> {
+        let mut ranges = Vec::new();
+        let mut start = 0usize;
+        let mut bytes: u64 = 0;
+        for (i, file) in files.iter().enumerate() {
+            let size = self
+                .resolve_path(file)
+                .metadata()
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            let count = i - start;
+            if count > 0 && (bytes + size > BATCH_BYTE_BUDGET || count >= RECONCILE_BATCH_SIZE) {
+                ranges.push((start, i));
+                start = i;
+                bytes = 0;
+            }
+            bytes += size;
+        }
+        if start < files.len() {
+            ranges.push((start, files.len()));
+        }
+        ranges
+    }
+
     fn stage_file_index(&self, file_path: &str) -> Result<StagedFileIndex, LanguageError> {
         Ok(self.stage_file_index_with_metrics(file_path)?.staged)
     }
@@ -2119,28 +2167,59 @@ impl LanguageService {
         };
 
         let parse_extract_start = std::time::Instant::now();
-        let SymbolExtraction {
-            symbols: extracted_symbols,
-            mut relationships,
-            content: extraction_content,
-            language: extraction_language,
-        } = self.extract_file_symbols_and_relationships(file_path, &content, language)?;
-        // M5.7 — cap pathological files before adding the file-root symbol (so the
-        // root is always retained). Truncated symbols simply aren't indexed; any
-        // relationship pointing at a dropped symbol stays unresolved (handled).
-        let mut extracted_symbols = extracted_symbols;
-        if extracted_symbols.len() > MAX_SYMBOLS_PER_FILE {
+        // M5.7 — oversized files (typically generated data, e.g. the kernel's
+        // multi-megabyte AMD register-mask headers with 50k–190k `#define`s) are
+        // indexed ANCHOR-ONLY: skip the recursive symbol walk entirely. This avoids
+        // the huge transient symbol Vec + the parse cost, keeps the symbol DB from
+        // bloating with unsearchable register macros, and still records the file
+        // (via its root symbol) so it stays discoverable by path.
+        let oversized = content.len() > MAX_EXTRACT_BYTES;
+        let (symbols, mut relationships, extraction_content, extraction_language) = if oversized {
             eprintln!(
-                "[LanguageService] {} produced {} symbols; capping to {} (pathological/generated file)",
+                "[LanguageService] {} is {:.1} MiB — indexing anchor-only (skipping symbol extraction; likely generated)",
                 file_path,
-                extracted_symbols.len(),
-                MAX_SYMBOLS_PER_FILE
+                content.len() as f64 / (1024.0 * 1024.0)
             );
-            extracted_symbols.truncate(MAX_SYMBOLS_PER_FILE);
-        }
-        let symbols = self.with_file_root_symbol(file_path, &content, extracted_symbols);
+            (
+                self.with_file_root_symbol(file_path, &content, Vec::new()),
+                Vec::new(),
+                std::borrow::Cow::Borrowed(content.as_str()),
+                language,
+            )
+        } else {
+            let SymbolExtraction {
+                symbols: extracted_symbols,
+                relationships,
+                content: extraction_content,
+                language: extraction_language,
+            } = self.extract_file_symbols_and_relationships(file_path, &content, language)?;
+            // M5.7 — cap pathological files before adding the file-root symbol (so
+            // the root is always retained). Truncated symbols are simply not
+            // indexed; any relationship pointing at a dropped symbol stays
+            // unresolved (handled).
+            let mut extracted_symbols = extracted_symbols;
+            if extracted_symbols.len() > MAX_SYMBOLS_PER_FILE {
+                eprintln!(
+                    "[LanguageService] {} produced {} symbols; capping to {} (pathological/generated file)",
+                    file_path,
+                    extracted_symbols.len(),
+                    MAX_SYMBOLS_PER_FILE
+                );
+                extracted_symbols.truncate(MAX_SYMBOLS_PER_FILE);
+            }
+            (
+                self.with_file_root_symbol(file_path, &content, extracted_symbols),
+                relationships,
+                extraction_content,
+                extraction_language,
+            )
+        };
         self.canonicalize_import_relationships(file_path, &mut relationships);
-        let anchors = extract_semantic_anchors(file_path, &content);
+        let anchors = if oversized {
+            Vec::new()
+        } else {
+            extract_semantic_anchors(file_path, &content)
+        };
         let parse_extract_ms = parse_extract_start.elapsed().as_millis() as u64;
 
         let staged = StagedFileIndex {
@@ -2330,7 +2409,8 @@ impl LanguageService {
         }
         let mut committed_any = false;
 
-        for batch in files_to_stage.chunks(RECONCILE_BATCH_SIZE) {
+        for (batch_start, batch_end) in self.size_bounded_batch_ranges(&files_to_stage) {
+            let batch = &files_to_stage[batch_start..batch_end];
             let worker_count = indexing_worker_count(batch.len());
             let (tx, rx) = mpsc::channel::<IndexDirectoryStageEvent>();
             let mut completed_files = 0usize;
