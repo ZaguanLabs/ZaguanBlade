@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, RwLock};
 
-use crate::buffer_snapshot::{BufferSnapshot, BufferSnapshotStore};
+use crate::buffer_snapshot::{BufferSnapshot, BufferSnapshotSource, BufferSnapshotStore};
 use crate::gitignore_filter::GitignoreFilter;
 use crate::project_settings;
 use crate::symbol_index::{
@@ -4245,7 +4245,21 @@ impl LanguageService {
 
         let full_path = self.resolve_path(file_path);
         let content = std::fs::read_to_string(&full_path)?;
-        Ok(self.buffer_snapshots.upsert_disk(&key, &content))
+        // Build a TRANSIENT disk snapshot for indexing — do NOT cache it in
+        // `buffer_snapshots`. That store is never evicted, so caching every indexed
+        // file's content (including the multi-MB anchor-only register headers we
+        // still load for hashing) accumulated GIGABYTES of live memory on huge
+        // repos — the kernel held ~5 GiB resident after indexing — and defeated the
+        // byte-budget batching (the batch's snapshot was dropped but the cache kept
+        // a copy). This snapshot lives only as long as the file's batch. The cache
+        // is still consulted above for a LIVE (open/edited) buffer, which stays
+        // authoritative.
+        Ok(Arc::new(BufferSnapshot::new(
+            file_path,
+            None,
+            content,
+            BufferSnapshotSource::Disk,
+        )))
     }
 
     fn load_buffer_snapshot(&self, file_path: &str) -> Result<Arc<BufferSnapshot>, LanguageError> {
