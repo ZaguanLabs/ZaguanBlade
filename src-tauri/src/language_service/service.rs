@@ -321,6 +321,29 @@ const BATCH_BYTE_BUDGET: u64 = 24 * 1024 * 1024;
 /// 1 MiB, so this spares real code while catching generated data.
 const MAX_EXTRACT_BYTES: usize = 1024 * 1024;
 
+/// M5.7b — recognize files whose NAME marks them as generated (a complement to the
+/// size heuristic, ported from the inspiration project's protobuf/codegen skip).
+/// These are indexed anchor-only: their thousands of generated symbols are search
+/// noise, and this catches *small* generated files that the size cap misses (and
+/// never wrongly skips a large hand-written file). Match on the file name only.
+fn is_generated_path(file_path: &str) -> bool {
+    let lower = file_path.to_ascii_lowercase();
+    let name = lower.rsplit(['/', '\\']).next().unwrap_or(lower.as_str());
+    name.contains("zz_generated")
+        || name.contains(".generated.")
+        || name.contains("_generated.")
+        || name.ends_with(".pb.go")
+        || name.ends_with(".pb.cc")
+        || name.ends_with(".pb.h")
+        || name.ends_with("_pb2.py")
+        || name.ends_with("_pb2_grpc.py")
+        || name.ends_with(".min.js")
+        || name.ends_with(".min.css")
+        || name.ends_with(".g.dart")
+        || name.ends_with(".freezed.dart")
+        || name.ends_with(".designer.cs")
+}
+
 struct StagedFileIndex {
     file_path: String,
     hash: String,
@@ -2173,12 +2196,20 @@ impl LanguageService {
         // the huge transient symbol Vec + the parse cost, keeps the symbol DB from
         // bloating with unsearchable register macros, and still records the file
         // (via its root symbol) so it stays discoverable by path.
-        let oversized = content.len() > MAX_EXTRACT_BYTES;
-        let (symbols, mut relationships, extraction_content, extraction_language) = if oversized {
+        let skip_extraction = content.len() > MAX_EXTRACT_BYTES || is_generated_path(file_path);
+        let (symbols, mut relationships, extraction_content, extraction_language) = if skip_extraction
+        {
             eprintln!(
-                "[LanguageService] {} is {:.1} MiB — indexing anchor-only (skipping symbol extraction; likely generated)",
+                "[LanguageService] {} — indexing anchor-only (skipping symbol extraction; {})",
                 file_path,
-                content.len() as f64 / (1024.0 * 1024.0)
+                if content.len() > MAX_EXTRACT_BYTES {
+                    format!(
+                        "{:.1} MiB, likely generated",
+                        content.len() as f64 / (1024.0 * 1024.0)
+                    )
+                } else {
+                    "generated-file name pattern".to_string()
+                }
             );
             (
                 self.with_file_root_symbol(file_path, &content, Vec::new()),
@@ -2215,7 +2246,7 @@ impl LanguageService {
             )
         };
         self.canonicalize_import_relationships(file_path, &mut relationships);
-        let anchors = if oversized {
+        let anchors = if skip_extraction {
             Vec::new()
         } else {
             extract_semantic_anchors(file_path, &content)
@@ -12118,6 +12149,25 @@ class B {
         assert!(should_allow_non_indexed_live_sync("config/.env.local"));
         assert!(should_allow_non_indexed_live_sync("nested/.dockerignore"));
         assert!(!should_allow_non_indexed_live_sync("src/main.rs"));
+    }
+
+    #[test]
+    fn is_generated_path_matches_codegen_and_spares_real_code() {
+        // Generated → anchor-only.
+        assert!(is_generated_path("api/v1/types.pb.go"));
+        assert!(is_generated_path("k8s/zz_generated.deepcopy.go"));
+        assert!(is_generated_path("proto/foo_pb2.py"));
+        assert!(is_generated_path("proto/foo_pb2_grpc.py"));
+        assert!(is_generated_path("web/dist/bundle.min.js"));
+        assert!(is_generated_path("styles/app.min.css"));
+        assert!(is_generated_path("lib/models/user.freezed.dart"));
+        assert!(is_generated_path("Forms/Main.Designer.cs"));
+        assert!(is_generated_path("schema.generated.ts"));
+        // Real hand-written code → extracted normally.
+        assert!(!is_generated_path("kernel/sched/core.c"));
+        assert!(!is_generated_path("src/main.rs"));
+        assert!(!is_generated_path("include/linux/list.h"));
+        assert!(!is_generated_path("pkg/server/handler.go"));
     }
 
     #[test]

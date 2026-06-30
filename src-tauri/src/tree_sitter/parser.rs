@@ -119,6 +119,35 @@ pub struct LanguageCapability {
     pub extracts: ExtractionCapabilities,
 }
 
+/// Per-file parse time budget. A tree-sitter parse on pathological input can run
+/// for a very long time; without a bound it would stall an index worker — and
+/// therefore the whole reconcile — indefinitely. (Ported from the inspiration
+/// project, which uses a 5 s/file budget.)
+const PARSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Parse `code` with a wall-clock budget (`PARSE_TIMEOUT`). tree-sitter invokes the
+/// progress callback periodically; returning `Break` cancels the parse, which then
+/// yields `None`. The caller treats `None` as a parse failure and skips the file,
+/// so a single pathological file cannot hang indexing.
+fn parse_with_timeout(parser: &mut Parser, code: &str, old_tree: Option<&Tree>) -> Option<Tree> {
+    let bytes = code.as_bytes();
+    let len = bytes.len();
+    let deadline = std::time::Instant::now() + PARSE_TIMEOUT;
+    let mut progress = move |_state: &tree_sitter::ParseState| {
+        if std::time::Instant::now() >= deadline {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        }
+    };
+    let options = tree_sitter::ParseOptions::new().progress_callback(&mut progress);
+    parser.parse_with_options(
+        &mut |i, _| (i < len).then(|| &bytes[i..]).unwrap_or_default(),
+        old_tree,
+        Some(options),
+    )
+}
+
 const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
     LanguageCapability {
         language: Language::TypeScript,
@@ -707,7 +736,7 @@ impl TreeSitterParser {
             .get_mut(&language)
             .ok_or(TreeSitterError::UnsupportedLanguage)?;
 
-        parser.parse(code, None).ok_or(TreeSitterError::ParseFailed)
+        parse_with_timeout(parser, code, None).ok_or(TreeSitterError::ParseFailed)
     }
 
     /// Parse source code with an existing tree for incremental updates
@@ -725,9 +754,7 @@ impl TreeSitterParser {
             .get_mut(&language)
             .ok_or(TreeSitterError::UnsupportedLanguage)?;
 
-        parser
-            .parse(code, Some(old_tree))
-            .ok_or(TreeSitterError::ParseFailed)
+        parse_with_timeout(parser, code, Some(old_tree)).ok_or(TreeSitterError::ParseFailed)
     }
 
     /// Check if a language is supported

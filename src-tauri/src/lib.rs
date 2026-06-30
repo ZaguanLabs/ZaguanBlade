@@ -1,5 +1,14 @@
 #![deny(clippy::disallowed_methods, clippy::disallowed_types)]
 
+// M5.6 — mimalloc global allocator. glibc malloc retains freed memory (it does not
+// return it to the OS), which inflated peak RSS during large indexes; mimalloc
+// returns memory promptly, lowering steady-state RSS on huge repos (validated by
+// the inspiration project). Defined in the library so the app, examples and tests
+// all share it. Cross-platform (Linux/macOS/Windows); the Tauri-bundle build spike
+// on macOS/Windows is unverified here (Linux only).
+#[global_allocator]
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub mod agent_instructions;
 pub mod agent_skills;
 pub mod agentic_loop;
