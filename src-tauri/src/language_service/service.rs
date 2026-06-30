@@ -1305,6 +1305,14 @@ impl LanguageService {
 
             let mut completed_files = 0usize;
             let mut committed_any = false;
+            // M5.10 — files that errored during the PARALLEL bulk pass (parse
+            // timeout, transient load/extraction failure). They get a sequential
+            // second pass below — single-threaded, so no worker contention and the
+            // full per-thread stack/memory — which recovers files that failed only
+            // under parallel pressure. Deliberate anchor-only skips are NOT here
+            // (those are indexed with a root symbol; re-extracting them would just
+            // re-add the generated-data bloat we skipped on purpose).
+            let mut failed_files: Vec<String> = Vec::new();
 
             // M5.7 — stream the reconcile in bounded batches: index a chunk in
             // parallel, COMMIT it, then drop its staged data before the next chunk.
@@ -1379,9 +1387,11 @@ impl LanguageService {
                                     }
                                     Err(error) => {
                                         eprintln!(
-                                            "[LanguageService] Failed to index {}: {}",
+                                            "[LanguageService] Failed to index {} (parallel pass): {}",
                                             file_path, error
                                         );
+                                        // Defer for the sequential second pass.
+                                        failed_files.push(file_path.clone());
                                     }
                                 }
                                 let done = completed_files + batch_completed;
@@ -1422,10 +1432,59 @@ impl LanguageService {
                     committed_any = true;
                 }
 
-                // Free this batch's staged data (symbols + full source text +
+                // Free this batch's staged data (symbols + full source text —
                 // buffer snapshots) before indexing the next batch — the whole
                 // point of streaming.
                 drop(staged_files);
+            }
+
+            // M5.10 — SECOND PASS: retry the files that errored in the parallel
+            // pass, ONE AT A TIME. Sequential means no worker contention and the
+            // full per-thread stack/memory per file, so a file that failed only
+            // under parallel pressure can now succeed. Runs BEFORE the global
+            // resolution passes so any recovered symbols participate. `failed_files`
+            // is an exception list (normally empty / a handful). A file that fails
+            // AGAIN is left unindexed + logged — it stays "missing" and is retried
+            // on the next reconcile.
+            if !failed_files.is_empty() {
+                health.status = IndexHealthStatus::Indexing;
+                health.active_workers = 1;
+                health.current_file = None;
+                health.queued_files = failed_files.len();
+                health.message = format!("Retrying {} deferred file(s)...", failed_files.len());
+                self.set_index_health(health.clone());
+                progress(&health);
+
+                let mut retried_staged = Vec::new();
+                let mut recovered = 0usize;
+                let mut still_failed = 0usize;
+                for file_path in &failed_files {
+                    match self.stage_file_index(file_path) {
+                        Ok(staged) => {
+                            retried_staged.push(staged);
+                            recovered += 1;
+                        }
+                        Err(error) => {
+                            still_failed += 1;
+                            eprintln!(
+                                "[LanguageService] {} failed again on the sequential retry: {}",
+                                file_path, error
+                            );
+                        }
+                    }
+                }
+                files_indexed += recovered;
+                if !retried_staged.is_empty() {
+                    suppressed_external_relationships +=
+                        self.commit_staged_file_indexes(&retried_staged)?;
+                    committed_any = true;
+                }
+                eprintln!(
+                    "[LanguageService] Second pass: recovered {} / {} deferred file(s); {} still failing",
+                    recovered,
+                    failed_files.len(),
+                    still_failed
+                );
             }
 
             if committed_any {
