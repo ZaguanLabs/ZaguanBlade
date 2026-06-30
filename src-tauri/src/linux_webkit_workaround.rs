@@ -84,11 +84,10 @@ pub fn apply() {
     let session = session_type().unwrap_or_else(|| String::from("unknown"));
 
     if session == "x11" {
+        // Disabling the DMABUF renderer is the targeted fix for NVIDIA/X11
+        // WebKitGTK rendering glitches and does NOT affect idle CPU.
         set_env_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-        set_env_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-        eprintln!(
-            "[LINUX WEBKIT] Applied X11/NVIDIA WebKitGTK workaround: WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1"
-        );
+        maybe_disable_compositing("X11/NVIDIA");
         return;
     }
 
@@ -99,10 +98,28 @@ pub fn apply() {
     }
 
     set_env_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-    set_env_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-    eprintln!(
-        "[LINUX WEBKIT] Applied fallback NVIDIA workaround for unknown session type: WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1"
-    );
+    maybe_disable_compositing("unknown-session/NVIDIA");
+}
+
+/// `WEBKIT_DISABLE_COMPOSITING_MODE=1` papers over some NVIDIA/X11 rendering
+/// glitches, but it makes WebKitGTK fall back to a path that REPAINTS THE VIEW
+/// CONTINUOUSLY, pegging one CPU core (~80%) even when the app is idle — confirmed
+/// via gdb: the GTK main loop spins in `gtk_main_iteration_do` with no real events.
+/// Keep compositing ENABLED by default (disabling the DMABUF renderer alone fixes
+/// most NVIDIA cases without the spin); opt back in only if rendering still
+/// misbehaves, via `ZBLADE_WEBKIT_DISABLE_COMPOSITING=1`.
+#[cfg(target_os = "linux")]
+fn maybe_disable_compositing(context: &str) {
+    if env_truthy("ZBLADE_WEBKIT_DISABLE_COMPOSITING") {
+        set_env_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        eprintln!(
+            "[LINUX WEBKIT] {context}: DMABUF renderer disabled + compositing disabled (ZBLADE_WEBKIT_DISABLE_COMPOSITING=1 — note: high idle CPU)"
+        );
+    } else {
+        eprintln!(
+            "[LINUX WEBKIT] {context}: DMABUF renderer disabled (compositing kept enabled to avoid the idle-CPU repaint spin; set ZBLADE_WEBKIT_DISABLE_COMPOSITING=1 if rendering glitches)"
+        );
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
