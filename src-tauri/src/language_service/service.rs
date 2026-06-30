@@ -1429,12 +1429,31 @@ impl LanguageService {
             }
 
             if committed_any {
+                // Surface the post-extraction RESOLUTION phase. These two global
+                // passes run after the worker loop and can take minutes on a large
+                // repo; without a status update the UI froze on the last
+                // "Indexing… N/N files" message and looked hung (owner report on the
+                // Linux kernel). There is no intra-pass progress, but the phase
+                // labels make it clear work is still happening.
+                health.status = IndexHealthStatus::Indexing;
+                health.active_workers = 1;
+                health.current_file = None;
+                health.queued_files = 0;
+                health.message = "Resolving symbol relationships...".to_string();
+                self.set_index_health(health.clone());
+                progress(&health);
+
                 // M2.4 — run the global-unique back-fill exactly once, after EVERY
                 // batch has committed. Only now is COUNT(*) truly global; running it
                 // per-batch would resolve against an incomplete symbol set
                 // (order-dependent).
                 self.symbol_store
                     .backfill_unresolved_relationship_targets()?;
+
+                health.message = "Resolving cross-file method calls...".to_string();
+                self.set_index_health(health.clone());
+                progress(&health);
+
                 // M5.1b — then mine the STILL-NULL call edges that carry a confident
                 // recv_type via the GLOBAL cross-file receiver-type registry. Runs
                 // last so it sees the fully-committed symbol+edge set and only
@@ -1442,6 +1461,15 @@ impl LanguageService {
                 self.symbol_store
                     .mine_receiver_type_relationship_targets()?;
             }
+        }
+
+        if total_queued > 0 {
+            // The closing health/graph-quality audits scan the whole symbol DB
+            // (COUNT + integrity), which is non-trivial on a multi-GB index — label
+            // the window so the UI does not look stalled here either.
+            health.message = "Finalizing index...".to_string();
+            self.set_index_health(health.clone());
+            progress(&health);
         }
 
         let mut final_health = self.audit_index_health()?;
