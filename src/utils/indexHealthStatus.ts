@@ -47,7 +47,10 @@ export function formatIndexStatusLabel(
         // No current file. Distinguish the post-scan FINALIZATION (relationship
         // resolution + write-to-disk, which can run for minutes on a large repo)
         // from active extraction, so the long tail stops looking like a hang.
-        if (getPendingFileCount(indexHealth) === 0) {
+        // The backend zeroes `queued_files` when the per-file passes finish (it
+        // does NOT zero stale_files/missing_files, which retain their initial audit
+        // values — so `getPendingFileCount` is the wrong signal here).
+        if (indexHealth.queued_files === 0) {
             return t('statusBar.index.finalizing');
         }
         return progress

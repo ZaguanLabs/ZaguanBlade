@@ -81,11 +81,15 @@ test('formats active indexing progress from remaining queued files', () => {
 test('shows a distinct finalizing phase after the scan (no current file, nothing queued)', () => {
     // Post-scan: relationship resolution + write-to-disk. Previously this showed
     // "Indexing symbols" and looked like a hang.
+    // Reproduces the real backend state: the per-file passes zero `queued_files`,
+    // but `stale_files`/`missing_files` keep their initial audit counts — so the
+    // label must key on `queued_files`, not the max-based pending count.
     const health = makeHealth({
         status: 'indexing',
         indexed_files: 469627,
         supported_files: 469627,
         queued_files: 0,
+        stale_files: 469627,
         current_file: undefined,
         message: 'Resolving symbol relationships...',
     });
