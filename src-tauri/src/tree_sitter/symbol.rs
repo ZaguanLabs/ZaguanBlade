@@ -11,6 +11,32 @@ use tree_sitter::{Node, Tree};
 
 use super::parser::Language;
 
+/// Bounds-checked node text extraction.
+///
+/// tree-sitter can — during parse-error recovery or certain grammar states —
+/// return a node whose byte range lies OUTSIDE the source buffer. `Node::utf8_text`
+/// then panics on the out-of-range slice (`&source[start..end]`), BEFORE the
+/// ubiquitous `.ok()` can see it. With `panic = "abort"` in the release profile a
+/// worker panic aborts the whole process, so one pathological file crashed the
+/// entire Firefox index (`range start index 153 out of range for slice of length
+/// 30`, on web-platform-tests). Validate the range first and return `Err(())` —
+/// which the existing `.ok()` turns into `None` — instead of panicking. Same
+/// happy-path behaviour, no crash.
+trait SafeNodeText {
+    fn safe_text<'a>(&self, source: &'a str) -> Result<&'a str, ()>;
+}
+
+impl SafeNodeText for Node<'_> {
+    fn safe_text<'a>(&self, source: &'a str) -> Result<&'a str, ()> {
+        let bytes = source.as_bytes();
+        if self.start_byte() <= self.end_byte() && self.end_byte() <= bytes.len() {
+            self.utf8_text(bytes).map_err(|_| ())
+        } else {
+            Err(())
+        }
+    }
+}
+
 /// Types of symbols we extract from code
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -608,7 +634,7 @@ impl SymbolExtractor {
         symbol.byte_offset = node.start_byte();
         symbol.byte_length = node.end_byte().saturating_sub(node.start_byte());
         symbol.content_hash = node
-            .utf8_text(source.as_bytes())
+            .safe_text(source)
             .ok()
             .map(compute_content_hash)
             .unwrap_or_default();
@@ -655,7 +681,7 @@ impl SymbolExtractor {
         if language == Language::Rust && node.kind() == "impl_item" {
             if let Some(type_name) = node
                 .child_by_field_name("type")
-                .and_then(|type_node| type_node.utf8_text(source.as_bytes()).ok())
+                .and_then(|type_node| type_node.safe_text(source).ok())
                 .and_then(normalize_reference_name)
             {
                 let id: Arc<str> = symbols
@@ -1117,7 +1143,7 @@ impl SymbolExtractor {
         let range = Range::from_node(node);
 
         if bits.import.contains(kind_id) {
-            let text = node.utf8_text(source.as_bytes()).ok()?;
+            let text = node.safe_text(source).ok()?;
             let name = self.extract_quoted_text(text)?;
             return Some(Symbol::new(
                 name,
@@ -1289,7 +1315,7 @@ impl SymbolExtractor {
             // `import X` and `from Y import Z` are both imports but parse their
             // target name differently — classification is table-driven, the name
             // extraction stays per-kind.
-            let text = node.utf8_text(source.as_bytes()).ok()?;
+            let text = node.safe_text(source).ok()?;
             let name = if kind == "import_from_statement" {
                 self.extract_python_from_import_target(text)?
             } else {
@@ -1345,7 +1371,7 @@ impl SymbolExtractor {
         let range = Range::from_node(node);
 
         if bits.import.contains(kind_id) {
-            let text = node.utf8_text(source.as_bytes()).ok()?;
+            let text = node.safe_text(source).ok()?;
             let name = self.extract_rust_use_target(text)?;
             return Some(Symbol::new(
                 name,
@@ -1416,7 +1442,7 @@ impl SymbolExtractor {
             "impl_item" => {
                 // Get the type being implemented
                 if let Some(type_node) = node.child_by_field_name("type") {
-                    let name = type_node.utf8_text(source.as_bytes()).ok()?;
+                    let name = type_node.safe_text(source).ok()?;
                     Some(Symbol::new(
                         format!("impl {}", name),
                         SymbolType::Impl,
@@ -1470,7 +1496,7 @@ impl SymbolExtractor {
         let range = Range::from_node(node);
 
         if bits.import.contains(kind_id) {
-            let text = node.utf8_text(source.as_bytes()).ok()?;
+            let text = node.safe_text(source).ok()?;
             let name = self.extract_quoted_text(text)?;
             return Some(Symbol::new(
                 name,
@@ -1639,14 +1665,14 @@ impl SymbolExtractor {
 
     fn get_child_text(&self, node: &Node, field_name: &str, source: &str) -> Option<String> {
         node.child_by_field_name(field_name)
-            .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+            .and_then(|n| n.safe_text(source).ok())
             .map(|s| s.to_string())
     }
 
     fn extract_js_ts_binding_name(&self, node: &Node, source: &str) -> Option<String> {
         match node.kind() {
             "identifier" | "type_identifier" => node
-                .utf8_text(source.as_bytes())
+                .safe_text(source)
                 .ok()
                 .map(|value| value.to_string()),
             _ => None,
@@ -1654,7 +1680,7 @@ impl SymbolExtractor {
     }
 
     fn extract_js_ts_property_name(&self, node: &Node, source: &str) -> Option<String> {
-        let text = node.utf8_text(source.as_bytes()).ok()?.trim();
+        let text = node.safe_text(source).ok()?.trim();
         let normalized = text
             .trim_start_matches('#')
             .trim_matches('"')
@@ -1675,7 +1701,7 @@ impl SymbolExtractor {
             return false;
         }
         parent
-            .utf8_text(source.as_bytes())
+            .safe_text(source)
             .ok()
             .is_some_and(|text| text.trim_start().starts_with("const"))
     }
@@ -1814,7 +1840,7 @@ impl SymbolExtractor {
         if kind != "comment" && kind != "block_comment" && kind != "line_comment" {
             return None;
         }
-        prev.utf8_text(source.as_bytes()).ok().map(|s| {
+        prev.safe_text(source).ok().map(|s| {
             // Clean up comment markers
             let s = s.trim();
             let s = s.strip_prefix("///").unwrap_or(s);
@@ -1839,7 +1865,7 @@ impl SymbolExtractor {
             if prev.kind() != "line_comment" {
                 break;
             }
-            let Ok(text) = prev.utf8_text(source.as_bytes()) else {
+            let Ok(text) = prev.safe_text(source) else {
                 break;
             };
             let trimmed = text.trim();
@@ -1877,7 +1903,7 @@ impl SymbolExtractor {
         if string_node.kind() != "string" {
             return None;
         }
-        let text = string_node.utf8_text(source.as_bytes()).ok()?;
+        let text = string_node.safe_text(source).ok()?;
         Some(decode_python_string(text))
     }
 
@@ -1910,11 +1936,11 @@ impl SymbolExtractor {
                 // `variable_declarator` itself.
                 if let Some(sig_node) = self.js_ts_signature_node(node) {
                     if let Some(params) = sig_node.child_by_field_name("parameters") {
-                        let params_text = params.utf8_text(source.as_bytes()).ok()?;
+                        let params_text = params.safe_text(source).ok()?;
                         // Try to get return type
                         let return_type = sig_node
                             .child_by_field_name("return_type")
-                            .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                            .and_then(|n| n.safe_text(source).ok())
                             .map(|s| format!(" {}", s))
                             .unwrap_or_default();
                         return Some(format!("{}{}", params_text, return_type));
@@ -1923,10 +1949,10 @@ impl SymbolExtractor {
             }
             Language::Python => {
                 if let Some(params) = node.child_by_field_name("parameters") {
-                    let params_text = params.utf8_text(source.as_bytes()).ok()?;
+                    let params_text = params.safe_text(source).ok()?;
                     let return_type = node
                         .child_by_field_name("return_type")
-                        .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                        .and_then(|n| n.safe_text(source).ok())
                         .map(|s| format!(" -> {}", s))
                         .unwrap_or_default();
                     return Some(format!("{}{}", params_text, return_type));
@@ -1934,10 +1960,10 @@ impl SymbolExtractor {
             }
             Language::Rust => {
                 if let Some(params) = node.child_by_field_name("parameters") {
-                    let params_text = params.utf8_text(source.as_bytes()).ok()?;
+                    let params_text = params.safe_text(source).ok()?;
                     let return_type = node
                         .child_by_field_name("return_type")
-                        .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                        .and_then(|n| n.safe_text(source).ok())
                         .map(|s| format!(" {}", s))
                         .unwrap_or_default();
                     return Some(format!("{}{}", params_text, return_type));
@@ -1945,10 +1971,10 @@ impl SymbolExtractor {
             }
             Language::Go => {
                 if let Some(params) = node.child_by_field_name("parameters") {
-                    let params_text = params.utf8_text(source.as_bytes()).ok()?;
+                    let params_text = params.safe_text(source).ok()?;
                     let return_type = node
                         .child_by_field_name("result")
-                        .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+                        .and_then(|n| n.safe_text(source).ok())
                         .map(|s| format!(" {}", s))
                         .unwrap_or_default();
                     return Some(format!("{}{}", params_text, return_type));
@@ -2088,7 +2114,7 @@ fn cpp_declarator_is_function(node: &Node) -> bool {
 /// — `foo`. A no-op for ordinary single-token identifiers and `a::b::c` qualified
 /// names (no embedded whitespace). Returns `None` if nothing usable remains. (M5.3)
 fn cpp_clean_declarator_name(name_node: &Node, source: &str) -> Option<String> {
-    let text = name_node.utf8_text(source.as_bytes()).ok()?;
+    let text = name_node.safe_text(source).ok()?;
     let name = text.split_whitespace().next_back()?;
     (!name.is_empty()).then(|| name.to_string())
 }
@@ -2822,7 +2848,7 @@ fn extract_typescript_structural_relationships(
     else {
         return;
     };
-    let Ok(text) = node.utf8_text(source.as_bytes()) else {
+    let Ok(text) = node.safe_text(source) else {
         return;
     };
     let header = text.split('{').next().unwrap_or(text);
@@ -2893,7 +2919,7 @@ fn extract_python_structural_relationships(
     else {
         return;
     };
-    let Ok(text) = node.utf8_text(source.as_bytes()) else {
+    let Ok(text) = node.safe_text(source) else {
         return;
     };
     let header = text.lines().next().unwrap_or(text).trim();
@@ -2931,7 +2957,7 @@ fn extract_rust_structural_relationships(
         return;
     }
 
-    let Ok(text) = node.utf8_text(source.as_bytes()) else {
+    let Ok(text) = node.safe_text(source) else {
         return;
     };
     let header = text.split('{').next().unwrap_or(text).trim();
@@ -2982,7 +3008,7 @@ fn extract_go_structural_relationships(
             };
             let Some(method_name) = node
                 .child_by_field_name("name")
-                .and_then(|name| name.utf8_text(source.as_bytes()).ok())
+                .and_then(|name| name.safe_text(source).ok())
             else {
                 return;
             };
@@ -3009,7 +3035,7 @@ fn extract_go_structural_relationships(
             }
             let Some(type_name) = node
                 .child_by_field_name("name")
-                .and_then(|name| name.utf8_text(source.as_bytes()).ok())
+                .and_then(|name| name.safe_text(source).ok())
             else {
                 return;
             };
@@ -3047,7 +3073,7 @@ fn go_receiver_type_name(receiver: &Node, source: &str) -> Option<String> {
     while ty.kind() == "pointer_type" {
         ty = last_named_child(&ty)?;
     }
-    ty.utf8_text(source.as_bytes())
+    ty.safe_text(source)
         .ok()
         .and_then(normalize_reference_name)
 }
@@ -3081,7 +3107,7 @@ fn go_embedded_type_names(struct_type: &Node, source: &str) -> Vec<String> {
             ty = inner;
         }
         if let Some(name) = ty
-            .utf8_text(source.as_bytes())
+            .safe_text(source)
             .ok()
             .and_then(normalize_reference_name)
         {
@@ -3292,7 +3318,7 @@ fn receiver_is_self(receiver: &Node, source: &str) -> bool {
         receiver.kind(),
         "identifier" | "self" | "this" | "shorthand_property_identifier"
     ) && matches!(
-        receiver.utf8_text(source.as_bytes()),
+        receiver.safe_text(source),
         Ok("self") | Ok("this")
     )
 }
@@ -3308,7 +3334,7 @@ fn eval_receiver_type_rep(
 ) -> TypeRep {
     let text = match receiver.kind() {
         "identifier" | "self" | "this" | "shorthand_property_identifier" => {
-            receiver.utf8_text(source.as_bytes()).ok()
+            receiver.safe_text(source).ok()
         }
         _ => None,
     };
@@ -3468,7 +3494,7 @@ fn constructor_type_name(
 
 /// The cleaned base type name of a node's source text (`pkg.Foo`/`a::B` → `Foo`/`B`).
 fn node_clean_type_name(node: &Node, source: &str) -> Option<String> {
-    node.utf8_text(source.as_bytes())
+    node.safe_text(source)
         .ok()
         .and_then(clean_type_name)
 }
@@ -3494,7 +3520,7 @@ fn python_record_var_types(
                 bind_pattern_unknown(&left, source, frame);
                 return;
             }
-            let Ok(var_name) = left.utf8_text(source.as_bytes()) else {
+            let Ok(var_name) = left.safe_text(source) else {
                 return;
             };
             // Annotated `x: Foo = ...` / `x: Foo`.
@@ -3556,7 +3582,7 @@ fn ts_record_var_types(
             if name.kind() != "identifier" {
                 return;
             }
-            let Ok(var_name) = name.utf8_text(source.as_bytes()) else {
+            let Ok(var_name) = name.safe_text(source) else {
                 return;
             };
             // Typed `const x: Foo = ...`.
@@ -3583,7 +3609,7 @@ fn ts_record_var_types(
             if left.kind() != "identifier" {
                 return;
             }
-            let Ok(var_name) = left.utf8_text(source.as_bytes()) else {
+            let Ok(var_name) = left.safe_text(source) else {
                 return;
             };
             let rep = node
@@ -3614,7 +3640,7 @@ fn rust_record_var_types(
             if pattern.kind() != "identifier" {
                 return;
             }
-            let Ok(var_name) = pattern.utf8_text(source.as_bytes()) else {
+            let Ok(var_name) = pattern.safe_text(source) else {
                 return;
             };
             // Typed `let x: Foo = ...`.
@@ -3641,7 +3667,7 @@ fn rust_record_var_types(
             if left.kind() != "identifier" {
                 return;
             }
-            let Ok(var_name) = left.utf8_text(source.as_bytes()) else {
+            let Ok(var_name) = left.safe_text(source) else {
                 return;
             };
             let rep = node
@@ -3662,7 +3688,7 @@ fn rust_record_var_types(
 fn bind_pattern_unknown(node: &Node, source: &str, frame: &mut VarFrame) {
     match node.kind() {
         "identifier" => {
-            if let Ok(name) = node.utf8_text(source.as_bytes()) {
+            if let Ok(name) = node.safe_text(source) {
                 frame.shadow(name);
             }
         }
@@ -3695,7 +3721,7 @@ fn record_params(func_node: &Node, language: Language, source: &str, frame: &mut
         if name_node.kind() != "identifier" {
             continue;
         }
-        let Ok(var_name) = name_node.utf8_text(source.as_bytes()) else {
+        let Ok(var_name) = name_node.safe_text(source) else {
             continue;
         };
         let rep = type_node
@@ -4054,7 +4080,7 @@ fn extract_relationship_target_name(
 fn extract_callable_name(node: &Node, source: &str) -> Option<String> {
     match node.kind() {
         "identifier" | "property_identifier" | "field_identifier" | "type_identifier" => node
-            .utf8_text(source.as_bytes())
+            .safe_text(source)
             .ok()
             .map(|s| s.to_string()),
         "member_expression"
@@ -4158,7 +4184,7 @@ fn extract_env_key(
                 }
                 let property = node.child_by_field_name("property")?;
                 property
-                    .utf8_text(source.as_bytes())
+                    .safe_text(source)
                     .ok()
                     .map(|s| s.to_string())
             }
@@ -4181,7 +4207,7 @@ fn extract_env_key(
 /// bracket/paren/quote/operator char means it is not a simple path (reject), which
 /// keeps callee/receiver matching robust against complex expressions.
 fn node_path_text(node: &Node, source: &str) -> Option<Vec<String>> {
-    let text = node.utf8_text(source.as_bytes()).ok()?;
+    let text = node.safe_text(source).ok()?;
     if text.is_empty() {
         return None;
     }
@@ -4197,7 +4223,7 @@ fn node_path_text(node: &Node, source: &str) -> Option<Vec<String>> {
 
 /// The UTF-8 text of `node` in `source`, if valid.
 fn node_text<'a>(node: &Node, source: &'a str) -> Option<&'a str> {
-    node.utf8_text(source.as_bytes()).ok()
+    node.safe_text(source).ok()
 }
 
 /// True when `node` is a bare `identifier` whose text equals `name` exactly.
@@ -4387,14 +4413,14 @@ fn string_literal_value(node: &Node, source: &str) -> Option<String> {
             "string_content" | "string_fragment" | "interpreted_string_literal_content"
         ) {
             return child
-                .utf8_text(source.as_bytes())
+                .safe_text(source)
                 .ok()
                 .map(|s| s.to_string());
         }
     }
     // Fallback (e.g. an empty string with no content child): strip one matching
     // surrounding quote pair.
-    let text = node.utf8_text(source.as_bytes()).ok()?.trim();
+    let text = node.safe_text(source).ok()?.trim();
     let bytes = text.as_bytes();
     if bytes.len() >= 2 {
         let first = bytes[0];
@@ -4594,13 +4620,13 @@ fn first_child_of_kind<'tree>(node: &Node<'tree>, kind: &str) -> Option<Node<'tr
 /// deeper and is intentionally not treated as the name).
 fn insert_type_param_name(node: &Node, source: &str, out: &mut HashSet<String>) {
     if node.kind() == "type_identifier" {
-        if let Ok(text) = node.utf8_text(source.as_bytes()) {
+        if let Ok(text) = node.safe_text(source) {
             out.insert(text.to_string());
         }
         return;
     }
     if let Some(name) = first_child_of_kind(node, "type_identifier") {
-        if let Ok(text) = name.utf8_text(source.as_bytes()) {
+        if let Ok(text) = name.safe_text(source) {
             out.insert(text.to_string());
         }
     }
@@ -4612,7 +4638,7 @@ fn insert_identifier_names(node: &Node, source: &str, out: &mut HashSet<String>)
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         if child.kind() == "identifier" {
-            if let Ok(text) = child.utf8_text(source.as_bytes()) {
+            if let Ok(text) = child.safe_text(source) {
                 out.insert(text.to_string());
             }
         }
@@ -4669,7 +4695,7 @@ fn collect_declared_type_params(
                 let mut cursor = tp.walk();
                 for child in tp.named_children(&mut cursor) {
                     if child.kind() == "identifier" {
-                        if let Ok(text) = child.utf8_text(source.as_bytes()) {
+                        if let Ok(text) = child.safe_text(source) {
                             out.insert(text.to_string());
                         }
                     } else {
@@ -4703,7 +4729,7 @@ fn collect_type_names(node: &Node, language: Language, source: &str, out: &mut V
     match language {
         Language::Python => match node.kind() {
             "identifier" => {
-                if let Ok(text) = node.utf8_text(source.as_bytes()) {
+                if let Ok(text) = node.safe_text(source) {
                     out.push(text.to_string());
                 }
             }
@@ -4722,7 +4748,7 @@ fn collect_type_names(node: &Node, language: Language, source: &str, out: &mut V
         },
         _ => {
             if node.kind() == "type_identifier" {
-                if let Ok(text) = node.utf8_text(source.as_bytes()) {
+                if let Ok(text) = node.safe_text(source) {
                     out.push(text.to_string());
                 }
                 return;
