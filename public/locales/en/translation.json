@@ -554,7 +554,18 @@
     "sync": "Sync",
     "extension": "Extension",
     "feedback": "Feedback",
-    "yoloMode": "YOLO: commands auto-approved"
+    "yoloMode": "YOLO: commands auto-approved",
+    "index": {
+      "indexingFile": "Indexing {{file}} ({{progress}})",
+      "indexingFileOnly": "Indexing {{file}}",
+      "indexingSymbols": "Indexing symbols ({{progress}})",
+      "indexingSymbolsOnly": "Indexing symbols",
+      "finalizing": "Finalizing index…",
+      "checking": "Checking code index",
+      "pending": "Symbol index pending ({{count}} files)",
+      "partial": "Symbol index partial ({{count}} files pending)",
+      "unavailable": "Symbol index unavailable"
+    }
   },
   "windowControls": {
     "minimize": "Minimize",
