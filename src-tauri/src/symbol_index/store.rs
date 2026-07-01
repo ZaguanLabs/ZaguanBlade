@@ -585,6 +585,22 @@ impl SymbolStore {
         Ok(store)
     }
 
+    /// M5.13 — collapse the write-ahead log back into the main database file and
+    /// truncate the `-wal` sidecar to zero bytes.
+    ///
+    /// With WAL + a single long-lived connection under a heavy cold index,
+    /// SQLite's passive autocheckpoint falls far behind (a 469k-file Firefox
+    /// index left a 560 MB `-wal`), stranding committed data outside the main
+    /// file and slowing the next open (which must replay the whole WAL). Call
+    /// this once indexing settles. A busy checkpoint (some other reader active)
+    /// is NON-FATAL — the checkpoint simply does less and the WAL stays until the
+    /// next attempt; it never blocks or fails the index.
+    pub fn checkpoint(&self) -> Result<(), SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    }
+
     /// Create database schema
     fn create_schema(&self) -> Result<(), SymbolStoreError> {
         let conn = self.conn.lock().unwrap();
@@ -2846,6 +2862,28 @@ mod tests {
             signature: Some("(param: string): void".to_string()),
             content_hash: "hash".to_string(),
         }
+    }
+
+    /// M5.13 — `checkpoint()` must fold the WAL back into the main DB and truncate
+    /// the `-wal` sidecar to zero (the 469k-file Firefox index otherwise left a
+    /// 560 MB stranded WAL).
+    #[test]
+    fn checkpoint_truncates_wal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("symbols.db");
+        let store = SymbolStore::new(&db_path).unwrap();
+        let symbols: Vec<Symbol> = (0..2000)
+            .map(|i| create_test_symbol(&format!("fn_{i}"), "src/lib.rs"))
+            .collect();
+        store.upsert_symbols(&symbols).unwrap();
+
+        let wal_path = dir.path().join("symbols.db-wal");
+        store.checkpoint().unwrap();
+        let wal_len = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+        assert_eq!(
+            wal_len, 0,
+            "WAL sidecar should be truncated to 0 after checkpoint, was {wal_len} bytes"
+        );
     }
 
     fn create_test_relationship(

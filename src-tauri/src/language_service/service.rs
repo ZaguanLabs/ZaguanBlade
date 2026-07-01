@@ -1578,6 +1578,21 @@ impl LanguageService {
             return self.reconcile_index_with_progress_inner(progress, false);
         }
 
+        // M5.13 — every write for this reconcile is now committed (batches +
+        // backfill + receiver-type mining ran above; the rebuild branch returned
+        // its own recursion). Fold the WAL back into the main DB and truncate the
+        // sidecar so it does not grow unbounded across runs and slow the next
+        // open. Best-effort: only after real work, and a failure never fails the
+        // index. (The rebuild branch above `return`s, so this runs exactly once,
+        // on the terminal path.)
+        if total_queued > 0 {
+            if let Err(error) = self.symbol_store.checkpoint() {
+                eprintln!(
+                    "[LanguageService] post-index WAL checkpoint failed (non-fatal): {error}"
+                );
+            }
+        }
+
         final_health.status = if final_health.queued_files == 0
             && final_health.orphaned_files == 0
             && !has_hard_graph_issues
