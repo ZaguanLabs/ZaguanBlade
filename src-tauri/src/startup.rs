@@ -26,41 +26,12 @@ fn emit_index_status<R: Runtime>(app_handle: &tauri::AppHandle<R>, health: Index
     );
 }
 
-fn ensure_project_context_indexer(state: &AppState, workspace: &std::path::Path) {
-    {
-        let guard = state.indexer_manager.lock().unwrap();
-        if let Some(manager) = guard.as_ref() {
-            if manager.matches_workspace(workspace) {
-                return;
-            }
-        }
-    }
-
-    match crate::indexer::IndexerManager::new(workspace) {
-        Ok(manager) => {
-            let mut guard = state.indexer_manager.lock().unwrap();
-            if guard
-                .as_ref()
-                .map(|existing| existing.matches_workspace(workspace))
-                .unwrap_or(false)
-            {
-                return;
-            }
-            *guard = Some(manager);
-            eprintln!(
-                "[Indexer] Project context files initialized for: {}",
-                workspace.display()
-            );
-        }
-        Err(error) => {
-            eprintln!(
-                "[Indexer] Failed to initialize project context files for {}: {}",
-                workspace.display(),
-                error
-            );
-        }
-    }
-}
+// M5.19 — the eager project-context indexer build was removed. It walked the
+// whole workspace and wrote a 130 MiB `.zblade/cache/index.json` at every launch
+// to feed the legacy project-index overview — which is off by default
+// (`project_index_legacy_enabled = false`) and whose only intent (`GetFullContext`)
+// the frontend never sends. The GUI file tree reads the filesystem directly, so
+// nothing consumed this. The symbols index supersedes it entirely.
 
 pub fn ensure_post_ui_startup<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
     let state = app_handle.state::<AppState>();
@@ -134,8 +105,6 @@ pub fn ensure_post_ui_startup<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
                     );
                 }
             }
-
-            ensure_project_context_indexer(&state, &path);
         }
     });
 }
