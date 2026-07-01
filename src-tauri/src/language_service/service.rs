@@ -5966,6 +5966,20 @@ fn extract_semantic_anchors(file_path: &str, content: &str) -> Vec<SemanticAncho
         return anchors;
     }
 
+    // M5.14 — the generic quoted-literal / token scan below only adds value on
+    // front-end, style and markup files, where string literals and tokens are
+    // genuine cross-references (routes, CSS custom properties, event/command/
+    // service names). On systems / back-end / config files it is redundant with
+    // SYMBOLS (which own code navigation) and produces mostly noise plus
+    // misclassification — on Firefox it minted ~5M anchors from C++, tagging
+    // header names `translation_key`, `--x` decrements `css_token`, and class
+    // names `config_key`. Skip it there; the precise translation/route extractors
+    // above already ran for every file, so real i18n and route cross-references
+    // are still captured.
+    if !generic_literal_anchor_scan_applies(file_path) {
+        return anchors;
+    }
+
     for (line_index, line) in content.lines().enumerate() {
         let preview = line.trim().chars().take(240).collect::<String>();
         for (value, character) in extract_quoted_values(line)
@@ -5998,6 +6012,33 @@ fn extract_semantic_anchors(file_path: &str, content: &str) -> Vec<SemanticAncho
     }
 
     anchors
+}
+
+/// M5.14 — languages for which the generic quoted-literal / token anchor scan is
+/// worthwhile: front-end, style and markup, where string literals and tokens are
+/// real cross-references. Systems / back-end languages (C/C++, Rust, Go, Python,
+/// Java, …) and config formats (JSON/YAML/TOML) are excluded — their navigation is
+/// owned by symbols (and, for config, by the precise route/translation extractors),
+/// and the generic scan there is pure noise. Unknown extensions are excluded.
+fn generic_literal_anchor_scan_applies(file_path: &str) -> bool {
+    matches!(
+        Language::capability_for_path(file_path).map(|capability| capability.language),
+        Some(
+            Language::TypeScript
+                | Language::Tsx
+                | Language::JavaScript
+                | Language::Jsx
+                | Language::Astro
+                | Language::Vue
+                | Language::Svelte
+                | Language::Css
+                | Language::Scss
+                | Language::Sass
+                | Language::Less
+                | Language::Html
+                | Language::Markdown
+        )
+    )
 }
 
 fn extract_yaml_route_config_anchors(
@@ -14884,6 +14925,30 @@ metadata:
         let anchors = extract_semantic_anchors("notes.md", "    The correct focus for €1M:\n");
 
         assert!(!anchors.iter().any(|anchor| anchor.value == "1M"));
+    }
+
+    /// M5.14 — the generic literal/token anchor scan is gated to front-end/style/
+    /// markup files. A C++ string literal on an assignment line used to mint a
+    /// `config_key` anchor (part of Firefox's ~5M C++ anchor noise); systems files
+    /// now produce no generic anchors, while the same literal still anchors in TS.
+    #[test]
+    fn generic_literal_anchors_are_gated_to_frontend_languages() {
+        let cpp = extract_semantic_anchors(
+            "src/foo.cpp",
+            "const char* kName = \"BladeProtocolGateway\";\n",
+        );
+        assert!(
+            cpp.is_empty(),
+            "systems-language files must not mint generic literal anchors (got {})",
+            cpp.len()
+        );
+
+        let ts =
+            extract_semantic_anchors("src/foo.ts", "const kName = \"BladeProtocolGateway\";\n");
+        assert!(
+            ts.iter().any(|anchor| anchor.value == "BladeProtocolGateway"),
+            "front-end files still anchor string-literal cross-references"
+        );
     }
 
     #[test]
