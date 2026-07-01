@@ -543,7 +543,8 @@ mod tests {
         related_symbol_to_json, related_test_files_for_paths, stage_semantic_patch_writes,
         symbol_inventory_entries, symbol_inventory_summary, symbol_language_diagnostics,
         symbol_outline_diagnostics, symbol_reference_resolution_json,
-        symbol_search_connection_json, symbol_to_json, EditorState, PatchHunk, SemanticPatchWrite,
+        symbol_search_connection_json, symbol_to_json, symbol_to_json_full, EditorState, PatchHunk,
+        SemanticPatchWrite,
         ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
@@ -1026,7 +1027,9 @@ mod tests {
         let docstring = "line\n tab\t carriage\r control\u{0001}";
         symbol.docstring = Some(docstring.to_string());
 
-        let payload = symbol_to_json(&symbol);
+        // Use the full serializer: escaping must be correct for the embedded docstring
+        // (the lean `symbol_to_json` omits it by design — see reference-not-text).
+        let payload = symbol_to_json_full(&symbol);
         let serialized = serde_json::to_string(&payload).unwrap();
 
         assert!(serialized.contains("\\\""));
@@ -1039,6 +1042,36 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&serialized).unwrap();
         assert_eq!(parsed["name"], symbol.name);
         assert_eq!(parsed["docstring"], docstring);
+    }
+
+    /// M5.14 Step 2 — bulk symbol results are references, not text: no embedded
+    /// docstring (just a `has_docstring` flag + the byte range to read it), but the
+    /// compact signature and locating fields stay. The targeted `symbol_to_json_full`
+    /// still embeds the docstring.
+    #[test]
+    fn bulk_symbol_json_omits_docstring_but_keeps_reference() {
+        let mut symbol = test_symbol("f", "f", SymbolType::Function, 1, None);
+        symbol.docstring = Some("A multi-line doc comment that could be kilobytes".to_string());
+        symbol.signature = Some("(x: i32) -> bool".to_string());
+
+        let lean = symbol_to_json(&symbol);
+        assert!(
+            lean.get("docstring").is_none(),
+            "bulk results must not embed the full docstring"
+        );
+        assert_eq!(lean["has_docstring"], serde_json::json!(true));
+        assert_eq!(lean["signature"], serde_json::json!("(x: i32) -> bool"));
+        assert!(
+            lean.get("byte_offset").is_some() && lean.get("range").is_some(),
+            "the locating reference (byte range + line range) must remain"
+        );
+
+        let full = symbol_to_json_full(&symbol);
+        assert_eq!(
+            full["docstring"],
+            serde_json::json!("A multi-line doc comment that could be kilobytes"),
+            "targeted symbol_resolve still returns the docstring"
+        );
     }
 
     #[test]
@@ -3099,6 +3132,16 @@ fn symbol_path_arg(workspace_root: &Path, path: &str) -> Result<String, String> 
     Ok(normalize_rel_path(relative))
 }
 
+/// Serialize a symbol as a REFERENCE (M5.14 Step 2 — "references, not text").
+///
+/// Bulk/list tools (search, related, references, graph, trace, edit-impact) use
+/// this. It returns everything needed to LOCATE and identify the symbol — name,
+/// type, file, line/char range, and byte range — plus the compact `signature`
+/// (avg ~12 chars, a reference-grade summary worth inlining). It deliberately
+/// does NOT embed the full `docstring` (sparse but up to several KB): a list of
+/// N symbols must not balloon into a 100k-token wall of doc comments. `has_docstring`
+/// tells the caller one exists; it reads the byte range to get it. The targeted
+/// single-symbol `symbol_resolve` uses `symbol_to_json_full` to include it.
 fn symbol_to_json(symbol: &crate::tree_sitter::Symbol) -> serde_json::Value {
     serde_json::json!({
         "id": symbol.id,
@@ -3119,10 +3162,19 @@ fn symbol_to_json(symbol: &crate::tree_sitter::Symbol) -> serde_json::Value {
         "byte_offset": symbol.byte_offset,
         "byte_length": symbol.byte_length,
         "parent_id": symbol.parent_id,
-        "docstring": symbol.docstring,
         "signature": symbol.signature,
+        "has_docstring": symbol.docstring.as_deref().is_some_and(|doc| !doc.is_empty()),
         "content_hash": symbol.content_hash,
     })
+}
+
+/// Like `symbol_to_json` but embeds the full `docstring`. For TARGETED single-symbol
+/// lookups (`symbol_resolve`) where the caller asked for exactly one thing, so the
+/// doc comment is high-value and cannot bloat a list.
+fn symbol_to_json_full(symbol: &crate::tree_sitter::Symbol) -> serde_json::Value {
+    let mut value = symbol_to_json(symbol);
+    value["docstring"] = serde_json::json!(symbol.docstring);
+    value
 }
 
 fn support_level_name(level: crate::tree_sitter::SupportLevel) -> &'static str {
@@ -3374,7 +3426,9 @@ fn semantic_anchor_result_to_json(
         "value": result.anchor.value,
         "line": result.anchor.line,
         "character": result.anchor.character,
-        "preview": result.anchor.preview,
+        // M5.14 Step 2 — reference-not-text: `file_path` + `line`/`character` above
+        // locate the anchor; the caller reads that line on demand rather than
+        // receiving a stored snippet inline.
         "confidence": result.anchor.confidence,
         "score": result.score,
     })
@@ -4043,7 +4097,7 @@ fn symbol_resolve_tool<R: tauri::Runtime>(
         symbol
     };
 
-    let mut payload = symbol_to_json(&resolved);
+    let mut payload = symbol_to_json_full(&resolved);
     payload["_meta"] = serde_json::json!({
         "tool": "symbol_resolve",
         "timing_ms": started.elapsed().as_millis(),

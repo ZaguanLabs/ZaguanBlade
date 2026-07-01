@@ -41,6 +41,41 @@ window.__ZBLADE_DEBUG_FLAGS__ = {
     debugPerf: undefined,
 };
 
+// NVIDIA/X11 WebKitGTK recovery (safety net). On NVIDIA/X11 the GPU context can be
+// lost after the display sleeps for a long time, leaving a stale/black surface when
+// the window is resumed. Forcing a full webview repaint when the window regains
+// focus / becomes visible re-paints the layer and recovers the view. Most useful
+// when GPU compositing is enabled (ZBLADE_WEBKIT_KEEP_COMPOSITING=1 — see
+// src-tauri/src/linux_webkit_workaround.rs); harmless otherwise. Best-effort: only
+// helps if the view is black-but-alive (events still flow); a hard GPU hang needs
+// the default (compositing disabled). At most one imperceptible repaint per focus.
+function forceWebviewRepaint() {
+    try {
+        const root = document.documentElement;
+        // A sub-1 opacity promotes the root to its own compositor layer and marks
+        // it dirty; holding it for a couple of frames then reverting forces a fresh
+        // paint with no layout change and no visible flicker.
+        root.style.opacity = '0.9999';
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                root.style.opacity = '';
+            });
+        });
+    } catch {
+        // Document not ready / unavailable — nothing to recover.
+    }
+}
+
+if (typeof window !== 'undefined') {
+    window.addEventListener('focus', forceWebviewRepaint);
+    window.addEventListener('pageshow', forceWebviewRepaint);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+            forceWebviewRepaint();
+        }
+    });
+}
+
 function hideLoadingScreen() {
     if (hasHiddenLoadingScreen) {
         return;

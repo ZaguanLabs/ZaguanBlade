@@ -1,0 +1,22 @@
+{
+  "case": "sql-multiline-create",
+  "language": "Sql",
+  "parse_status": "scanner",
+  "symbol_count": 1,
+  "relationship_count": 0,
+  "symbols": [
+    {
+      "name": "users",
+      "kind": "struct",
+      "qualified_name": "users",
+      "start_line": 0,
+      "start_col": 13,
+      "end_line": 0,
+      "end_col": 18,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "CREATE TABLE users ("
+    }
+  ],
+  "relationships": []
+}

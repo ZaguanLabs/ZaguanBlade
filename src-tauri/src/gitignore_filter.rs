@@ -1,165 +1,154 @@
-use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use ignore::gitignore::{Gitignore, GitignoreBuilder, Glob};
+use ignore::Match;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
-use walkdir::WalkDir;
 
-/// Thread-safe wrapper around a .gitignore matcher
-/// Recursively loads ALL .gitignore files in the workspace
+/// Thread-safe `.gitignore` matcher with CORRECT per-directory anchoring.
+///
+/// Each directory's `.gitignore` is compiled on its own, anchored to ITS OWN
+/// directory (built lazily and cached), exactly like git. A path is tested
+/// against the global gitignore plus the `.gitignore` of every ancestor
+/// directory from the workspace root down to the path's parent, with deeper
+/// directories winning and `!` negations re-including — matching the behavior of
+/// `git check-ignore`.
+///
+/// This replaces an earlier implementation that eagerly merged EVERY nested
+/// `.gitignore` in the tree into a single matcher rooted at the workspace root.
+/// The `ignore` crate anchors added patterns to the builder's root, so nested
+/// patterns were mis-anchored and over-ignored large repos: e.g. a deep
+/// `arch/riscv/kernel/vdso_cfi/.gitignore` containing `*.c` hid EVERY `.c` file
+/// in the Linux kernel, and `tools/*/.gitignore` `include/` rules hid the
+/// top-level `include/`, leaving discovery with ~1 file. The per-directory model
+/// below scopes each pattern to its own directory, and is also lazy (no full
+/// tree walk at construction).
 #[derive(Clone)]
 pub struct GitignoreFilter {
-    inner: Arc<RwLock<Option<Gitignore>>>,
     workspace_root: PathBuf,
+    /// Global gitignore (`~/.gitignore_global` or XDG `~/.config/git/ignore`),
+    /// anchored at the workspace root and applied (lowest priority) to every
+    /// path. `None` when absent.
+    global: Option<Arc<Gitignore>>,
+    /// Lazily-built, cached per-directory matcher: absolute directory -> its
+    /// compiled `.gitignore` (anchored to that directory), or `None` if the
+    /// directory has no `.gitignore`.
+    per_dir: Arc<RwLock<HashMap<PathBuf, Option<Arc<Gitignore>>>>>,
 }
 
 impl GitignoreFilter {
-    /// Create a new GitignoreFilter for the given workspace root.
-    /// Recursively loads ALL .gitignore files found in the workspace.
+    /// Create a new `GitignoreFilter` for the given workspace root. Per-directory
+    /// `.gitignore` files are loaded lazily on first query (and cached), so
+    /// construction does no filesystem walk.
     pub fn new(workspace_root: &Path) -> Self {
-        let mut builder = GitignoreBuilder::new(workspace_root);
-        let mut gitignore_count = 0;
-
-        // First, add the root .gitignore if it exists
-        let root_gitignore = workspace_root.join(".gitignore");
-        if root_gitignore.exists() {
-            if builder.add(&root_gitignore).is_none() {
-                gitignore_count += 1;
+        let global = Self::find_global_gitignore().and_then(|path| {
+            let mut builder = GitignoreBuilder::new(workspace_root);
+            // `add` returns `Some(err)` only on a hard error; `None` on success.
+            if builder.add(&path).is_none() {
+                builder.build().ok().map(Arc::new)
+            } else {
+                None
             }
-        }
-
-        // Also check for global gitignore (~/.gitignore_global or git config)
-        if let Some(global_gitignore) = Self::find_global_gitignore() {
-            if builder.add(&global_gitignore).is_none() {
-                gitignore_count += 1;
-            }
-        }
-
-        // Recursively find all .gitignore files in subdirectories
-        // We need to be careful not to descend into directories that are already ignored
-        // For simplicity, we'll do a full walk and collect all .gitignore files
-        for entry in WalkDir::new(workspace_root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| {
-                // Skip common large/ignored directories to speed up the walk
-                let name = e.file_name().to_string_lossy();
-                !matches!(
-                    name.as_ref(),
-                    "node_modules"
-                        | ".git"
-                        | "target"
-                        | "dist"
-                        | "build"
-                        | ".next"
-                        | ".nuxt"
-                        | "__pycache__"
-                        | ".venv"
-                        | "venv"
-                        | ".cargo"
-                        | ".rustup"
-                        | "vendor"
-                )
-            })
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-
-            // Skip the root .gitignore (already added)
-            if path == root_gitignore {
-                continue;
-            }
-
-            // Check if this is a .gitignore file
-            if path.file_name().map(|n| n == ".gitignore").unwrap_or(false)
-                && builder.add(path).is_none()
-            {
-                gitignore_count += 1;
-            }
-        }
-
-        let gitignore = if gitignore_count > 0 {
-            Some(
-                builder
-                    .build()
-                    .unwrap_or_else(|_| GitignoreBuilder::new(workspace_root).build().unwrap()),
-            )
-        } else {
-            None
-        };
+        });
 
         Self {
-            inner: Arc::new(RwLock::new(gitignore)),
             workspace_root: workspace_root.to_path_buf(),
+            global,
+            per_dir: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// Find the global gitignore file if it exists
+    /// Find the global gitignore file if it exists.
     fn find_global_gitignore() -> Option<PathBuf> {
-        // Check common locations for global gitignore
         if let Some(home) = dirs::home_dir() {
-            // Check ~/.gitignore_global (common convention)
             let global = home.join(".gitignore_global");
             if global.exists() {
                 return Some(global);
             }
-
-            // Check ~/.config/git/ignore (XDG standard)
             let xdg_ignore = home.join(".config/git/ignore");
             if xdg_ignore.exists() {
                 return Some(xdg_ignore);
             }
         }
-
         None
     }
 
-    /// Check if a path should be ignored according to .gitignore rules.
-    /// Returns true if the path SHOULD be ignored (filtered out).
-    ///
-    /// # Arguments
-    /// * `path` - The path to check (can be absolute or relative)
-    ///
-    /// # Returns
-    /// * `true` if the path should be ignored
-    /// * `false` if the path should be included
-    pub fn should_ignore(&self, path: &Path) -> bool {
-        let guard = self.inner.read().unwrap();
-
-        // If no gitignore loaded, don't filter anything
-        let Some(ref gitignore) = *guard else {
-            return false;
+    /// The compiled `.gitignore` for `dir` (anchored to `dir`), built once and
+    /// cached. `None` when the directory has no `.gitignore` (also cached).
+    fn gitignore_for_dir(&self, dir: &Path) -> Option<Arc<Gitignore>> {
+        if let Some(hit) = self.per_dir.read().unwrap().get(dir) {
+            return hit.clone();
+        }
+        let gi_path = dir.join(".gitignore");
+        let built = if gi_path.is_file() {
+            let mut builder = GitignoreBuilder::new(dir);
+            if builder.add(&gi_path).is_none() {
+                builder.build().ok().map(Arc::new)
+            } else {
+                None
+            }
+        } else {
+            None
         };
+        self.per_dir
+            .write()
+            .unwrap()
+            .insert(dir.to_path_buf(), built.clone());
+        built
+    }
 
-        // Convert to absolute path if needed
+    /// Check whether a path should be ignored according to `.gitignore` rules.
+    /// Returns `true` if the path SHOULD be ignored (filtered out). Accepts an
+    /// absolute path or one relative to the workspace root.
+    pub fn should_ignore(&self, path: &Path) -> bool {
         let abs_path = if path.is_absolute() {
             path.to_path_buf()
         } else {
             self.workspace_root.join(path)
         };
 
-        // Get relative path from workspace root for matching
-        let rel_path = match abs_path.strip_prefix(&self.workspace_root) {
-            Ok(p) => p,
-            Err(_) => {
-                // Path is outside workspace, don't filter
-                return false;
-            }
+        let Ok(rel_path) = abs_path.strip_prefix(&self.workspace_root) else {
+            // Outside the workspace: don't filter.
+            return false;
         };
-
-        // Check if gitignore matches this path
-        let matched = gitignore.matched(rel_path, abs_path.is_dir());
-
-        // The ignore crate returns:
-        // - Ignore if the path should be ignored
-        // - Whitelist if the path is whitelisted (negated patterns like !important.txt)
-        // - None if no pattern matched
-        match matched {
-            ignore::Match::Ignore(_) => true,     // Should be ignored
-            ignore::Match::Whitelist(_) => false, // Explicitly included
-            ignore::Match::None => false,         // No match = include
+        if rel_path.as_os_str().is_empty() {
+            // The workspace root itself.
+            return false;
         }
+
+        let is_dir = abs_path.is_dir();
+        let components: Vec<_> = rel_path.components().map(|c| c.as_os_str()).collect();
+
+        // Accumulate the decision, lowest-priority first so deeper directories
+        // win. For each matcher we use `matched_path_or_any_parents` so that a
+        // path inside an ignored ancestor directory (e.g. `build/` ignored,
+        // querying `build/out.txt`) is correctly reported as ignored.
+        let mut ignored = false;
+
+        // Global gitignore: anchored at the workspace root, applied to the full
+        // relative path.
+        if let Some(global) = &self.global {
+            apply(&mut ignored, global.matched_path_or_any_parents(rel_path, is_dir));
+        }
+
+        // Each ancestor directory's own `.gitignore`, from the workspace root
+        // (j = 0) down to the path's immediate parent (j = len - 1). The path is
+        // matched relative to each ancestor directory.
+        let mut ancestor = self.workspace_root.clone();
+        for j in 0..components.len() {
+            if let Some(gitignore) = self.gitignore_for_dir(&ancestor) {
+                let rel_to_ancestor: PathBuf = components[j..].iter().collect();
+                apply(
+                    &mut ignored,
+                    gitignore.matched_path_or_any_parents(&rel_to_ancestor, is_dir),
+                );
+            }
+            ancestor.push(components[j]);
+        }
+
+        ignored
     }
 
-    /// Helper to filter a list of paths, removing those that should be ignored
+    /// Helper to filter a list of paths, removing those that should be ignored.
     pub fn filter_paths<P: AsRef<Path>>(&self, paths: Vec<P>) -> Vec<PathBuf> {
         paths
             .into_iter()
@@ -175,6 +164,17 @@ impl GitignoreFilter {
     }
 }
 
+/// Fold one matcher's verdict into the running decision. `Ignore` excludes,
+/// `Whitelist` (a `!` negation) re-includes, `None` leaves the prior decision
+/// untouched. Called lowest-priority-first so later (deeper) matchers win.
+fn apply(state: &mut bool, matched: Match<&Glob>) {
+    match matched {
+        Match::Ignore(_) => *state = true,
+        Match::Whitelist(_) => *state = false,
+        Match::None => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,7 +186,6 @@ mod tests {
         let temp = tempdir().unwrap();
         let root = temp.path();
 
-        // Create .gitignore
         let gitignore_content = r#"
 *.log
 .env
@@ -195,16 +194,17 @@ build/
 "#;
         fs::write(root.join(".gitignore"), gitignore_content).unwrap();
 
-        // Create test files/dirs
+        // Create the test files/dirs. The directory entries must exist because
+        // `build/` / `node_modules/` are directory-only patterns.
         fs::write(root.join("test.log"), "").unwrap();
         fs::write(root.join(".env"), "").unwrap();
         fs::write(root.join("test.txt"), "").unwrap();
         fs::create_dir_all(root.join("node_modules")).unwrap();
+        fs::create_dir_all(root.join("build")).unwrap();
         fs::create_dir_all(root.join("src")).unwrap();
 
         let filter = GitignoreFilter::new(root);
 
-        // Test filtering
         assert!(filter.should_ignore(&root.join("test.log")));
         assert!(filter.should_ignore(&root.join(".env")));
         assert!(filter.should_ignore(&root.join("node_modules")));
@@ -219,7 +219,6 @@ build/
         let temp = tempdir().unwrap();
         let root = temp.path();
 
-        // Create .gitignore with negation
         let gitignore_content = r#"
 *.log
 !important.log
@@ -228,10 +227,7 @@ build/
 
         let filter = GitignoreFilter::new(root);
 
-        // test.log should be ignored
         assert!(filter.should_ignore(&root.join("test.log")));
-
-        // important.log should NOT be ignored (whitelisted)
         assert!(!filter.should_ignore(&root.join("important.log")));
     }
 
@@ -242,8 +238,45 @@ build/
 
         let filter = GitignoreFilter::new(root);
 
-        // Without .gitignore, nothing should be filtered
         assert!(!filter.should_ignore(&root.join("anything.txt")));
         assert!(!filter.should_ignore(&root.join(".env")));
+    }
+
+    /// Regression for the Linux-kernel over-ignoring bug: a NESTED `.gitignore`
+    /// must only affect ITS OWN subtree, not the whole repo. A deep `*.c` rule
+    /// must not hide `.c` files elsewhere, and a nested `include/` rule must not
+    /// hide a top-level `include/`.
+    #[test]
+    fn test_nested_gitignore_does_not_leak_to_root() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+
+        // Root .gitignore ignores nothing relevant here.
+        fs::write(root.join(".gitignore"), "*.o\n").unwrap();
+
+        // A deep subdirectory ignores *.c and an include/ dir (kernel-style).
+        let deep = root.join("arch/riscv/kernel/vdso_cfi");
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join(".gitignore"), "*.c\ninclude/\n").unwrap();
+
+        // Real source elsewhere in the tree.
+        fs::create_dir_all(root.join("kernel/sched")).unwrap();
+        fs::write(root.join("kernel/sched/core.c"), "").unwrap();
+        fs::create_dir_all(root.join("include/linux")).unwrap();
+        fs::write(root.join("include/linux/list.h"), "").unwrap();
+
+        // A .c inside the deep dir.
+        fs::write(deep.join("vgettimeofday.c"), "").unwrap();
+
+        let filter = GitignoreFilter::new(root);
+
+        // The deep rule must NOT leak to the rest of the repo.
+        assert!(!filter.should_ignore(&root.join("kernel/sched/core.c")));
+        assert!(!filter.should_ignore(&root.join("kernel")));
+        assert!(!filter.should_ignore(&root.join("include")));
+        assert!(!filter.should_ignore(&root.join("include/linux/list.h")));
+
+        // But it MUST apply within its own subtree.
+        assert!(filter.should_ignore(&deep.join("vgettimeofday.c")));
     }
 }

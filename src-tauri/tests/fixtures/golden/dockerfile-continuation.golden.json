@@ -1,0 +1,22 @@
+{
+  "case": "dockerfile-continuation",
+  "language": "Dockerfile",
+  "parse_status": "scanner",
+  "symbol_count": 1,
+  "relationship_count": 0,
+  "symbols": [
+    {
+      "name": "ubuntu:22.04",
+      "kind": "import",
+      "qualified_name": "ubuntu:22.04",
+      "start_line": 0,
+      "start_col": 4,
+      "end_line": 0,
+      "end_col": 16,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "FROM ubuntu:22.04"
+    }
+  ],
+  "relationships": []
+}

@@ -29,38 +29,52 @@ export function shouldShowIndexStatusCue(indexHealth: IndexHealthSnapshot | null
     return indexHealth.status === 'checking' || indexHealth.status === 'indexing';
 }
 
-export function formatIndexStatusLabel(indexHealth: IndexHealthSnapshot): string {
+/** Minimal shape of i18next's `t`, so this util stays framework-light and testable. */
+export type IndexStatusTranslate = (key: string, options?: Record<string, unknown>) => string;
+
+export function formatIndexStatusLabel(
+    indexHealth: IndexHealthSnapshot,
+    t: IndexStatusTranslate,
+): string {
     if (indexHealth.status === 'indexing') {
         const progress = formatIndexingProgress(indexHealth);
         const currentFile = indexHealth.current_file?.trim();
         if (currentFile) {
             return progress
-                ? `Indexing ${currentFile} (${progress})`
-                : `Indexing ${currentFile}`;
+                ? t('statusBar.index.indexingFile', { file: currentFile, progress })
+                : t('statusBar.index.indexingFileOnly', { file: currentFile });
         }
-        return progress ? `Indexing symbols (${progress})` : 'Indexing symbols';
+        // No current file. Distinguish the post-scan FINALIZATION (relationship
+        // resolution + write-to-disk, which can run for minutes on a large repo)
+        // from active extraction, so the long tail stops looking like a hang.
+        if (getPendingFileCount(indexHealth) === 0) {
+            return t('statusBar.index.finalizing');
+        }
+        return progress
+            ? t('statusBar.index.indexingSymbols', { progress })
+            : t('statusBar.index.indexingSymbolsOnly');
     }
 
     if (indexHealth.status === 'checking') {
-        return 'Checking code index';
+        return t('statusBar.index.checking');
     }
 
     if (indexHealth.status === 'stale') {
         const pendingFiles = getPendingFileCount(indexHealth);
         if (pendingFiles > 0) {
-            return `Symbol index pending (${pendingFiles} files)`;
+            return t('statusBar.index.pending', { count: pendingFiles });
         }
     }
 
     if (indexHealth.status === 'partial') {
         const pendingFiles = getPendingFileCount(indexHealth);
         if (pendingFiles > 0) {
-            return `Symbol index partial (${pendingFiles} files pending)`;
+            return t('statusBar.index.partial', { count: pendingFiles });
         }
     }
 
     if (indexHealth.status === 'error' && !indexHealth.message.trim()) {
-        return 'Symbol index unavailable';
+        return t('statusBar.index.unavailable');
     }
 
     return indexHealth.message;

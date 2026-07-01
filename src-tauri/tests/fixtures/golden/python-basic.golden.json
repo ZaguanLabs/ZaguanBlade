@@ -1,0 +1,138 @@
+{
+  "case": "python-basic",
+  "language": "Python",
+  "parse_status": "ok",
+  "symbol_count": 8,
+  "relationship_count": 5,
+  "symbols": [
+    {
+      "name": "os",
+      "kind": "import",
+      "qualified_name": "os",
+      "start_line": 0,
+      "start_col": 0,
+      "end_line": 0,
+      "end_col": 9,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "greet",
+      "kind": "function",
+      "qualified_name": "greet",
+      "start_line": 3,
+      "start_col": 0,
+      "end_line": 5,
+      "end_col": 23,
+      "parent_qualified_name": null,
+      "docstring": "Return a greeting for the given name.",
+      "signature": "(name: str) -> str"
+    },
+    {
+      "name": "Calculator",
+      "kind": "class",
+      "qualified_name": "Calculator",
+      "start_line": 8,
+      "start_col": 0,
+      "end_line": 12,
+      "end_col": 20,
+      "parent_qualified_name": null,
+      "docstring": "A simple calculator.",
+      "signature": null
+    },
+    {
+      "name": "add",
+      "kind": "method",
+      "qualified_name": "Calculator.add",
+      "start_line": 11,
+      "start_col": 4,
+      "end_line": 12,
+      "end_col": 20,
+      "parent_qualified_name": "Calculator",
+      "docstring": null,
+      "signature": "(self, a: int, b: int) -> int"
+    },
+    {
+      "name": "helper",
+      "kind": "function",
+      "qualified_name": "helper",
+      "start_line": 15,
+      "start_col": 0,
+      "end_line": 16,
+      "end_col": 23,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "(name: str) -> str"
+    },
+    {
+      "name": "load_config",
+      "kind": "function",
+      "qualified_name": "load_config",
+      "start_line": 19,
+      "start_col": 0,
+      "end_line": 21,
+      "end_col": 37,
+      "parent_qualified_name": null,
+      "docstring": "Read the database URL from the environment (M4.2 reads_env fixture).",
+      "signature": "()"
+    },
+    {
+      "name": "getenv",
+      "kind": "function",
+      "qualified_name": "getenv",
+      "start_line": 24,
+      "start_col": 0,
+      "end_line": 27,
+      "end_col": 15,
+      "parent_qualified_name": null,
+      "docstring": "User-defined getenv shadow (M4.2 anchoring): a bare `getenv(...)` call is\n    NOT `os.getenv`, so calling it must NOT emit a reads_env edge.",
+      "signature": "(name)"
+    },
+    {
+      "name": "read_shadowed",
+      "kind": "function",
+      "qualified_name": "read_shadowed",
+      "start_line": 30,
+      "start_col": 0,
+      "end_line": 33,
+      "end_col": 28,
+      "parent_qualified_name": null,
+      "docstring": "NEGATIVE reads_env fixture: calls the user-defined `getenv` above, so no\n    reads_env edge is emitted (only the usual call edge to `getenv`).",
+      "signature": "()"
+    }
+  ],
+  "relationships": [
+    {
+      "relationship_type": "import",
+      "source_qualified_name": "os",
+      "target_name": "os",
+      "line": 0
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "greet",
+      "target_name": "helper",
+      "line": 5
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "helper",
+      "target_name": "strip",
+      "line": 16,
+      "recv_type": "str"
+    },
+    {
+      "relationship_type": "reads_env",
+      "source_qualified_name": "load_config",
+      "target_name": "DATABASE_URL",
+      "line": 19
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "read_shadowed",
+      "target_name": "getenv",
+      "line": 33
+    }
+  ]
+}

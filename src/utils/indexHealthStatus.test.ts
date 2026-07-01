@@ -21,6 +21,28 @@ function makeHealth(overrides: Partial<IndexHealthSnapshot> & { status: IndexHea
     };
 }
 
+// Mock of i18next `t` using the English resources + `{{var}}` interpolation, so the
+// label assertions verify the localized output (and the key selection logic).
+const EN_INDEX: Record<string, string> = {
+    'statusBar.index.indexingFile': 'Indexing {{file}} ({{progress}})',
+    'statusBar.index.indexingFileOnly': 'Indexing {{file}}',
+    'statusBar.index.indexingSymbols': 'Indexing symbols ({{progress}})',
+    'statusBar.index.indexingSymbolsOnly': 'Indexing symbols',
+    'statusBar.index.finalizing': 'Finalizing index…',
+    'statusBar.index.checking': 'Checking code index',
+    'statusBar.index.pending': 'Symbol index pending ({{count}} files)',
+    'statusBar.index.partial': 'Symbol index partial ({{count}} files pending)',
+    'statusBar.index.unavailable': 'Symbol index unavailable',
+};
+
+function t(key: string, options: Record<string, unknown> = {}): string {
+    let text = EN_INDEX[key] ?? key;
+    for (const [name, value] of Object.entries(options)) {
+        text = text.replace(new RegExp(`\\{\\{${name}\\}\\}`, 'g'), String(value));
+    }
+    return text;
+}
+
 test('does not show cue for stale or partial symbol index health with pending work', () => {
     assert.equal(shouldShowIndexStatusCue(makeHealth({
         status: 'stale',
@@ -53,5 +75,20 @@ test('formats active indexing progress from remaining queued files', () => {
         current_file: 'src/main.ts',
     });
 
-    assert.equal(formatIndexStatusLabel(health), 'Indexing src/main.ts (2/5)');
+    assert.equal(formatIndexStatusLabel(health, t), 'Indexing src/main.ts (2/5)');
+});
+
+test('shows a distinct finalizing phase after the scan (no current file, nothing queued)', () => {
+    // Post-scan: relationship resolution + write-to-disk. Previously this showed
+    // "Indexing symbols" and looked like a hang.
+    const health = makeHealth({
+        status: 'indexing',
+        indexed_files: 469627,
+        supported_files: 469627,
+        queued_files: 0,
+        current_file: undefined,
+        message: 'Resolving symbol relationships...',
+    });
+
+    assert.equal(formatIndexStatusLabel(health, t), 'Finalizing index…');
 });

@@ -1,0 +1,4 @@
+- name: alpha
+  port: 8080
+- name: beta
+  port: 9090

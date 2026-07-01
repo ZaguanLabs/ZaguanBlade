@@ -1601,7 +1601,7 @@ const AppLayoutInner: React.FC = () => {
                                 <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden="true" />
                             )}
                             <span className="truncate">
-                                {formatIndexStatusLabel(indexHealth)}
+                                {formatIndexStatusLabel(indexHealth, t)}
                             </span>
                         </span>
                     )}

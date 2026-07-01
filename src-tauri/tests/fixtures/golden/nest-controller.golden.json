@@ -1,0 +1,77 @@
+{
+  "case": "nest-controller",
+  "language": "TypeScript",
+  "parse_status": "ok",
+  "symbol_count": 4,
+  "relationship_count": 3,
+  "symbols": [
+    {
+      "name": "@nestjs/common",
+      "kind": "import",
+      "qualified_name": "@nestjs/common",
+      "start_line": 0,
+      "start_col": 0,
+      "end_line": 0,
+      "end_col": 49,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "UsersController",
+      "kind": "class",
+      "qualified_name": "UsersController",
+      "start_line": 3,
+      "start_col": 7,
+      "end_line": 8,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "GET /users/{}",
+      "kind": "route",
+      "qualified_name": "GET /users/{}",
+      "start_line": 4,
+      "start_col": 4,
+      "end_line": 4,
+      "end_col": 15,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "findOne",
+      "kind": "method",
+      "qualified_name": "UsersController.findOne",
+      "start_line": 5,
+      "start_col": 4,
+      "end_line": 7,
+      "end_col": 5,
+      "parent_qualified_name": "UsersController",
+      "docstring": null,
+      "signature": "(id: string) : string"
+    }
+  ],
+  "relationships": [
+    {
+      "relationship_type": "import",
+      "source_qualified_name": "@nestjs/common",
+      "target_name": "@nestjs/common",
+      "line": 0
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "UsersController",
+      "target_name": "Get",
+      "line": 4
+    },
+    {
+      "relationship_type": "handles",
+      "source_qualified_name": "GET /users/{}",
+      "target_name": "findOne",
+      "line": 4
+    }
+  ]
+}

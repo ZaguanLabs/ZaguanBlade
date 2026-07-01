@@ -75,7 +75,6 @@ pub struct AppState {
     pub language_service: RwLock<Option<std::sync::Arc<crate::language_service::LanguageService>>>, // v1.3: Unified Language Service
     pub worktree: RwLock<Option<std::sync::Arc<WorktreeStore>>>, // Shared workspace snapshot/index
     pub uncommitted_changes: UncommittedChangeTracker, // Track AI changes pending accept/reject
-    pub indexer_manager: Mutex<Option<crate::indexer::IndexerManager>>, // Project indexer
     pub feature_flags: FeatureFlags,                   // Headless migration feature flags
     pub tabs: Mutex<Vec<crate::core_state::TabInfo>>,  // Headless: tab state
     pub active_tab_id: Mutex<Option<String>>,          // Headless: active tab ID
@@ -137,10 +136,6 @@ impl AppState {
             user_id.clone(),
         );
 
-        // IndexerManager will be initialized asynchronously after AppState is created
-        // This ensures GUI launches immediately without blocking on indexing
-        let indexer_manager = None;
-
         // Initialize WebSocket connection manager before config is moved
         let ws_connection = Arc::new(WsConnectionManager::new(
             config.blade_url.clone(),
@@ -177,7 +172,6 @@ impl AppState {
             language_service: RwLock::new(None),
             worktree: RwLock::new(None),
             uncommitted_changes: UncommittedChangeTracker::new(),
-            indexer_manager: Mutex::new(indexer_manager),
             feature_flags: FeatureFlags::new(),
             tabs: Mutex::new(Vec::new()),
             active_tab_id: Mutex::new(None),
@@ -340,10 +334,6 @@ impl AppState {
             .worktree
             .write()
             .map_err(|e| format!("Failed to write worktree store: {}", e))? = None;
-        *self
-            .indexer_manager
-            .lock()
-            .map_err(|e| format!("Failed to lock indexer manager: {}", e))? = None;
         Ok(())
     }
 

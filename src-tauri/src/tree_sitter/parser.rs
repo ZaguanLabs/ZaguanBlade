@@ -55,6 +55,7 @@ pub enum TreeSitterGrammar {
     Python,
     Rust,
     Go,
+    Cpp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +119,35 @@ pub struct LanguageCapability {
     pub extracts: ExtractionCapabilities,
 }
 
+/// Per-file parse time budget. A tree-sitter parse on pathological input can run
+/// for a very long time; without a bound it would stall an index worker — and
+/// therefore the whole reconcile — indefinitely. (Ported from the inspiration
+/// project, which uses a 5 s/file budget.)
+const PARSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Parse `code` with a wall-clock budget (`PARSE_TIMEOUT`). tree-sitter invokes the
+/// progress callback periodically; returning `Break` cancels the parse, which then
+/// yields `None`. The caller treats `None` as a parse failure and skips the file,
+/// so a single pathological file cannot hang indexing.
+fn parse_with_timeout(parser: &mut Parser, code: &str, old_tree: Option<&Tree>) -> Option<Tree> {
+    let bytes = code.as_bytes();
+    let len = bytes.len();
+    let deadline = std::time::Instant::now() + PARSE_TIMEOUT;
+    let mut progress = move |_state: &tree_sitter::ParseState| {
+        if std::time::Instant::now() >= deadline {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        }
+    };
+    let options = tree_sitter::ParseOptions::new().progress_callback(&mut progress);
+    parser.parse_with_options(
+        &mut |i, _| (i < len).then(|| &bytes[i..]).unwrap_or_default(),
+        old_tree,
+        Some(options),
+    )
+}
+
 const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
     LanguageCapability {
         language: Language::TypeScript,
@@ -125,7 +155,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["ts"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::TypeScript),
         support: SupportLevel::Full,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -134,7 +164,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["tsx"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::Tsx),
         support: SupportLevel::Full,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -145,7 +175,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
             target: Language::Tsx,
         },
         support: SupportLevel::Partial,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -154,7 +184,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["js", "mjs", "cjs"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::JavaScript),
         support: SupportLevel::Full,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -163,7 +193,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["jsx"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::JavaScript),
         support: SupportLevel::Full,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -172,7 +202,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["py"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::Python),
         support: SupportLevel::Full,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -181,7 +211,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["rs"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::Rust),
         support: SupportLevel::Full,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -190,7 +220,7 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["go"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::Go),
         support: SupportLevel::Full,
-        extractor_version: 1,
+        extractor_version: 2,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -341,10 +371,15 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         language: Language::Cpp,
         display_name: "C/C++",
         extensions: &["c", "h", "cc", "cxx", "cpp", "hpp", "hxx"],
-        parser: ParserKind::Scanner,
+        // M5.3: graduated from the regex line-scanner to the real `tree-sitter-cpp`
+        // grammar. DEFINITIONS-ONLY (N8): no call graph / relationships until
+        // source-attribution fixtures exist — so `relationships: false`, which the
+        // N8 gate in `extract_symbol_relationships` reads to skip the whole edge
+        // walk. Stays `Partial` (Full is reserved for defs+imports+relationships).
+        parser: ParserKind::TreeSitter(TreeSitterGrammar::Cpp),
         support: SupportLevel::Partial,
-        extractor_version: 1,
-        extracts: ExtractionCapabilities::scanner(true),
+        extractor_version: 2,
+        extracts: ExtractionCapabilities::code(true, false, false),
     },
     LanguageCapability {
         language: Language::Shell,
@@ -384,10 +419,60 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
     },
 ];
 
+/// Exact (case-sensitive) basenames mapped to the best-fitting existing
+/// `Language`. This is the finite, committed set from milestone M1.3 — no
+/// open-ended "etc."; later additions go through the plan's promotion list.
+///
+/// Each target is an existing language whose downstream scanner never errors on
+/// foreign content (config scanners decline non-matching input and semantic
+/// anchors are extracted regardless), so every entry detects-and-produces at
+/// least anchors. See `M1.3` notes in the report for the per-entry rationale:
+///   - `.env` / `requirements*.txt` → Toml: line `key[=...]` extraction yields
+///     real env-var / dependency-name symbols.
+///   - `go.mod` / `Kconfig` → Toml: no `=`-bearing lines, so anchors only (no
+///     false-positive symbols).
+///   - `go.sum` → Json: its `module ver hash=` lines would mis-parse under the
+///     Toml/Yaml key scanners; serde_json simply declines → anchors only.
+///   - `kustomization.yaml` → Yaml: it is YAML; full config-key extraction.
+///   - Bazel `BUILD` / `BUILD.bazel` / `WORKSPACE` → Python: Starlark is a
+///     Python dialect that tree-sitter-python parses safely.
+const FILENAME_TABLE: &[(&str, Language)] = &[
+    ("go.mod", Language::Toml),
+    ("go.sum", Language::Json),
+    ("requirements.txt", Language::Toml),
+    ("requirements-dev.txt", Language::Toml),
+    (".env", Language::Toml),
+    ("kustomization.yaml", Language::Yaml),
+    ("BUILD", Language::Python),
+    ("BUILD.bazel", Language::Python),
+    ("WORKSPACE", Language::Python),
+    ("Kconfig", Language::Toml),
+];
+
+/// Compound (multi-dot) extension suffixes. Scanned first-dot→last-dot so the
+/// most specific suffix wins, and consulted *before* the plain last-extension
+/// fallback. `.blade.php` (Laravel Blade) has no dedicated grammar, so it maps
+/// to the closest existing variant (PHP), matching today's effective behaviour
+/// but now as an explicit, stable rule.
+const COMPOUND_EXT_TABLE: &[(&str, Language)] = &[("blade.php", Language::Php)];
+
 impl Language {
-    /// Detect language from file path extension
+    /// Detect language from a file path (filename table → compound extension →
+    /// plain last-extension). Pure path-based; for content-aware detection of
+    /// extensionless files use [`Language::detect_with_head`].
     pub fn from_path(path: &str) -> Option<Self> {
         let file_name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+
+        // 1. Exact filename table (case-sensitive: Bazel `BUILD`/`WORKSPACE`,
+        //    `Kconfig`, `.env`, …).
+        if let Some(language) = FILENAME_TABLE
+            .iter()
+            .find(|(name, _)| *name == file_name)
+            .map(|(_, language)| *language)
+        {
+            return Some(language);
+        }
+
         let file_name_lower = file_name.to_lowercase();
         if file_name_lower == "dockerfile" || file_name_lower.starts_with("dockerfile.") {
             return Some(Language::Dockerfile);
@@ -397,8 +482,88 @@ impl Language {
         {
             return Some(Language::BuildScript);
         }
+
+        // 2. Compound extension table (first-dot→last-dot) before the plain
+        //    last-extension fallback, so `.blade.php` wins over `.php`.
+        if let Some(language) = Self::from_compound_extension(&file_name_lower) {
+            return Some(language);
+        }
+
+        // 3. Plain last-extension fallback.
         let ext = path.rsplit('.').next()?;
         Self::from_extension(ext)
+    }
+
+    /// Walk each `.`-delimited boundary from the first dot toward the last,
+    /// returning the first matching compound suffix (longest/most-specific
+    /// first) from [`COMPOUND_EXT_TABLE`].
+    fn from_compound_extension(file_name_lower: &str) -> Option<Self> {
+        let mut search = file_name_lower;
+        while let Some(dot) = search.find('.') {
+            let suffix = &search[dot + 1..];
+            if let Some(language) = COMPOUND_EXT_TABLE
+                .iter()
+                .find(|(ext, _)| *ext == suffix)
+                .map(|(_, language)| *language)
+            {
+                return Some(language);
+            }
+            search = suffix;
+        }
+        None
+    }
+
+    /// Detect language using the path first; if the path can't classify the
+    /// file (e.g. an extensionless script), fall back to a shebang sniff of the
+    /// file's leading bytes. Pure-path [`Language::from_path`] remains the
+    /// primary path and is tried first.
+    pub fn detect_with_head(path: &str, head: &[u8]) -> Option<Self> {
+        if let Some(language) = Self::from_path(path) {
+            return Some(language);
+        }
+        let first_line_end = head.iter().position(|&b| b == b'\n').unwrap_or(head.len());
+        let first_line = String::from_utf8_lossy(&head[..first_line_end]);
+        Self::detect_by_shebang(&first_line)
+    }
+
+    /// Map a `#!` shebang line to a `Language`, taking the interpreter basename
+    /// (or the token after `env`). Only interpreters with an existing
+    /// `Language` are mapped.
+    pub fn detect_by_shebang(head: &str) -> Option<Self> {
+        let first_line = head.lines().next()?;
+        let rest = first_line.strip_prefix("#!")?;
+
+        let mut tokens = rest.split_whitespace();
+        let first = tokens.next()?;
+        let mut interpreter = first.rsplit(['/', '\\']).next().unwrap_or(first);
+
+        // `#!/usr/bin/env [-S] [VAR=val ...] python3 -u` → real interpreter is
+        // the first token after `env` that is neither a flag nor an assignment.
+        if interpreter == "env" {
+            interpreter = tokens
+                .find(|token| !token.starts_with('-') && !token.contains('='))?;
+            interpreter = interpreter.rsplit(['/', '\\']).next().unwrap_or(interpreter);
+        }
+
+        Self::interpreter_to_language(interpreter)
+    }
+
+    /// Map an interpreter basename (e.g. `python3.11`, `bash`, `node`) to an
+    /// existing `Language`.
+    fn interpreter_to_language(interpreter: &str) -> Option<Self> {
+        let lower = interpreter.to_ascii_lowercase();
+        if lower.starts_with("python") {
+            return Some(Language::Python);
+        }
+        if lower.starts_with("php") {
+            return Some(Language::Php);
+        }
+        match lower.as_str() {
+            "bash" | "sh" | "zsh" | "fish" | "dash" | "ksh" | "ash" => Some(Language::Shell),
+            "node" | "nodejs" => Some(Language::JavaScript),
+            "ruby" | "jruby" => Some(Language::Ruby),
+            _ => None,
+        }
     }
 
     pub fn from_extension(extension: &str) -> Option<Self> {
@@ -459,10 +624,6 @@ impl Language {
 
     pub fn is_kotlin_scanner(self) -> bool {
         matches!(self, Language::Kotlin)
-    }
-
-    pub fn is_cpp_scanner(self) -> bool {
-        matches!(self, Language::Cpp)
     }
 
     pub fn is_dockerfile_scanner(self) -> bool {
@@ -561,6 +722,7 @@ impl TreeSitterParser {
             }
             TreeSitterGrammar::Rust => parser.set_language(&tree_sitter_rust::LANGUAGE.into())?,
             TreeSitterGrammar::Go => parser.set_language(&tree_sitter_go::LANGUAGE.into())?,
+            TreeSitterGrammar::Cpp => parser.set_language(&tree_sitter_cpp::LANGUAGE.into())?,
         }
         Ok(parser)
     }
@@ -574,7 +736,7 @@ impl TreeSitterParser {
             .get_mut(&language)
             .ok_or(TreeSitterError::UnsupportedLanguage)?;
 
-        parser.parse(code, None).ok_or(TreeSitterError::ParseFailed)
+        parse_with_timeout(parser, code, None).ok_or(TreeSitterError::ParseFailed)
     }
 
     /// Parse source code with an existing tree for incremental updates
@@ -592,9 +754,7 @@ impl TreeSitterParser {
             .get_mut(&language)
             .ok_or(TreeSitterError::UnsupportedLanguage)?;
 
-        parser
-            .parse(code, Some(old_tree))
-            .ok_or(TreeSitterError::ParseFailed)
+        parse_with_timeout(parser, code, Some(old_tree)).ok_or(TreeSitterError::ParseFailed)
     }
 
     /// Check if a language is supported
@@ -722,6 +882,107 @@ mod tests {
             Language::from_path("cmake/helpers.cmake"),
             Some(Language::BuildScript)
         );
+    }
+
+    #[test]
+    fn file_type_detection_filename_table_resolves_invisible_files() {
+        // Each committed FILENAME_TABLE entry must resolve to its mapped
+        // existing language (and therefore become a supported, indexable file).
+        let cases = [
+            ("go.mod", Language::Toml, SupportLevel::Partial),
+            ("path/to/go.mod", Language::Toml, SupportLevel::Partial),
+            ("go.sum", Language::Json, SupportLevel::Partial),
+            ("requirements.txt", Language::Toml, SupportLevel::Partial),
+            ("requirements-dev.txt", Language::Toml, SupportLevel::Partial),
+            (".env", Language::Toml, SupportLevel::Partial),
+            ("config/.env", Language::Toml, SupportLevel::Partial),
+            ("kustomization.yaml", Language::Yaml, SupportLevel::Partial),
+            ("BUILD", Language::Python, SupportLevel::Full),
+            ("src/BUILD", Language::Python, SupportLevel::Full),
+            ("BUILD.bazel", Language::Python, SupportLevel::Full),
+            ("WORKSPACE", Language::Python, SupportLevel::Full),
+            ("Kconfig", Language::Toml, SupportLevel::Partial),
+        ];
+        for (path, expected, support) in cases {
+            assert_eq!(
+                Language::from_path(path),
+                Some(expected),
+                "filename {path} should resolve to {expected:?}"
+            );
+            assert_eq!(
+                Language::capability_for_path(path).map(|capability| capability.support),
+                Some(support),
+                "filename {path} should report support level {support:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn file_type_detection_filename_table_is_case_sensitive_for_bazel_names() {
+        // Bazel/Kconfig names are intentionally case-sensitive so a lowercase
+        // `build` or `workspace` does not get misclassified as Starlark.
+        assert_eq!(Language::from_path("BUILD"), Some(Language::Python));
+        assert_eq!(Language::from_path("build"), None);
+        assert_eq!(Language::from_path("workspace"), None);
+        assert_eq!(Language::from_path("kconfig"), None);
+    }
+
+    #[test]
+    fn file_type_detection_compound_extension_wins_over_last_extension() {
+        assert_eq!(
+            Language::from_path("resources/views/welcome.blade.php"),
+            Some(Language::Php)
+        );
+        assert_eq!(Language::from_path("welcome.blade.php"), Some(Language::Php));
+        // A plain `.php` still resolves through the last-extension fallback.
+        assert_eq!(Language::from_path("app.php"), Some(Language::Php));
+        // Unrelated compound extensions still fall through to the last ext.
+        assert_eq!(
+            Language::from_path("src/Button.module.css"),
+            Some(Language::Css)
+        );
+    }
+
+    #[test]
+    fn file_type_detection_shebang_resolves_extensionless_scripts() {
+        let cases = [
+            ("#!/usr/bin/env python3\nprint('hi')\n", Language::Python),
+            ("#!/usr/bin/python\n", Language::Python),
+            ("#!/usr/bin/env python3.11 -u\n", Language::Python),
+            ("#!/bin/bash\necho hi\n", Language::Shell),
+            ("#!/bin/sh\n", Language::Shell),
+            ("#!/usr/bin/env zsh\n", Language::Shell),
+            ("#!/usr/bin/env node\n", Language::JavaScript),
+            ("#!/usr/bin/env -S node --flag\n", Language::JavaScript),
+            ("#!/usr/bin/ruby\n", Language::Ruby),
+            ("#!/usr/bin/env php\n", Language::Php),
+        ];
+        for (head, expected) in cases {
+            assert_eq!(
+                Language::detect_by_shebang(head),
+                Some(expected),
+                "shebang {head:?} should resolve to {expected:?}"
+            );
+            // detect_with_head: path gives nothing (extensionless), head wins.
+            assert_eq!(
+                Language::detect_with_head("scripts/run", head.as_bytes()),
+                Some(expected),
+                "detect_with_head for {head:?} should resolve to {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn file_type_detection_shebang_ignored_when_path_is_classifiable() {
+        // A real extension/filename must win over the shebang sniff.
+        assert_eq!(
+            Language::detect_with_head("main.rs", b"#!/usr/bin/env python3\n"),
+            Some(Language::Rust)
+        );
+        // No shebang and an unknown extensionless name → still unknown.
+        assert_eq!(Language::detect_with_head("LICENSE", b"MIT License\n"), None);
+        assert_eq!(Language::detect_by_shebang("not a shebang"), None);
+        assert_eq!(Language::detect_by_shebang("#!/usr/bin/env weirdlang"), None);
     }
 
     #[test]

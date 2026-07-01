@@ -1,0 +1,288 @@
+{
+  "case": "rust-basic",
+  "language": "Rust",
+  "parse_status": "ok",
+  "symbol_count": 18,
+  "relationship_count": 10,
+  "symbols": [
+    {
+      "name": "std::collections::HashMap",
+      "kind": "import",
+      "qualified_name": "std::collections::HashMap",
+      "start_line": 1,
+      "start_col": 0,
+      "end_line": 1,
+      "end_col": 30,
+      "parent_qualified_name": null,
+      "docstring": "! Module-level documentation for the geometry fixture.",
+      "signature": null
+    },
+    {
+      "name": "Point",
+      "kind": "struct",
+      "qualified_name": "Point",
+      "start_line": 4,
+      "start_col": 0,
+      "end_line": 7,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "A point in 2D space.",
+      "signature": null
+    },
+    {
+      "name": "x",
+      "kind": "property",
+      "qualified_name": "Point.x",
+      "start_line": 5,
+      "start_col": 4,
+      "end_line": 5,
+      "end_col": 14,
+      "parent_qualified_name": "Point",
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "y",
+      "kind": "property",
+      "qualified_name": "Point.y",
+      "start_line": 6,
+      "start_col": 4,
+      "end_line": 6,
+      "end_col": 14,
+      "parent_qualified_name": "Point",
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "Color",
+      "kind": "enum",
+      "qualified_name": "Color",
+      "start_line": 10,
+      "start_col": 0,
+      "end_line": 14,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "Color options for rendering.",
+      "signature": null
+    },
+    {
+      "name": "Red",
+      "kind": "enum_member",
+      "qualified_name": "Color.Red",
+      "start_line": 11,
+      "start_col": 4,
+      "end_line": 11,
+      "end_col": 7,
+      "parent_qualified_name": "Color",
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "Green",
+      "kind": "enum_member",
+      "qualified_name": "Color.Green",
+      "start_line": 12,
+      "start_col": 4,
+      "end_line": 12,
+      "end_col": 9,
+      "parent_qualified_name": "Color",
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "Blue",
+      "kind": "enum_member",
+      "qualified_name": "Color.Blue",
+      "start_line": 13,
+      "start_col": 4,
+      "end_line": 13,
+      "end_col": 8,
+      "parent_qualified_name": "Color",
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "impl Point",
+      "kind": "impl",
+      "qualified_name": "impl Point",
+      "start_line": 16,
+      "start_col": 0,
+      "end_line": 26,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "new",
+      "kind": "method",
+      "qualified_name": "Point::new",
+      "start_line": 18,
+      "start_col": 4,
+      "end_line": 20,
+      "end_col": 5,
+      "parent_qualified_name": "Point",
+      "docstring": "Create a new point.",
+      "signature": "(x: i32, y: i32) Point"
+    },
+    {
+      "name": "sum",
+      "kind": "method",
+      "qualified_name": "Point::sum",
+      "start_line": 23,
+      "start_col": 4,
+      "end_line": 25,
+      "end_col": 5,
+      "parent_qualified_name": "Point",
+      "docstring": "Compute the sum of the coordinates.",
+      "signature": "(&self) i32"
+    },
+    {
+      "name": "run",
+      "kind": "function",
+      "qualified_name": "run",
+      "start_line": 29,
+      "start_col": 0,
+      "end_line": 34,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "Entry-point helper that builds a point and logs it.",
+      "signature": "(map: HashMap<String, i32>) i32"
+    },
+    {
+      "name": "pick",
+      "kind": "function",
+      "qualified_name": "pick",
+      "start_line": 40,
+      "start_col": 0,
+      "end_line": 43,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "but the closure's argument/return types are kept.",
+      "signature": "(items: Vec<T>, anchor: Point, choose: &dyn Fn(Color) -> T) Option<T>"
+    },
+    {
+      "name": "load_api_key",
+      "kind": "function",
+      "qualified_name": "load_api_key",
+      "start_line": 47,
+      "start_col": 0,
+      "end_line": 49,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "`std::env::var` accessor also yields the usual `call` edge to `var`.",
+      "signature": "()"
+    },
+    {
+      "name": "EnvReader",
+      "kind": "struct",
+      "qualified_name": "EnvReader",
+      "start_line": 52,
+      "start_col": 0,
+      "end_line": 54,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "Holds a field named `env` whose `var` method shadows the env accessor name.",
+      "signature": null
+    },
+    {
+      "name": "env",
+      "kind": "property",
+      "qualified_name": "EnvReader.env",
+      "start_line": 53,
+      "start_col": 4,
+      "end_line": 53,
+      "end_col": 14,
+      "parent_qualified_name": "EnvReader",
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "impl EnvReader",
+      "kind": "impl",
+      "qualified_name": "impl EnvReader",
+      "start_line": 56,
+      "start_col": 0,
+      "end_line": 64,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "read_field",
+      "kind": "method",
+      "qualified_name": "EnvReader::read_field",
+      "start_line": 61,
+      "start_col": 4,
+      "end_line": 63,
+      "end_col": 5,
+      "parent_qualified_name": "EnvReader",
+      "docstring": "`var`.",
+      "signature": "(&self)"
+    }
+  ],
+  "relationships": [
+    {
+      "relationship_type": "import",
+      "source_qualified_name": "std::collections::HashMap",
+      "target_name": "std::collections::HashMap",
+      "line": 1
+    },
+    {
+      "relationship_type": "uses_type",
+      "source_qualified_name": "Point::new",
+      "target_name": "Point",
+      "line": 18
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "run",
+      "target_name": "new",
+      "line": 31
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "run",
+      "target_name": "println",
+      "line": 32
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "run",
+      "target_name": "sum",
+      "line": 33,
+      "recv_type": "Point"
+    },
+    {
+      "relationship_type": "uses_type",
+      "source_qualified_name": "pick",
+      "target_name": "Color",
+      "line": 40
+    },
+    {
+      "relationship_type": "uses_type",
+      "source_qualified_name": "pick",
+      "target_name": "Point",
+      "line": 40
+    },
+    {
+      "relationship_type": "reads_env",
+      "source_qualified_name": "load_api_key",
+      "target_name": "API_KEY",
+      "line": 47
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "load_api_key",
+      "target_name": "var",
+      "line": 48
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "EnvReader::read_field",
+      "target_name": "var",
+      "line": 62
+    }
+  ]
+}

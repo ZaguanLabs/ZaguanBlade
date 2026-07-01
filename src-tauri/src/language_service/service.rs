@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, RwLock};
 
-use crate::buffer_snapshot::{BufferSnapshot, BufferSnapshotStore};
+use crate::buffer_snapshot::{BufferSnapshot, BufferSnapshotSource, BufferSnapshotStore};
 use crate::gitignore_filter::GitignoreFilter;
 use crate::project_settings;
 use crate::symbol_index::{
@@ -291,6 +291,81 @@ struct SymbolExtraction<'a> {
     language: Language,
 }
 
+/// M5.7 — full-reconcile streaming. The reconcile stages each file's extraction
+/// (symbols + the full source `String` + an `Arc<BufferSnapshot>`) before writing
+/// it. Accumulating ALL files before a single commit blew memory to 14 GiB on the
+/// Linux kernel (77k files). Instead we commit in bounded batches of this many
+/// files and drop each batch, so peak memory is O(batch), not O(repo).
+///
+/// M5.15 — raised 1_000 → 4_000. On repos of many SMALL files (Firefox: ~5 KB
+/// avg) the old cap bound long before `BATCH_BYTE_BUDGET`, making batches tiny and
+/// the extract→commit barrier fire constantly (cores idle each serial commit).
+/// Bigger batches amortize the barrier; `BATCH_BYTE_BUDGET` still bounds memory.
+/// M5.17 — 4_000 → 10_000. Now that the WAL auto-checkpoint no longer stalls the
+/// committer every few MB (see `configure_index_pragmas`), the committer keeps up
+/// with extraction, so larger batches (fewer inter-batch barriers) pay off;
+/// `BATCH_BYTE_BUDGET` still caps staged memory regardless of file count.
+const RECONCILE_BATCH_SIZE: usize = 10_000;
+
+/// M5.7 — defensive per-file cap. A pathological/generated file can declare an
+/// absurd number of symbols; we truncate (with a log) so a single file cannot
+/// spike a batch's memory. Real source files are far below this (the kernel's
+/// largest hand-written files are in the hundreds).
+const MAX_SYMBOLS_PER_FILE: usize = 25_000;
+
+/// M5.7 — a single batch never stages more than this many BYTES of file content
+/// (whichever comes first with `RECONCILE_BATCH_SIZE`). Batching by file COUNT
+/// alone does not bound memory when file sizes vary by 1000× — the kernel's
+/// generated multi-MB headers mean a 1000-file batch landing in such a directory
+/// holds gigabytes. Bounding by content bytes keeps peak memory flat regardless
+/// of how large files are distributed.
+///
+/// M5.15 — 24 → 48 MiB. With the overlap committer (extract↔commit pipeline) at
+/// most ~3 batches are in flight, so peak staged content is ~3 × this; 48 MiB
+/// keeps that ~144 MiB — trivial — while making each parallel-extract phase longer
+/// relative to its commit, so the cores stay busy.
+const BATCH_BYTE_BUDGET: u64 = 48 * 1024 * 1024;
+
+/// M5.4 — minimum wall-clock between progress (IPC) emits during the parallel
+/// extraction pass. With the worker pool saturating every core, the main drain
+/// thread sees a firehose of start/finish events (Firefox ≈ 450k); emitting one
+/// IPC status per event would melt the main thread and flood the webview. We
+/// keep the in-memory health snapshot current per event (cheap) but throttle the
+/// expensive string-build + emit to ~10/s. Batch boundaries always emit.
+const UI_EMIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// M5.7 — files larger than this are indexed ANCHOR-ONLY (the recursive symbol
+/// walk is skipped). They are almost always generated data — e.g. the kernel's
+/// AMD register-mask headers, 2–24 MB with 50k–190k `#define`s — whose macro
+/// "symbols" bloat the DB (to multiple GB), spike memory, and have no
+/// navigational value. The file still gets a root symbol so it stays
+/// discoverable by path. Real hand-written source is virtually always well under
+/// 1 MiB, so this spares real code while catching generated data.
+const MAX_EXTRACT_BYTES: usize = 1024 * 1024;
+
+/// M5.7b — recognize files whose NAME marks them as generated (a complement to the
+/// size heuristic, ported from the inspiration project's protobuf/codegen skip).
+/// These are indexed anchor-only: their thousands of generated symbols are search
+/// noise, and this catches *small* generated files that the size cap misses (and
+/// never wrongly skips a large hand-written file). Match on the file name only.
+fn is_generated_path(file_path: &str) -> bool {
+    let lower = file_path.to_ascii_lowercase();
+    let name = lower.rsplit(['/', '\\']).next().unwrap_or(lower.as_str());
+    name.contains("zz_generated")
+        || name.contains(".generated.")
+        || name.contains("_generated.")
+        || name.ends_with(".pb.go")
+        || name.ends_with(".pb.cc")
+        || name.ends_with(".pb.h")
+        || name.ends_with("_pb2.py")
+        || name.ends_with("_pb2_grpc.py")
+        || name.ends_with(".min.js")
+        || name.ends_with(".min.css")
+        || name.ends_with(".g.dart")
+        || name.ends_with(".freezed.dart")
+        || name.ends_with(".designer.cs")
+}
+
 struct StagedFileIndex {
     file_path: String,
     hash: String,
@@ -304,7 +379,6 @@ struct StagedFileIndex {
     extraction_content: String,
     extraction_language: Language,
     source_language: Language,
-    snapshot: Arc<BufferSnapshot>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1250,99 +1324,266 @@ impl LanguageService {
                 Finished(String, Result<StagedFileIndex, String>),
             }
 
-            let worker_count = indexing_worker_count(total_queued);
-            let (tx, rx) = mpsc::channel::<IndexWorkerEvent>();
             let mut completed_files = 0usize;
-            let mut active_files = HashSet::new();
-            let mut staged_files = Vec::with_capacity(total_queued);
+            let mut committed_any = false;
+            // M5.10 — files that errored during the PARALLEL bulk pass (parse
+            // timeout, transient load/extraction failure). They get a sequential
+            // second pass below — single-threaded, so no worker contention and the
+            // full per-thread stack/memory — which recovers files that failed only
+            // under parallel pressure. Deliberate anchor-only skips are NOT here
+            // (those are indexed with a root symbol; re-extracting them would just
+            // re-add the generated-data bloat we skipped on purpose).
+            let mut failed_files: Vec<String> = Vec::new();
 
-            std::thread::scope(|scope| {
-                for worker_index in 0..worker_count {
-                    let tx = tx.clone();
-                    let worker_files = queued_files
-                        .iter()
-                        .skip(worker_index)
-                        .step_by(worker_count)
-                        .cloned()
-                        .collect::<Vec<_>>();
-
-                    scope.spawn(move || {
-                        for file_path in worker_files {
-                            let _ = tx.send(IndexWorkerEvent::Started(file_path.clone()));
-                            let result = self
-                                .stage_file_index(&file_path)
-                                .map_err(|error| error.to_string());
-                            let _ = tx.send(IndexWorkerEvent::Finished(file_path, result));
+            // M5.7 — stream the reconcile in bounded batches: index a chunk in
+            // parallel, COMMIT it, then drop its staged data before the next chunk.
+            // Peak memory is O(RECONCILE_BATCH_SIZE), not O(total_queued) — what
+            // kept the Linux kernel (77k files) from blowing to 14 GiB. Each batch
+            // is its own committed transaction, so an interruption leaves a valid,
+            // partially-populated DB rather than a corrupt stub.
+            // M5.15 — OVERLAP extract↔commit. A dedicated committer thread owns the
+            // single-writer DB commit; while it writes batch N, the extraction
+            // workers already stage batch N+1, so the cores are no longer idle
+            // during each serial commit. The bounded channel gives backpressure
+            // (peak memory stays O(batch)), and FIFO delivery preserves the
+            // cross-file resolution order the commit-time enrichment relies on.
+            // Staging never touches the store (workers only parse), so it races
+            // safely against the committer's writes.
+            let commit_outcome = std::thread::scope(|commit_scope| -> Result<usize, LanguageError> {
+                let (commit_tx, commit_rx) =
+                    std::sync::mpsc::sync_channel::<Vec<StagedFileIndex>>(1);
+                // Large stack like the extraction workers: commit-time enrichment
+                // resolves module re-exports by recursively indexing target files
+                // (bounded by the M5.11 re-entrancy guard, but still deep on big
+                // re-export chains), which the default ~2 MB thread stack can't hold.
+                let committer = std::thread::Builder::new()
+                    .stack_size(256 * 1024 * 1024)
+                    .spawn_scoped(commit_scope, move || -> Result<usize, LanguageError> {
+                        let mut suppressed = 0usize;
+                        while let Ok(staged) = commit_rx.recv() {
+                            suppressed += self.commit_staged_file_indexes(&staged)?;
                         }
-                    });
-                }
-                drop(tx);
+                        Ok(suppressed)
+                    })
+                    .expect("spawn index committer thread");
 
-                while completed_files < total_queued {
-                    let Ok(event) = rx.recv() else {
-                        break;
-                    };
-                    match event {
-                        IndexWorkerEvent::Started(file_path) => {
-                            active_files.insert(file_path.clone());
-                            health.current_file = Some(file_path.clone());
-                            health.active_workers = active_files.len();
-                            health.queued_files = total_queued.saturating_sub(completed_files);
-                            health.message = format!(
-                                "Indexing {}... {}/{} files ({} workers)",
-                                file_path, completed_files, total_queued, worker_count
-                            );
-                            self.set_index_health(health.clone());
-                            progress(&health);
-                        }
-                        IndexWorkerEvent::Finished(file_path, result) => {
-                            active_files.remove(&file_path);
-                            completed_files += 1;
-                            match result {
-                                Ok(staged_file) => {
-                                    staged_files.push(staged_file);
-                                    files_indexed += 1;
+            for (batch_start, batch_end) in self.size_bounded_batch_ranges(&queued_files) {
+                let batch = &queued_files[batch_start..batch_end];
+                let worker_count = indexing_worker_count(batch.len());
+                let (tx, rx) = mpsc::channel::<IndexWorkerEvent>();
+                let mut active_files = HashSet::new();
+                let mut staged_files = Vec::with_capacity(batch.len());
+                let mut batch_completed = 0usize;
+                // M5.4 — throttle the IPC progress emits (reset per batch so each
+                // batch's first event paints immediately).
+                let mut last_emit: Option<std::time::Instant> = None;
+
+                std::thread::scope(|scope| {
+                    for worker_index in 0..worker_count {
+                        let tx = tx.clone();
+                        let worker_files = batch
+                            .iter()
+                            .skip(worker_index)
+                            .step_by(worker_count)
+                            .cloned()
+                            .collect::<Vec<_>>();
+
+                        // M5.7 — index workers get a large (virtual, lazily-committed)
+                        // stack: symbol/relationship extraction walks the AST
+                        // recursively, and real C files (e.g. the kernel's deeply
+                        // nested generated tables / macro expansions) can be deep
+                        // enough to overflow the default 2 MB thread stack and abort
+                        // the process.
+                        std::thread::Builder::new()
+                            .stack_size(256 * 1024 * 1024)
+                            .spawn_scoped(scope, move || {
+                                for file_path in worker_files {
+                                    let _ = tx.send(IndexWorkerEvent::Started(file_path.clone()));
+                                    let result = self
+                                        .stage_file_index(&file_path)
+                                        .map_err(|error| error.to_string());
+                                    let _ = tx.send(IndexWorkerEvent::Finished(file_path, result));
                                 }
-                                Err(error) => {
-                                    eprintln!(
-                                        "[LanguageService] Failed to index {}: {}",
-                                        file_path, error
-                                    );
-                                }
+                            })
+                            .expect("spawn index worker thread");
+                    }
+                    drop(tx);
+
+                    while batch_completed < batch.len() {
+                        let Ok(event) = rx.recv() else {
+                            break;
+                        };
+                        // Keep the drain loop LEAN. With the pool saturating every
+                        // core this thread must keep up with the event firehose, so
+                        // per-event work is just cheap bookkeeping — no string
+                        // formatting, no IPC. The expensive status build + emit is
+                        // throttled below (UI_EMIT_INTERVAL).
+                        match event {
+                            IndexWorkerEvent::Started(file_path) => {
+                                active_files.insert(file_path.clone());
+                                health.current_file = Some(file_path);
                             }
-                            health.queued_files = total_queued.saturating_sub(completed_files);
+                            IndexWorkerEvent::Finished(file_path, result) => {
+                                active_files.remove(&file_path);
+                                batch_completed += 1;
+                                match result {
+                                    Ok(staged_file) => {
+                                        staged_files.push(staged_file);
+                                        files_indexed += 1;
+                                    }
+                                    Err(error) => {
+                                        eprintln!(
+                                            "[LanguageService] Failed to index {} (parallel pass): {}",
+                                            file_path, error
+                                        );
+                                        // Defer for the sequential second pass.
+                                        failed_files.push(file_path.clone());
+                                    }
+                                }
+                                health.current_file = active_files.iter().next().cloned();
+                            }
+                        }
+
+                        // Throttled UI update (~10/s) — plus an unconditional emit on
+                        // the batch's final event so the bar lands exactly on N/N.
+                        let final_event = batch_completed == batch.len();
+                        let should_emit = final_event
+                            || last_emit.map_or(true, |at| at.elapsed() >= UI_EMIT_INTERVAL);
+                        if should_emit {
+                            let done = completed_files + batch_completed;
+                            health.queued_files = total_queued.saturating_sub(done);
                             health.active_workers = active_files.len();
-                            health.current_file = active_files.iter().next().cloned();
-                            health.message = if let Some(current_file) = &health.current_file {
-                                format!(
+                            health.message = match &health.current_file {
+                                Some(current_file) => format!(
                                     "Indexing {}... {}/{} files ({} workers)",
-                                    current_file, completed_files, total_queued, worker_count
-                                )
-                            } else {
-                                format!(
+                                    current_file, done, total_queued, worker_count
+                                ),
+                                None => format!(
                                     "Building symbol index... {}/{} files",
-                                    completed_files, total_queued
-                                )
+                                    done, total_queued
+                                ),
                             };
                             self.set_index_health(health.clone());
                             progress(&health);
+                            last_emit = Some(std::time::Instant::now());
+                        }
+                    }
+                });
+
+                completed_files += batch_completed;
+
+                if !staged_files.is_empty() {
+                    // Hand this batch to the background committer and immediately
+                    // begin staging the next. `send` blocks ONLY while the committer
+                    // is still writing the previous batch (bounded channel =
+                    // backpressure, capping staged memory). A send error means the
+                    // committer stopped on a DB error — surfaced at `join` below.
+                    if commit_tx.send(staged_files).is_err() {
+                        break;
+                    }
+                    committed_any = true;
+                }
+            }
+
+                // Close the queue and wait for the committer to drain it; its
+                // Result (total suppressed edges, or the first DB error) is the
+                // scope's value.
+                drop(commit_tx);
+                committer.join().expect("index committer thread panicked")
+            });
+            suppressed_external_relationships += commit_outcome?;
+
+            // M5.10 — SECOND PASS: retry the files that errored in the parallel
+            // pass, ONE AT A TIME. Sequential means no worker contention and the
+            // full per-thread stack/memory per file, so a file that failed only
+            // under parallel pressure can now succeed. Runs BEFORE the global
+            // resolution passes so any recovered symbols participate. `failed_files`
+            // is an exception list (normally empty / a handful). A file that fails
+            // AGAIN is left unindexed + logged — it stays "missing" and is retried
+            // on the next reconcile.
+            if !failed_files.is_empty() {
+                health.status = IndexHealthStatus::Indexing;
+                health.active_workers = 1;
+                health.current_file = None;
+                health.queued_files = failed_files.len();
+                health.message = format!("Retrying {} deferred file(s)...", failed_files.len());
+                self.set_index_health(health.clone());
+                progress(&health);
+
+                let mut retried_staged = Vec::new();
+                let mut recovered = 0usize;
+                let mut still_failed = 0usize;
+                for file_path in &failed_files {
+                    match self.stage_file_index(file_path) {
+                        Ok(staged) => {
+                            retried_staged.push(staged);
+                            recovered += 1;
+                        }
+                        Err(error) => {
+                            still_failed += 1;
+                            eprintln!(
+                                "[LanguageService] {} failed again on the sequential retry: {}",
+                                file_path, error
+                            );
                         }
                     }
                 }
-            });
+                files_indexed += recovered;
+                if !retried_staged.is_empty() {
+                    suppressed_external_relationships +=
+                        self.commit_staged_file_indexes(&retried_staged)?;
+                    committed_any = true;
+                }
+                eprintln!(
+                    "[LanguageService] Second pass: recovered {} / {} deferred file(s); {} still failing",
+                    recovered,
+                    failed_files.len(),
+                    still_failed
+                );
+            }
 
-            if !staged_files.is_empty() {
+            if committed_any {
+                // Surface the post-extraction RESOLUTION phase. These two global
+                // passes run after the worker loop and can take minutes on a large
+                // repo; without a status update the UI froze on the last
+                // "Indexing… N/N files" message and looked hung (owner report on the
+                // Linux kernel). There is no intra-pass progress, but the phase
+                // labels make it clear work is still happening.
+                health.status = IndexHealthStatus::Indexing;
                 health.active_workers = 1;
                 health.current_file = None;
-                health.message = format!(
-                    "Writing symbol index... {} files staged",
-                    staged_files.len()
-                );
+                health.queued_files = 0;
+                health.message = "Resolving symbol relationships...".to_string();
                 self.set_index_health(health.clone());
                 progress(&health);
-                suppressed_external_relationships +=
-                    self.commit_staged_file_indexes(&staged_files)?;
+
+                // M2.4 — run the global-unique back-fill exactly once, after EVERY
+                // batch has committed. Only now is COUNT(*) truly global; running it
+                // per-batch would resolve against an incomplete symbol set
+                // (order-dependent).
+                self.symbol_store
+                    .backfill_unresolved_relationship_targets()?;
+
+                health.message = "Resolving cross-file method calls...".to_string();
+                self.set_index_health(health.clone());
+                progress(&health);
+
+                // M5.1b — then mine the STILL-NULL call edges that carry a confident
+                // recv_type via the GLOBAL cross-file receiver-type registry. Runs
+                // last so it sees the fully-committed symbol+edge set and only
+                // touches edges the prior two passes left NULL.
+                self.symbol_store
+                    .mine_receiver_type_relationship_targets()?;
             }
+        }
+
+        if total_queued > 0 {
+            // The closing health/graph-quality audits scan the whole symbol DB
+            // (COUNT + integrity), which is non-trivial on a multi-GB index — label
+            // the window so the UI does not look stalled here either.
+            health.message = "Finalizing index...".to_string();
+            self.set_index_health(health.clone());
+            progress(&health);
         }
 
         let mut final_health = self.audit_index_health()?;
@@ -1375,6 +1616,21 @@ impl LanguageService {
             self.symbol_store.clear_generated_index_data()?;
 
             return self.reconcile_index_with_progress_inner(progress, false);
+        }
+
+        // M5.13 — every write for this reconcile is now committed (batches +
+        // backfill + receiver-type mining ran above; the rebuild branch returned
+        // its own recursion). Fold the WAL back into the main DB and truncate the
+        // sidecar so it does not grow unbounded across runs and slow the next
+        // open. Best-effort: only after real work, and a failure never fails the
+        // index. (The rebuild branch above `return`s, so this runs exactly once,
+        // on the terminal path.)
+        if total_queued > 0 {
+            if let Err(error) = self.symbol_store.checkpoint() {
+                eprintln!(
+                    "[LanguageService] post-index WAL checkpoint failed (non-fatal): {error}"
+                );
+            }
         }
 
         final_health.status = if final_health.queued_files == 0
@@ -1578,9 +1834,12 @@ impl LanguageService {
             });
         }
         if language.is_config_scanner() {
+            let symbols = extract_config_symbols(file_path, content, language);
+            // M4.3 PART 2 — surface kustomize `Import` symbols as Import edges.
+            let relationships = derive_config_import_relationships(file_path, &symbols);
             return Ok(SymbolExtraction {
-                symbols: extract_config_symbols(file_path, content, language),
-                relationships: Vec::new(),
+                symbols,
+                relationships,
                 content: Cow::Borrowed(content),
                 language,
             });
@@ -1620,14 +1879,6 @@ impl LanguageService {
         if language.is_ruby_scanner() {
             return Ok(SymbolExtraction {
                 symbols: extract_ruby_symbols(file_path, content),
-                relationships: Vec::new(),
-                content: Cow::Borrowed(content),
-                language,
-            });
-        }
-        if language.is_cpp_scanner() {
-            return Ok(SymbolExtraction {
-                symbols: extract_cpp_symbols(file_path, content),
                 relationships: Vec::new(),
                 content: Cow::Borrowed(content),
                 language,
@@ -1776,13 +2027,7 @@ impl LanguageService {
             self.append_astro_component_export_relationship(file_path, symbols, relationships);
         }
         let translation_call_aliases = extract_translation_call_aliases(extraction_content);
-        self.resolve_relationship_targets(
-            file_path,
-            extraction_language,
-            symbols,
-            relationships,
-            &translation_call_aliases,
-        )?;
+        self.resolve_relationship_targets(symbols, relationships)?;
         Ok(Self::suppress_known_external_relationships(
             extraction_language,
             relationships,
@@ -1796,6 +2041,42 @@ impl LanguageService {
     }
 
     fn index_file_with_timings(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
+        // M5.11 — re-entrancy guard against cyclic module graphs.
+        //
+        // `enrich_symbol_relationships` resolves module re-exports
+        // (`export * from './sibling'`, Python `__init__` package re-exports) by
+        // indexing the target module file: `get_file_module_symbol` →
+        // `ensure_file_fresh` → `index_file`, which itself enriches and resolves
+        // *its* re-exports. A cycle in the module graph (JS barrel files,
+        // `__init__.py` packages — both pervasive in e.g. Firefox) makes this
+        // recurse without bound: it overflows the worker stack on small stacks and
+        // grinds at 100% CPU "stuck on one file" on the 256 MiB worker stacks.
+        //
+        // Track the files currently being indexed on THIS thread. If asked to
+        // index one that is already in flight higher on the stack, do not
+        // re-enter — return whatever symbols it has committed so far. The in-flight
+        // file's own top-level call finishes its indexing; the only effect is that
+        // a back-edge in a re-export *cycle* may be skipped (acceptable — the
+        // forward edge is still recorded, and there is no hang).
+        thread_local! {
+            static INDEXING_STACK: std::cell::RefCell<std::collections::HashSet<String>> =
+                std::cell::RefCell::new(std::collections::HashSet::new());
+        }
+        struct StackGuard(String);
+        impl Drop for StackGuard {
+            fn drop(&mut self) {
+                INDEXING_STACK.with(|stack| {
+                    stack.borrow_mut().remove(&self.0);
+                });
+            }
+        }
+        let newly_entered =
+            INDEXING_STACK.with(|stack| stack.borrow_mut().insert(file_path.to_string()));
+        if !newly_entered {
+            return Ok(self.get_file_symbols_raw(file_path).unwrap_or_default());
+        }
+        let _stack_guard = StackGuard(file_path.to_string());
+
         let total_start = std::time::Instant::now();
         let load_start = std::time::Instant::now();
         let disk_metadata = file_index_metadata(&self.resolve_path(file_path)).ok();
@@ -1881,6 +2162,19 @@ impl LanguageService {
             content: extraction_content,
             language: extraction_language,
         } = self.extract_file_symbols_and_relationships(file_path, &content, language)?;
+        // M5.7 — cap pathological files before adding the file-root symbol (so the
+        // root is always retained). Truncated symbols simply aren't indexed; any
+        // relationship pointing at a dropped symbol stays unresolved (handled).
+        let mut extracted_symbols = extracted_symbols;
+        if extracted_symbols.len() > MAX_SYMBOLS_PER_FILE {
+            eprintln!(
+                "[LanguageService] {} produced {} symbols; capping to {} (pathological/generated file)",
+                file_path,
+                extracted_symbols.len(),
+                MAX_SYMBOLS_PER_FILE
+            );
+            extracted_symbols.truncate(MAX_SYMBOLS_PER_FILE);
+        }
         let symbols = self.with_file_root_symbol(file_path, &content, extracted_symbols);
         let parse_extract_ms = parse_extract_start.elapsed().as_millis() as u64;
 
@@ -1910,6 +2204,9 @@ impl LanguageService {
             &semantic_anchors,
             &relationships,
         )?;
+        // M2.4 — incremental single-file reindex resolves edges same-file/imported
+        // only; the global-unique back-fill is deferred to the next full reindex
+        // so its COUNT(*) stays truly global (not "unique among files seen so far").
         let db_write_ms = db_write_start.elapsed().as_millis() as u64;
 
         // Update cache
@@ -1994,6 +2291,36 @@ impl LanguageService {
         Ok(Vec::new())
     }
 
+    /// M5.7 — split `files` (in order) into contiguous batches each bounded by
+    /// `BATCH_BYTE_BUDGET` of on-disk content AND `RECONCILE_BATCH_SIZE` files,
+    /// whichever comes first, returning `(start, end)` index ranges into `files`.
+    /// A single file larger than the byte budget becomes its own batch. Bounding by
+    /// bytes (not just count) keeps peak staging memory flat even where file sizes
+    /// vary by 1000× (e.g. the kernel's generated multi-MB headers).
+    fn size_bounded_batch_ranges(&self, files: &[String]) -> Vec<(usize, usize)> {
+        let mut ranges = Vec::new();
+        let mut start = 0usize;
+        let mut bytes: u64 = 0;
+        for (i, file) in files.iter().enumerate() {
+            let size = self
+                .resolve_path(file)
+                .metadata()
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            let count = i - start;
+            if count > 0 && (bytes + size > BATCH_BYTE_BUDGET || count >= RECONCILE_BATCH_SIZE) {
+                ranges.push((start, i));
+                start = i;
+                bytes = 0;
+            }
+            bytes += size;
+        }
+        if start < files.len() {
+            ranges.push((start, files.len()));
+        }
+        ranges
+    }
+
     fn stage_file_index(&self, file_path: &str) -> Result<StagedFileIndex, LanguageError> {
         Ok(self.stage_file_index_with_metrics(file_path)?.staged)
     }
@@ -2036,7 +2363,6 @@ impl LanguageService {
                     extraction_content: content,
                     extraction_language: Language::Markdown,
                     source_language: Language::Markdown,
-                    snapshot,
                 };
                 return Ok(StagedFileIndexOutcome {
                     metrics: IndexFileMetrics {
@@ -2056,15 +2382,67 @@ impl LanguageService {
         };
 
         let parse_extract_start = std::time::Instant::now();
-        let SymbolExtraction {
-            symbols: extracted_symbols,
-            mut relationships,
-            content: extraction_content,
-            language: extraction_language,
-        } = self.extract_file_symbols_and_relationships(file_path, &content, language)?;
-        let symbols = self.with_file_root_symbol(file_path, &content, extracted_symbols);
+        // M5.7 — oversized files (typically generated data, e.g. the kernel's
+        // multi-megabyte AMD register-mask headers with 50k–190k `#define`s) are
+        // indexed ANCHOR-ONLY: skip the recursive symbol walk entirely. This avoids
+        // the huge transient symbol Vec + the parse cost, keeps the symbol DB from
+        // bloating with unsearchable register macros, and still records the file
+        // (via its root symbol) so it stays discoverable by path.
+        let skip_extraction = content.len() > MAX_EXTRACT_BYTES || is_generated_path(file_path);
+        let (symbols, mut relationships, extraction_content, extraction_language) = if skip_extraction
+        {
+            eprintln!(
+                "[LanguageService] {} — indexing anchor-only (skipping symbol extraction; {})",
+                file_path,
+                if content.len() > MAX_EXTRACT_BYTES {
+                    format!(
+                        "{:.1} MiB, likely generated",
+                        content.len() as f64 / (1024.0 * 1024.0)
+                    )
+                } else {
+                    "generated-file name pattern".to_string()
+                }
+            );
+            (
+                self.with_file_root_symbol(file_path, &content, Vec::new()),
+                Vec::new(),
+                std::borrow::Cow::Borrowed(content.as_str()),
+                language,
+            )
+        } else {
+            let SymbolExtraction {
+                symbols: extracted_symbols,
+                relationships,
+                content: extraction_content,
+                language: extraction_language,
+            } = self.extract_file_symbols_and_relationships(file_path, &content, language)?;
+            // M5.7 — cap pathological files before adding the file-root symbol (so
+            // the root is always retained). Truncated symbols are simply not
+            // indexed; any relationship pointing at a dropped symbol stays
+            // unresolved (handled).
+            let mut extracted_symbols = extracted_symbols;
+            if extracted_symbols.len() > MAX_SYMBOLS_PER_FILE {
+                eprintln!(
+                    "[LanguageService] {} produced {} symbols; capping to {} (pathological/generated file)",
+                    file_path,
+                    extracted_symbols.len(),
+                    MAX_SYMBOLS_PER_FILE
+                );
+                extracted_symbols.truncate(MAX_SYMBOLS_PER_FILE);
+            }
+            (
+                self.with_file_root_symbol(file_path, &content, extracted_symbols),
+                relationships,
+                extraction_content,
+                extraction_language,
+            )
+        };
         self.canonicalize_import_relationships(file_path, &mut relationships);
-        let anchors = extract_semantic_anchors(file_path, &content);
+        let anchors = if skip_extraction {
+            Vec::new()
+        } else {
+            extract_semantic_anchors(file_path, &content)
+        };
         let parse_extract_ms = parse_extract_start.elapsed().as_millis() as u64;
 
         let staged = StagedFileIndex {
@@ -2080,7 +2458,6 @@ impl LanguageService {
             extraction_content: extraction_content.into_owned(),
             extraction_language,
             source_language: language,
-            snapshot,
         };
         Ok(StagedFileIndexOutcome {
             metrics: IndexFileMetrics {
@@ -2175,21 +2552,21 @@ impl LanguageService {
         let relationship_db_write_start = std::time::Instant::now();
         self.symbol_store
             .replace_relationships_for_files(&final_relationship_records)?;
+        // M2.4 — the set-based global-unique back-fill is NOT run here: this
+        // helper commits one staged batch, and the global COUNT(*) must see every
+        // file. The full-index callers (`reconcile_index_with_progress_inner`,
+        // `index_directory`) run it exactly once after all files are committed.
         db_write_ms += relationship_db_write_start.elapsed().as_millis() as u64;
 
-        let cache_start = std::time::Instant::now();
-        let mut cache = self.file_cache.write().unwrap();
-        for file in staged_files {
-            cache.insert(
-                file.file_path.clone(),
-                CachedFile {
-                    hash: file.hash.clone(),
-                    _snapshot: file.snapshot.clone(),
-                    symbols: file.symbols.clone(),
-                },
-            );
-        }
-        let cache_update_ms = cache_start.elapsed().as_millis() as u64;
+        // M5.15 — do NOT populate `file_cache` from the bulk commit path. This
+        // helper only runs during full indexing (reconcile / index_directory), and
+        // caching every committed file retained its source text (via the buffer
+        // snapshot) plus a clone of its symbols for the whole run — a monotonic RAM
+        // climb (~2 GB of source text + ~5M symbols across the 469k-file Firefox
+        // index) with no payoff: the data is already in the DB, and this cache only
+        // accelerates INTERACTIVE re-lookups of OPEN files, which `index_file` /
+        // `did_open` still populate on demand.
+        let cache_update_ms = 0;
 
         Ok(CommitStagedFileMetrics {
             suppressed_external_relationships,
@@ -2223,7 +2600,6 @@ impl LanguageService {
             .map(|record| (record.file_path.as_str(), record))
             .collect::<HashMap<_, _>>();
         let mut files_to_stage = Vec::new();
-        let mut staged_files = Vec::new();
 
         for relative_path in &files {
             if let Some(record) = indexed_map.get(relative_path.as_str()) {
@@ -2240,37 +2616,50 @@ impl LanguageService {
             files_to_stage.push(relative_path.clone());
         }
 
-        if !files_to_stage.is_empty() {
-            enum IndexDirectoryStageEvent {
-                Finished(String, Result<StagedFileIndexOutcome, String>),
-            }
+        // M5.7 — stream in bounded batches (same rationale as the reconcile path):
+        // index a chunk, COMMIT it, then DROP its staged data so peak memory is
+        // O(RECONCILE_BATCH_SIZE), not O(repo). Workers get a large (virtual,
+        // lazily-committed) stack because symbol extraction walks the AST
+        // recursively and deep real C files (the kernel) can overflow the default
+        // 2 MB thread stack and abort the process.
+        enum IndexDirectoryStageEvent {
+            Finished(String, Result<StagedFileIndexOutcome, String>),
+        }
+        let mut committed_any = false;
 
-            let worker_count = indexing_worker_count(files_to_stage.len());
+        for (batch_start, batch_end) in self.size_bounded_batch_ranges(&files_to_stage) {
+            let batch = &files_to_stage[batch_start..batch_end];
+            let worker_count = indexing_worker_count(batch.len());
             let (tx, rx) = mpsc::channel::<IndexDirectoryStageEvent>();
             let mut completed_files = 0usize;
+            let mut staged_files = Vec::with_capacity(batch.len());
 
             std::thread::scope(|scope| {
                 for worker_index in 0..worker_count {
                     let tx = tx.clone();
-                    let worker_files = files_to_stage
+                    let worker_files = batch
                         .iter()
                         .skip(worker_index)
                         .step_by(worker_count)
                         .cloned()
                         .collect::<Vec<_>>();
 
-                    scope.spawn(move || {
-                        for file_path in worker_files {
-                            let result = self
-                                .stage_file_index_with_metrics(&file_path)
-                                .map_err(|error| error.to_string());
-                            let _ = tx.send(IndexDirectoryStageEvent::Finished(file_path, result));
-                        }
-                    });
+                    std::thread::Builder::new()
+                        .stack_size(256 * 1024 * 1024)
+                        .spawn_scoped(scope, move || {
+                            for file_path in worker_files {
+                                let result = self
+                                    .stage_file_index_with_metrics(&file_path)
+                                    .map_err(|error| error.to_string());
+                                let _ = tx
+                                    .send(IndexDirectoryStageEvent::Finished(file_path, result));
+                            }
+                        })
+                        .expect("spawn index worker thread");
                 }
                 drop(tx);
 
-                while completed_files < files_to_stage.len() {
+                while completed_files < batch.len() {
                     let Ok(event) = rx.recv() else {
                         break;
                     };
@@ -2301,14 +2690,29 @@ impl LanguageService {
                     }
                 }
             });
+
+            if !staged_files.is_empty() {
+                let commit_metrics =
+                    self.commit_staged_file_indexes_with_metrics(&staged_files)?;
+                stats.relationships_extracted += commit_metrics.relationship_count;
+                stats.relationship_enrichment_ms += commit_metrics.relationship_enrichment_ms;
+                stats.db_write_ms += commit_metrics.db_write_ms;
+                stats.cache_update_ms += commit_metrics.cache_update_ms;
+                committed_any = true;
+            }
+            // Free this batch's staged data before the next chunk.
+            drop(staged_files);
         }
 
-        if !staged_files.is_empty() {
-            let commit_metrics = self.commit_staged_file_indexes_with_metrics(&staged_files)?;
-            stats.relationships_extracted += commit_metrics.relationship_count;
-            stats.relationship_enrichment_ms += commit_metrics.relationship_enrichment_ms;
-            stats.db_write_ms += commit_metrics.db_write_ms;
-            stats.cache_update_ms += commit_metrics.cache_update_ms;
+        if committed_any {
+            // M2.4 — run the global-unique back-fill exactly once, after EVERY
+            // batch has committed (true global COUNT(*)).
+            self.symbol_store
+                .backfill_unresolved_relationship_targets()?;
+            // M5.1b — mine the still-NULL recv_type-carrying call edges against
+            // the GLOBAL receiver-type registry (runs after the back-fill).
+            self.symbol_store
+                .mine_receiver_type_relationship_targets()?;
         }
 
         stats.duration_ms = start.elapsed().as_millis() as u64;
@@ -3044,6 +3448,7 @@ impl LanguageService {
                     target_symbol_id: None,
                     relationship_type: SymbolRelationshipType::Usage,
                     line: usage.line,
+                    ..Default::default()
                 });
             }
         }
@@ -3098,6 +3503,7 @@ impl LanguageService {
                     target_symbol_id: None,
                     relationship_type: SymbolRelationshipType::Usage,
                     line: usage.line,
+                    ..Default::default()
                 });
             }
         }
@@ -3449,7 +3855,10 @@ impl LanguageService {
             | SymbolRelationshipType::Export
             | SymbolRelationshipType::Extends
             | SymbolRelationshipType::Implements
-            | SymbolRelationshipType::Usage => {
+            | SymbolRelationshipType::Usage
+            | SymbolRelationshipType::UsesType
+            | SymbolRelationshipType::ReadsEnv
+            | SymbolRelationshipType::Handles => {
                 if reference.target_symbol_id.as_deref() == Some(symbol.id.as_str()) {
                     return Ok(true);
                 }
@@ -3549,11 +3958,8 @@ impl LanguageService {
 
     fn resolve_relationship_targets(
         &self,
-        file_path: &str,
-        language: Language,
         file_symbols: &[Symbol],
         relationships: &mut [SymbolRelationship],
-        translation_call_aliases: &HashSet<String>,
     ) -> Result<(), LanguageError> {
         let imported_files = relationships
             .iter()
@@ -3561,7 +3967,11 @@ impl LanguageService {
             .map(|relationship| relationship.target_name.clone())
             .collect::<Vec<_>>();
         let mut imported_symbol_cache = HashMap::new();
-        let mut contextual_cache = HashMap::new();
+
+        // M5.1: build the same-file inheritance index ONCE for this file from its
+        // own Extends/Implements edges. Used only to widen a receiver type to its
+        // supertypes during disambiguation; never to invent a target.
+        let receiver_index = ReceiverTypeIndex::from_file(file_symbols, relationships);
 
         for relationship in relationships.iter_mut() {
             if relationship.relationship_type == SymbolRelationshipType::Import {
@@ -3572,42 +3982,69 @@ impl LanguageService {
                 continue;
             }
 
-            relationship.target_symbol_id = self.resolve_relationship_symbol_id(
+            // M5.1: carry the receiver type (if any) into the resolver so the two
+            // ambiguity branches can narrow — Unknown/None changes nothing.
+            let recv_type = relationship.recv_type.clone();
+            if let Some(resolved) = self.resolve_relationship_symbol_id(
                 &relationship.target_name,
-                relationship.relationship_type,
-                language,
-                file_path,
+                recv_type.as_deref(),
                 file_symbols,
                 &imported_files,
                 &mut imported_symbol_cache,
-                &mut contextual_cache,
-                translation_call_aliases,
-            )?;
+                &receiver_index,
+            )? {
+                relationship.target_symbol_id = Some(resolved.id);
+                // Only a receiver-type disambiguation carries an audit tag; plain
+                // same-file / imported-unique resolutions stay untagged exactly as
+                // before (the global-unique back-fill tags its own rows later).
+                if let Some(strategy) = resolved.strategy {
+                    relationship.resolution_strategy = Some(strategy.to_string());
+                    relationship.confidence = resolved.confidence;
+                }
+            }
         }
 
         Ok(())
     }
 
+    /// Cheap, precise per-reference resolution: same-file first, then symbols of
+    /// explicitly-imported files. Anything not uniquely pinned here is left
+    /// NULL and resolved later by the set-based global-unique back-fill (M2.4,
+    /// `SymbolStore::backfill_unresolved_relationship_targets`) once the whole
+    /// batch's symbols exist. The old per-reference `search_symbols_contextual`
+    /// fallback — the cold-index bottleneck (81–97% of wall time) — is gone.
+    ///
+    /// M5.1 (strict superset): when a candidate set is AMBIGUOUS (`same_file > 1`
+    /// or `imported > 1`) AND the edge carries a known `recv_type`, narrow the
+    /// EXISTING candidate set to those whose parent class (or a supertype) equals
+    /// the receiver type. If exactly one survives, resolve to it and tag
+    /// `receiver_type`. Otherwise (no `recv_type`, 0 or >1 survivors) fall through
+    /// to today's behavior. The returned id is ALWAYS drawn from the existing
+    /// candidate set — never invented — and the already-resolved (`== 1`) branches
+    /// are untouched.
     fn resolve_relationship_symbol_id(
         &self,
         reference_name: &str,
-        relationship_type: SymbolRelationshipType,
-        language: Language,
-        file_path: &str,
+        recv_type: Option<&str>,
         file_symbols: &[Symbol],
         imported_files: &[String],
         imported_symbol_cache: &mut HashMap<String, Vec<Symbol>>,
-        contextual_cache: &mut HashMap<String, Option<String>>,
-        translation_call_aliases: &HashSet<String>,
-    ) -> Result<Option<String>, LanguageError> {
+        receiver_index: &ReceiverTypeIndex,
+    ) -> Result<Option<ResolvedTarget>, LanguageError> {
         let mut same_file = Vec::new();
         let mut seen = HashSet::new();
         self.collect_matching_symbols(file_symbols, reference_name, &mut same_file, &mut seen);
 
         if same_file.len() == 1 {
-            return Ok(Some(same_file[0].id.clone()));
+            return Ok(Some(ResolvedTarget::plain(same_file[0].id.clone())));
         }
         if same_file.len() > 1 {
+            // M5.1 ambiguity branch #1: narrow by receiver type before bailing.
+            if let Some(recv) = recv_type {
+                if let Some(id) = disambiguate_by_receiver(&same_file, recv, receiver_index) {
+                    return Ok(Some(ResolvedTarget::receiver(id)));
+                }
+            }
             return Ok(None);
         }
 
@@ -3630,42 +4067,19 @@ impl LanguageService {
         }
 
         if imported_matches.len() == 1 {
-            return Ok(Some(imported_matches[0].id.clone()));
+            return Ok(Some(ResolvedTarget::plain(imported_matches[0].id.clone())));
         }
         if imported_matches.len() > 1 {
-            return Ok(None);
+            // M5.1 ambiguity branch #2: narrow by receiver type before bailing.
+            if let Some(recv) = recv_type {
+                if let Some(id) = disambiguate_by_receiver(&imported_matches, recv, receiver_index)
+                {
+                    return Ok(Some(ResolvedTarget::receiver(id)));
+                }
+            }
         }
 
-        if relationship_type == SymbolRelationshipType::Call
-            && (Self::is_runtime_external_call_name(language, reference_name)
-                || translation_call_aliases.contains(reference_name))
-        {
-            return Ok(None);
-        }
-
-        if let Some(cached) = contextual_cache.get(reference_name) {
-            return Ok(cached.clone());
-        }
-
-        let preferred_files = imported_files.to_vec();
-        let contextual =
-            self.search_symbols_contextual(reference_name, 8, Some(file_path), &preferred_files)?;
-        let exact = contextual
-            .into_iter()
-            .filter(|result| {
-                result.symbol.name == reference_name
-                    && result.symbol.symbol_type != SymbolType::Import
-            })
-            .map(|result| result.symbol)
-            .collect::<Vec<_>>();
-
-        let resolved = if exact.len() == 1 {
-            Some(exact[0].id.clone())
-        } else {
-            None
-        };
-        contextual_cache.insert(reference_name.to_string(), resolved.clone());
-        Ok(resolved)
+        Ok(None)
     }
 
     fn collect_matching_symbols(
@@ -3681,6 +4095,8 @@ impl LanguageService {
             seen,
         );
     }
+
+    // ---- M5.1 receiver-type disambiguation (resolution side) ----------------
 
     fn suppress_known_external_relationships(
         language: Language,
@@ -3703,6 +4119,12 @@ impl LanguageService {
         relationship: &SymbolRelationship,
         translation_call_aliases: &HashSet<String>,
     ) -> bool {
+        // A known external/library/builtin call name is always suppressed when it
+        // is still unresolved after same-file/imported resolution — regardless of
+        // whether its bare name happens to be a globally-unique project symbol.
+        // Distinguishing a project `parse()` from `JSON.parse()` needs receiver/
+        // type context and is deferred to M5.1; a bare-name back-fill cannot do it
+        // safely, so we never let such a call survive to be mis-wired.
         relationship.relationship_type == SymbolRelationshipType::Call
             && relationship.target_symbol_id.is_none()
             && (Self::is_known_external_call_name(language, &relationship.target_name)
@@ -3908,108 +4330,6 @@ impl LanguageService {
         }
     }
 
-    fn is_runtime_external_call_name(language: Language, target_name: &str) -> bool {
-        let name = target_name.rsplit("::").next().unwrap_or(target_name);
-        match language {
-            Language::TypeScript
-            | Language::Tsx
-            | Language::Astro
-            | Language::JavaScript
-            | Language::Jsx => matches!(
-                name,
-                "Array"
-                    | "Boolean"
-                    | "Date"
-                    | "Error"
-                    | "JSON"
-                    | "Map"
-                    | "Math"
-                    | "Number"
-                    | "Object"
-                    | "Promise"
-                    | "RegExp"
-                    | "Set"
-                    | "String"
-                    | "catch"
-                    | "finally"
-                    | "parse"
-                    | "stringify"
-                    | "then"
-            ),
-            Language::Rust => matches!(
-                name,
-                "Err"
-                    | "None"
-                    | "Ok"
-                    | "Some"
-                    | "and_then"
-                    | "as_ref"
-                    | "clone"
-                    | "collect"
-                    | "expect"
-                    | "filter"
-                    | "format"
-                    | "iter"
-                    | "map"
-                    | "or_else"
-                    | "to_string"
-                    | "unwrap"
-                    | "unwrap_or"
-                    | "unwrap_or_default"
-            ),
-            Language::Go => matches!(
-                name,
-                "append"
-                    | "cap"
-                    | "close"
-                    | "copy"
-                    | "delete"
-                    | "len"
-                    | "make"
-                    | "new"
-                    | "panic"
-                    | "recover"
-            ),
-            Language::Python => matches!(
-                name,
-                "dict"
-                    | "enumerate"
-                    | "filter"
-                    | "format"
-                    | "int"
-                    | "len"
-                    | "list"
-                    | "map"
-                    | "open"
-                    | "print"
-                    | "range"
-                    | "set"
-                    | "str"
-            ),
-            Language::Markdown
-            | Language::Css
-            | Language::Scss
-            | Language::Sass
-            | Language::Less
-            | Language::Html
-            | Language::Vue
-            | Language::Svelte
-            | Language::Json
-            | Language::Yaml
-            | Language::Toml
-            | Language::Php
-            | Language::Java
-            | Language::CSharp
-            | Language::Kotlin
-            | Language::Ruby
-            | Language::Cpp
-            | Language::Shell
-            | Language::Dockerfile
-            | Language::Sql
-            | Language::BuildScript => false,
-        }
-    }
-
     fn index_file_content(
         &self,
         file_path: &str,
@@ -4060,6 +4380,9 @@ impl LanguageService {
         self.symbol_store.upsert_symbols(&symbols)?;
         self.symbol_store
             .replace_relationships_for_file(file_path, &relationships)?;
+        // M2.4 — incremental single-file path: no global-unique back-fill here;
+        // edges resolve same-file/imported and are globally back-filled on the
+        // next full reindex (keeps the back-fill's COUNT(*) truly global).
         self.symbol_store
             .mark_file_indexed_with_metadata_and_extractor_version(
                 file_path,
@@ -4109,7 +4432,21 @@ impl LanguageService {
 
         let full_path = self.resolve_path(file_path);
         let content = std::fs::read_to_string(&full_path)?;
-        Ok(self.buffer_snapshots.upsert_disk(&key, &content))
+        // Build a TRANSIENT disk snapshot for indexing — do NOT cache it in
+        // `buffer_snapshots`. That store is never evicted, so caching every indexed
+        // file's content (including the multi-MB anchor-only register headers we
+        // still load for hashing) accumulated GIGABYTES of live memory on huge
+        // repos — the kernel held ~5 GiB resident after indexing — and defeated the
+        // byte-budget batching (the batch's snapshot was dropped but the cache kept
+        // a copy). This snapshot lives only as long as the file's batch. The cache
+        // is still consulted above for a LIVE (open/edited) buffer, which stays
+        // authoritative.
+        Ok(Arc::new(BufferSnapshot::new(
+            file_path,
+            None,
+            content,
+            BufferSnapshotSource::Disk,
+        )))
     }
 
     fn load_buffer_snapshot(&self, file_path: &str) -> Result<Arc<BufferSnapshot>, LanguageError> {
@@ -4386,7 +4723,10 @@ impl LanguageService {
             SymbolRelationshipType::Export
             | SymbolRelationshipType::Extends
             | SymbolRelationshipType::Implements
-            | SymbolRelationshipType::Usage => {
+            | SymbolRelationshipType::Usage
+            | SymbolRelationshipType::UsesType
+            | SymbolRelationshipType::ReadsEnv
+            | SymbolRelationshipType::Handles => {
                 self.find_relationship_references_to_symbol(symbol, relationship_type, limit)?
             }
             SymbolRelationshipType::Contains => self.get_containment_incoming(symbol)?,
@@ -4729,6 +5069,7 @@ impl LanguageService {
                 target_symbol_id: Some(symbol.id.clone()),
                 relationship_type: SymbolRelationshipType::Export,
                 line: symbol.range.start.line,
+                ..Default::default()
             });
         }
     }
@@ -4772,6 +5113,7 @@ impl LanguageService {
                 target_symbol_id: Some(symbol.id.clone()),
                 relationship_type: SymbolRelationshipType::Export,
                 line: symbol.range.start.line,
+                ..Default::default()
             });
         }
 
@@ -4826,6 +5168,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -4853,6 +5196,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -4886,6 +5230,7 @@ impl LanguageService {
                         target_symbol_id: Some(target_symbol.id.clone()),
                         relationship_type: SymbolRelationshipType::Export,
                         line,
+                        ..Default::default()
                     });
                 }
             }
@@ -4915,6 +5260,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -4942,6 +5288,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -4968,6 +5315,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -5001,6 +5349,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -5031,6 +5380,7 @@ impl LanguageService {
                         target_symbol_id: Some(target_symbol.id.clone()),
                         relationship_type: SymbolRelationshipType::Export,
                         line,
+                        ..Default::default()
                     });
                 }
             }
@@ -5064,6 +5414,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -5113,6 +5464,7 @@ impl LanguageService {
                     target_symbol_id: Some(target_symbol.id.clone()),
                     relationship_type: SymbolRelationshipType::Export,
                     line,
+                    ..Default::default()
                 });
             }
 
@@ -5147,6 +5499,7 @@ impl LanguageService {
                         target_symbol_id: Some(target_symbol.id.clone()),
                         relationship_type: SymbolRelationshipType::Export,
                         line,
+                        ..Default::default()
                     });
                 }
             }
@@ -5178,6 +5531,7 @@ impl LanguageService {
             target_symbol_id: Some(component_symbol.id.clone()),
             relationship_type: SymbolRelationshipType::Export,
             line: component_symbol.range.start.line,
+            ..Default::default()
         });
     }
 
@@ -5646,6 +6000,20 @@ fn extract_semantic_anchors(file_path: &str, content: &str) -> Vec<SemanticAncho
         return anchors;
     }
 
+    // M5.14 — the generic quoted-literal / token scan below only adds value on
+    // front-end, style and markup files, where string literals and tokens are
+    // genuine cross-references (routes, CSS custom properties, event/command/
+    // service names). On systems / back-end / config files it is redundant with
+    // SYMBOLS (which own code navigation) and produces mostly noise plus
+    // misclassification — on Firefox it minted ~5M anchors from C++, tagging
+    // header names `translation_key`, `--x` decrements `css_token`, and class
+    // names `config_key`. Skip it there; the precise translation/route extractors
+    // above already ran for every file, so real i18n and route cross-references
+    // are still captured.
+    if !generic_literal_anchor_scan_applies(file_path) {
+        return anchors;
+    }
+
     for (line_index, line) in content.lines().enumerate() {
         let preview = line.trim().chars().take(240).collect::<String>();
         for (value, character) in extract_quoted_values(line)
@@ -5678,6 +6046,33 @@ fn extract_semantic_anchors(file_path: &str, content: &str) -> Vec<SemanticAncho
     }
 
     anchors
+}
+
+/// M5.14 — languages for which the generic quoted-literal / token anchor scan is
+/// worthwhile: front-end, style and markup, where string literals and tokens are
+/// real cross-references. Systems / back-end languages (C/C++, Rust, Go, Python,
+/// Java, …) and config formats (JSON/YAML/TOML) are excluded — their navigation is
+/// owned by symbols (and, for config, by the precise route/translation extractors),
+/// and the generic scan there is pure noise. Unknown extensions are excluded.
+fn generic_literal_anchor_scan_applies(file_path: &str) -> bool {
+    matches!(
+        Language::capability_for_path(file_path).map(|capability| capability.language),
+        Some(
+            Language::TypeScript
+                | Language::Tsx
+                | Language::JavaScript
+                | Language::Jsx
+                | Language::Astro
+                | Language::Vue
+                | Language::Svelte
+                | Language::Css
+                | Language::Scss
+                | Language::Sass
+                | Language::Less
+                | Language::Html
+                | Language::Markdown
+        )
+    )
 }
 
 fn extract_yaml_route_config_anchors(
@@ -6904,6 +7299,146 @@ fn is_css_identifier_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'
 }
 
+/// M5.1 outcome of resolving one relationship target. `strategy`/`confidence`
+/// are `Some` ONLY for a receiver-type disambiguation (the auditable new path);
+/// plain same-file / imported-unique resolutions carry `None` so the stored row
+/// is byte-for-byte what today produces.
+struct ResolvedTarget {
+    id: String,
+    strategy: Option<&'static str>,
+    confidence: Option<f32>,
+}
+
+impl ResolvedTarget {
+    fn plain(id: String) -> Self {
+        Self {
+            id,
+            strategy: None,
+            confidence: None,
+        }
+    }
+
+    fn receiver(id: String) -> Self {
+        Self {
+            id,
+            // Confidence above `global_unique`'s 0.5: a scope/type-derived match
+            // is stronger than a name-only global-uniqueness guess.
+            strategy: Some("receiver_type"),
+            confidence: Some(0.8),
+        }
+    }
+}
+
+/// M5.1 same-file inheritance index: `subtype simple-name → direct supertype
+/// simple-names`, built once per file from its own `Extends`/`Implements` edges.
+/// Used ONLY to widen a receiver type to the set of class names whose method a
+/// receiver of that type could be calling (a method may be defined on a
+/// supertype). Cross-file supertype chains beyond this file's edges are not
+/// followed (bounded slice); an unknown chain simply yields the singleton set, so
+/// disambiguation falls through — never a regression.
+struct ReceiverTypeIndex {
+    supertypes: HashMap<String, Vec<String>>,
+}
+
+impl ReceiverTypeIndex {
+    fn from_file(file_symbols: &[Symbol], relationships: &[SymbolRelationship]) -> Self {
+        let id_to_name: HashMap<&str, &str> = file_symbols
+            .iter()
+            .map(|symbol| (symbol.id.as_str(), symbol.name.as_str()))
+            .collect();
+        let mut supertypes: HashMap<String, Vec<String>> = HashMap::new();
+        for relationship in relationships {
+            if !matches!(
+                relationship.relationship_type,
+                SymbolRelationshipType::Extends | SymbolRelationshipType::Implements
+            ) {
+                continue;
+            }
+            let Some(sub_name) = id_to_name.get(relationship.source_symbol_id.as_str()) else {
+                continue;
+            };
+            let sub = simple_type_name(sub_name);
+            let sup = simple_type_name(&relationship.target_name);
+            if sub == sup {
+                continue;
+            }
+            supertypes.entry(sub).or_default().push(sup);
+        }
+        Self { supertypes }
+    }
+
+    /// The receiver type plus all transitive supertypes (simple names), with a
+    /// hard iteration cap and a visited-set cycle guard.
+    fn supertype_closure(&self, recv_type: &str) -> HashSet<String> {
+        let start = simple_type_name(recv_type);
+        let mut result = HashSet::new();
+        result.insert(start.clone());
+        let mut stack = vec![start];
+        let mut steps = 0usize;
+        while let Some(current) = stack.pop() {
+            steps += 1;
+            if steps > 256 {
+                break;
+            }
+            if let Some(supers) = self.supertypes.get(&current) {
+                for supertype in supers {
+                    if result.insert(supertype.clone()) {
+                        stack.push(supertype.clone());
+                    }
+                }
+            }
+        }
+        result
+    }
+}
+
+/// M5.1 (strict superset): narrow an EXISTING ambiguous candidate set to those
+/// whose parent class (or a supertype of the receiver) equals `recv_type`. Returns
+/// `Some(id)` ONLY when EXACTLY ONE candidate survives — and that id is always one
+/// of the input candidates. 0 or >1 survivors → `None` (today's behavior).
+fn disambiguate_by_receiver(
+    candidates: &[Symbol],
+    recv_type: &str,
+    index: &ReceiverTypeIndex,
+) -> Option<String> {
+    let allowed = index.supertype_closure(recv_type);
+    let mut matched = candidates.iter().filter(|candidate| {
+        candidate_parent_class_name(candidate)
+            .map(|parent| allowed.contains(&parent))
+            .unwrap_or(false)
+    });
+    let first = matched.next()?;
+    if matched.next().is_some() {
+        // More than one candidate matched the receiver type → still ambiguous.
+        return None;
+    }
+    Some(first.id.clone())
+}
+
+/// The simple (last-segment) name of the class a method candidate belongs to,
+/// derived from its qualified name by dropping the final `.`/`::` member segment.
+/// `A.run`/`A::run`/`mod.A.run` → `A`; a non-member name (`run`) → `None` (a free
+/// function has no receiver class, so it never matches a typed receiver).
+fn candidate_parent_class_name(symbol: &Symbol) -> Option<String> {
+    let normalized = symbol.qualified_name.replace("::", ".");
+    let segments: Vec<&str> = normalized.split('.').filter(|s| !s.is_empty()).collect();
+    if segments.len() < 2 {
+        return None;
+    }
+    Some(segments[segments.len() - 2].to_string())
+}
+
+/// The simple (last-segment) name of a possibly-qualified type name.
+/// `mod::Foo`/`pkg.Foo`/`Foo` → `Foo`.
+fn simple_type_name(name: &str) -> String {
+    let normalized = name.replace("::", ".");
+    normalized
+        .rsplit('.')
+        .find(|s| !s.is_empty())
+        .unwrap_or(name)
+        .to_string()
+}
+
 struct SymbolIdentityResolver<'a> {
     symbols: &'a [Symbol],
 }
@@ -7140,7 +7675,23 @@ fn indexing_worker_count(total_queued: usize) -> usize {
     let cpu_count = std::thread::available_parallelism()
         .map(|count| count.get())
         .unwrap_or(4);
-    total_queued.min(cpu_count).min(8).max(1)
+    // M5.4 — saturate the machine for the CPU-bound extraction pass. The old hard
+    // cap of 8 left most of a modern many-core CPU idle (e.g. 24 of 32 threads on
+    // a Ryzen 5950X). Reserve ONE core for the main/drain thread so the channel
+    // keeps draining and the UI stays responsive while indexing. The per-batch
+    // byte budget (BATCH_BYTE_BUDGET) bounds peak memory regardless of worker
+    // count, and oversized files are anchor-only, so more workers does not blow
+    // the transient-AST footprint. Still bounded by the batch size.
+    //
+    // `ZBLADE_INDEX_WORKERS` overrides the pool size (benchmarking / tuning on
+    // memory-constrained machines); a value of 0 or an unparseable value falls
+    // back to the auto default.
+    let workers = std::env::var("ZBLADE_INDEX_WORKERS")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or_else(|| cpu_count.saturating_sub(1).max(1));
+    total_queued.min(workers).max(1)
 }
 
 fn extract_markdown_header_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
@@ -7197,7 +7748,17 @@ fn extract_css_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
     let mut font_face_depth = 0i32;
     let sass_indented = file_path.to_ascii_lowercase().ends_with(".sass");
 
-    for (line_index, segment) in content.split_inclusive('\n').enumerate() {
+    // Comment/string-blanked structural view (byte-aligned with `content`): used
+    // only for brace counting and selector boundary detection, so a `{`/`}`
+    // hiding inside a `content: "}"` value or a `/* */` block is not miscounted.
+    // Symbol names are still read from the original line.
+    let blanked = blank_noncode_spans(content, &CSS_LEX);
+
+    for (line_index, (segment, blanked_segment)) in content
+        .split_inclusive('\n')
+        .zip(blanked.split_inclusive('\n'))
+        .enumerate()
+    {
         let line_start = byte_offset;
         byte_offset += segment.len();
 
@@ -7205,6 +7766,10 @@ fn extract_css_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
         let line = line_without_lf
             .strip_suffix('\r')
             .unwrap_or(line_without_lf);
+        let blanked_without_lf = blanked_segment.strip_suffix('\n').unwrap_or(blanked_segment);
+        let line_code = blanked_without_lf
+            .strip_suffix('\r')
+            .unwrap_or(blanked_without_lf);
         let line_number = line_index as u32;
 
         for (name, start_char, end_char) in css_custom_properties_in_line(line) {
@@ -7285,19 +7850,19 @@ fn extract_css_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
             }
         }
         if starts_font_face {
-            font_face_depth = css_next_brace_depth(0, line);
+            font_face_depth = css_next_brace_depth(0, line_code);
         } else if font_face_depth > 0 {
-            font_face_depth = css_next_brace_depth(font_face_depth, line);
+            font_face_depth = css_next_brace_depth(font_face_depth, line_code);
         }
 
-        let trimmed = line.trim();
+        let trimmed = line_code.trim();
         if trimmed.is_empty() || trimmed.starts_with("/*") || trimmed.starts_with('*') {
-            brace_depth = css_next_brace_depth(brace_depth, line);
+            brace_depth = css_next_brace_depth(brace_depth, line_code);
             continue;
         }
 
         if sass_indented && (trimmed.starts_with('.') || trimmed.starts_with('#')) {
-            let indent_chars = line.len().saturating_sub(line.trim_start().len());
+            let indent_chars = line_code.len().saturating_sub(line_code.trim_start().len());
             for (name, start_char, end_char) in css_selectors_in_text(trimmed) {
                 push_css_symbol(
                     &mut symbols,
@@ -7344,7 +7909,7 @@ fn extract_css_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
             }
         }
 
-        brace_depth = css_next_brace_depth(brace_depth, line);
+        brace_depth = css_next_brace_depth(brace_depth, line_code);
     }
 
     symbols
@@ -7525,11 +8090,18 @@ fn push_markup_selector_token(
 struct ConfigKeyEntry {
     key_path: String,
     leaf_key: String,
+    /// Exact (line, char) of the key when a span-preserving parser resolved it
+    /// (M4.3: YAML via `marked-yaml`, TOML via the line scan). `None` falls back
+    /// to the legacy `locate_config_key` re-find — retained only for JSON, whose
+    /// span-accuracy is deferred (§13: no clean spanned JSON reader without
+    /// another dependency).
+    position: Option<(u32, u32)>,
 }
 
 const CONFIG_SYMBOL_LIMIT: usize = 2048;
 
 fn extract_config_symbols(file_path: &str, content: &str, language: Language) -> Vec<Symbol> {
+    let mut symbols = Vec::new();
     let mut entries = Vec::with_capacity(CONFIG_SYMBOL_LIMIT.min(256));
     match language {
         Language::Json => {
@@ -7544,13 +8116,36 @@ fn extract_config_symbols(file_path: &str, content: &str, language: Language) ->
             }
         }
         Language::Yaml => {
-            if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(content) {
-                if is_github_actions_workflow_path(file_path) {
-                    collect_github_actions_workflow_config_keys(&value, &mut entries);
-                } else if is_docker_compose_path(file_path) {
-                    collect_docker_compose_config_keys(&value, &mut entries);
+            // M4.3 PART 1/2 — Kubernetes manifests collapse to a single `Resource`
+            // node ("<kind>/<metadata.name>") instead of a bag of repeated
+            // spec/metadata keys; Kustomize overlays expand to `Import`s. (A
+            // `kustomization.yaml` also carries apiVersion/kind but is handled as
+            // imports below, not a Resource.)
+            if is_kustomization_path(file_path) {
+                // M4.3 PART 2 — Kustomize overlays emit an Import per entry in the
+                // `resources`/`bases`/`components` lists (target = the path), PLUS
+                // their flat config keys (apiVersion/kind/namespace, …).
+                symbols.extend(collect_kustomize_import_symbols(file_path, content));
+                collect_yaml_config_entries(file_path, content, &mut entries);
+            } else {
+                let resources = collect_k8s_resource_symbols(file_path, content);
+                if resources.is_empty() {
+                    // No manifest docs — span-accurate flat config keys over the
+                    // whole file. Covers a single top-level mapping AND, via the
+                    // serde fallback inside `collect_yaml_config_entries`, a
+                    // top-level sequence/scalar that `marked-yaml`'s mapping-root
+                    // loader rejects (BUG 1 regression fix: those keys must still
+                    // be extracted).
+                    collect_yaml_config_entries(file_path, content, &mut entries);
                 } else {
-                    collect_yaml_config_keys(&value, &mut Vec::new(), &mut entries);
+                    // BUG 2 — a multi-document file with at least one manifest doc:
+                    // emit a `Resource` per manifest doc AND still extract the flat
+                    // config keys from the NON-manifest docs (a pure-manifest file
+                    // adds no extra keys). Positions for those keys are best-effort
+                    // (`locate_config_key`): a whole-file `marked-yaml` parse only
+                    // spans the first document, so per-doc spans aren't recoverable.
+                    symbols.extend(resources);
+                    collect_non_manifest_doc_config_keys(content, &mut entries);
                 }
             }
         }
@@ -7560,32 +8155,369 @@ fn extract_config_symbols(file_path: &str, content: &str, language: Language) ->
         _ => {}
     }
 
-    let mut symbols = Vec::new();
     let mut seen = HashSet::new();
     let lines = content.lines().collect::<Vec<_>>();
     let line_start_offsets = line_start_offsets(content);
     for entry in entries {
-        let location = locate_config_key(content, &entry.key_path, &entry.leaf_key);
-        let line_text = lines
-            .get(location.line as usize)
-            .copied()
-            .unwrap_or_default();
-        let line_start_byte = line_start_offsets
-            .get(location.line as usize)
-            .copied()
-            .unwrap_or(0);
+        // Span-accurate position when a span-preserving parser resolved it
+        // (YAML/TOML); JSON still falls back to the legacy re-find (§13 deferral).
+        let (line, character) = entry.position.unwrap_or_else(|| {
+            let location = locate_config_key(content, &entry.key_path, &entry.leaf_key);
+            (location.line, location.character)
+        });
+        let line_text = lines.get(line as usize).copied().unwrap_or_default();
+        let line_start_byte = line_start_offsets.get(line as usize).copied().unwrap_or(0);
         push_config_symbol(
             &mut symbols,
             &mut seen,
             file_path,
             &entry.key_path,
-            location.line,
-            location.character as usize,
+            line,
+            character as usize,
             line_start_byte,
             line_text,
         );
     }
     symbols
+}
+
+/// M4.3 PART 3 — span-accurate flat config keys for a (single-document) YAML
+/// file, appended to `entries`.
+///
+/// Parses with `marked-yaml` (per-node line/col, duplicate-key tolerant),
+/// converts to a `serde_yaml::Value` so the existing collectors produce the
+/// exact same key set, then resolves each newly-added key's real (line, col)
+/// from the marked tree — replacing the wrong-line `locate_config_key` re-find.
+///
+/// BUG 1 regression fix: `marked_yaml::parse_yaml` defaults to a mapping root and
+/// returns `Err` for a top-level SEQUENCE or scalar (e.g. an Ansible playbook or
+/// any top-level-list `.yml`). The pre-M4.3 path used `serde_yaml::from_str` and
+/// still extracted those keys, so on that error we FALL BACK to the same
+/// serde-based extraction — the keys are preserved (positions degrade to the
+/// legacy `locate_config_key` re-find, acceptable for non-mapping roots).
+fn collect_yaml_config_entries(
+    file_path: &str,
+    content: &str,
+    entries: &mut Vec<ConfigKeyEntry>,
+) {
+    let start = entries.len();
+    match marked_yaml::parse_yaml(0usize, content) {
+        Ok(root) => {
+            let value = marked_yaml_to_serde(&root);
+            dispatch_yaml_config_collector(file_path, &value, entries);
+            let mut positions = HashMap::new();
+            collect_marked_yaml_key_positions(&root, &mut Vec::new(), &mut positions);
+            for entry in &mut entries[start..] {
+                if let Some(position) = positions
+                    .get_mut(&entry.key_path)
+                    .and_then(VecDeque::pop_front)
+                {
+                    entry.position = Some(position);
+                }
+            }
+        }
+        Err(_) => {
+            // Non-mapping root: marked-yaml rejects it. Preserve the key set via
+            // the legacy serde path (positions left `None` → `locate_config_key`).
+            if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(content) {
+                dispatch_yaml_config_collector(file_path, &value, entries);
+            }
+        }
+    }
+}
+
+/// Route a parsed YAML value to the right flat-key collector (GitHub Actions /
+/// Docker Compose specializations, else the generic walk). Shared by the
+/// span-accurate path and the BUG 1 serde fallback so both produce one key set.
+fn dispatch_yaml_config_collector(
+    file_path: &str,
+    value: &serde_yaml::Value,
+    entries: &mut Vec<ConfigKeyEntry>,
+) {
+    if is_github_actions_workflow_path(file_path) {
+        collect_github_actions_workflow_config_keys(value, entries);
+    } else if is_docker_compose_path(file_path) {
+        collect_docker_compose_config_keys(value, entries);
+    } else {
+        collect_yaml_config_keys(value, &mut Vec::new(), entries);
+    }
+}
+
+/// BUG 2 — for a multi-document YAML file that contains at least one Kubernetes
+/// manifest doc (each already represented by a `Resource` symbol), extract flat
+/// config keys from the NON-manifest documents. Positions are best-effort (left
+/// `None` → `locate_config_key`), since a whole-file `marked-yaml` parse only
+/// covers the first document.
+fn collect_non_manifest_doc_config_keys(content: &str, entries: &mut Vec<ConfigKeyEntry>) {
+    for document in serde_yaml::Deserializer::from_str(content) {
+        let Ok(value) = serde_yaml::Value::deserialize(document) else {
+            // M5.12 — STOP on a parse error, never `continue`. `serde_yaml`'s
+            // Deserializer does NOT advance past a syntax error: it yields the same
+            // `Err` on every poll, so `continue` here is an infinite loop. (Firefox's
+            // `StaticPrefList.yaml` has `value: @IS_XP_MACOSX@`; `@` is a reserved
+            // YAML indicator → a hard parse error → a 100% CPU spin.) Once the
+            // document stream errors, no later document is recoverable, so break.
+            break;
+        };
+        if yaml_value_is_manifest(&value) {
+            continue;
+        }
+        collect_yaml_config_keys(&value, &mut Vec::new(), entries);
+    }
+}
+
+/// A YAML document is a Kubernetes manifest when its top-level mapping carries
+/// BOTH a non-empty `apiVersion` and `kind` (the same test used to mint a
+/// `Resource` symbol in `collect_k8s_resource_symbols`).
+fn yaml_value_is_manifest(value: &serde_yaml::Value) -> bool {
+    let Some(map) = value.as_mapping() else {
+        return false;
+    };
+    let api_version = yaml_mapping_get(map, "apiVersion")
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim);
+    let kind = yaml_mapping_get(map, "kind")
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim);
+    matches!((api_version, kind), (Some(api), Some(kind)) if !api.is_empty() && !kind.is_empty())
+}
+
+/// M4.3 PART 1 — emit one `Resource` symbol per Kubernetes manifest document.
+///
+/// A document is a manifest when its top-level mapping has BOTH `apiVersion`
+/// and `kind`. The symbol is named `"<kind>/<metadata.name>"` (falling back to
+/// `"<kind>/<unnamed>"` when `metadata.name` is absent). Multi-document files
+/// (`---` separated) yield one `Resource` per manifest doc. Spans are not
+/// required for resources, so each is anchored at the file start (line 0).
+fn collect_k8s_resource_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    let mut symbols = Vec::new();
+    let mut seen = HashSet::new();
+    for document in serde_yaml::Deserializer::from_str(content) {
+        let Ok(value) = serde_yaml::Value::deserialize(document) else {
+            // M5.12 — break, never `continue`: a `serde_yaml` parse error is sticky
+            // (the Deserializer re-yields the same `Err` forever), so `continue`
+            // spins at 100% CPU. See `collect_non_manifest_doc_config_keys`.
+            break;
+        };
+        let Some(map) = value.as_mapping() else {
+            continue;
+        };
+        let api_version = yaml_mapping_get(map, "apiVersion").and_then(serde_yaml::Value::as_str);
+        let kind = yaml_mapping_get(map, "kind").and_then(serde_yaml::Value::as_str);
+        let (Some(api_version), Some(kind)) = (api_version, kind) else {
+            continue;
+        };
+        if api_version.trim().is_empty() || kind.trim().is_empty() {
+            continue;
+        }
+        let name = yaml_mapping_get(map, "metadata")
+            .and_then(serde_yaml::Value::as_mapping)
+            .and_then(|metadata| yaml_mapping_get(metadata, "name"))
+            .and_then(serde_yaml::Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or("<unnamed>");
+        let resource_name = format!("{kind}/{name}");
+        if seen.insert(resource_name.clone()) {
+            symbols.push(make_config_node_symbol(
+                file_path,
+                &resource_name,
+                SymbolType::Resource,
+                0,
+                0,
+                0,
+            ));
+        }
+    }
+    symbols
+}
+
+/// M4.3 PART 2 — expand a `kustomization.yaml`'s `resources`/`bases`/`components`
+/// list entries into one `Import` symbol each (target = the referenced path),
+/// pinned to the exact list-item line/col via `marked-yaml`.
+fn collect_kustomize_import_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
+    let mut symbols = Vec::new();
+    let mut seen = HashSet::new();
+    let Ok(root) = marked_yaml::parse_yaml(0usize, content) else {
+        return symbols;
+    };
+    let Some(map) = root.as_mapping() else {
+        return symbols;
+    };
+    let line_start_offsets = line_start_offsets(content);
+    for section in ["resources", "bases", "components"] {
+        let Some(sequence) = map.get_node(section).and_then(marked_yaml::types::Node::as_sequence)
+        else {
+            continue;
+        };
+        for item in sequence.iter() {
+            let Some(scalar) = item.as_scalar() else {
+                continue;
+            };
+            let target = scalar.as_str().trim();
+            if target.is_empty() || target.len() > 240 {
+                continue;
+            }
+            if !seen.insert(target.to_string()) {
+                continue;
+            }
+            let (line, character) = marked_marker_position(scalar.span().start());
+            let line_start_byte = line_start_offsets.get(line as usize).copied().unwrap_or(0);
+            symbols.push(make_config_node_symbol(
+                file_path,
+                target,
+                SymbolType::Import,
+                line,
+                character,
+                line_start_byte,
+            ));
+        }
+    }
+    symbols
+}
+
+/// Build a `Resource`/`Import` node symbol for the config scanner.
+fn make_config_node_symbol(
+    file_path: &str,
+    name: &str,
+    symbol_type: SymbolType,
+    line: u32,
+    character: u32,
+    line_start_byte: usize,
+) -> Symbol {
+    let end_char = character.saturating_add(name.len() as u32);
+    Symbol {
+        id: format!("{}::{}#{}", file_path, name, symbol_type),
+        name: name.to_string(),
+        qualified_name: name.to_string(),
+        symbol_type,
+        file_path: file_path.to_string(),
+        range: Range {
+            start: Position::new(line, character),
+            end: Position::new(line, end_char),
+        },
+        byte_offset: line_start_byte.saturating_add(character as usize),
+        byte_length: name.len(),
+        parent_id: None,
+        docstring: None,
+        signature: None,
+        content_hash: compute_hash(name),
+    }
+}
+
+/// M4.3 PART 2 — Import edges for the config scanner: mirror the tree-sitter
+/// import-relationship derivation so kustomize `Import` symbols also surface as
+/// `Import` relationships (target = the referenced path). Other config symbols
+/// (`Property`/`Resource`) are not imports and produce no edges.
+fn derive_config_import_relationships(
+    file_path: &str,
+    symbols: &[Symbol],
+) -> Vec<SymbolRelationship> {
+    let mut relationships = Vec::new();
+    let mut seen = HashSet::new();
+    for symbol in symbols {
+        if symbol.symbol_type != SymbolType::Import || symbol.name.is_empty() {
+            continue;
+        }
+        if !seen.insert((symbol.id.clone(), symbol.name.clone(), symbol.range.start.line)) {
+            continue;
+        }
+        relationships.push(SymbolRelationship {
+            source_symbol_id: symbol.id.clone(),
+            source_file_path: file_path.to_string(),
+            target_name: symbol.name.clone(),
+            target_symbol_id: None,
+            relationship_type: SymbolRelationshipType::Import,
+            line: symbol.range.start.line,
+            ..Default::default()
+        });
+    }
+    relationships
+}
+
+/// Recursively convert a `marked-yaml` node into a `serde_yaml::Value` (dropping
+/// the span markers), so the existing serde-based config-key collectors run
+/// unchanged on YAML that `serde_yaml::from_str` would reject (e.g. duplicate
+/// keys). All scalars become strings — the collectors key off structure and
+/// mapping keys, never scalar value types.
+fn marked_yaml_to_serde(node: &marked_yaml::types::Node) -> serde_yaml::Value {
+    use marked_yaml::types::Node;
+    match node {
+        Node::Scalar(scalar) => serde_yaml::Value::String(scalar.as_str().to_string()),
+        Node::Mapping(map) => {
+            let mut mapping = serde_yaml::Mapping::new();
+            for (key, value) in map.iter() {
+                mapping.insert(
+                    serde_yaml::Value::String(key.as_str().to_string()),
+                    marked_yaml_to_serde(value),
+                );
+            }
+            serde_yaml::Value::Mapping(mapping)
+        }
+        Node::Sequence(sequence) => {
+            serde_yaml::Value::Sequence(sequence.iter().map(marked_yaml_to_serde).collect())
+        }
+    }
+}
+
+/// Build a `key_path -> [(line, char), …]` index from a `marked-yaml` tree,
+/// mirroring `collect_yaml_config_keys`' traversal (same `is_config_key_segment`
+/// filter, mappings + sequences) so each config key resolves to its OWN source
+/// position. Positions are queued in document order; the consumer pops the front
+/// so repeated paths (e.g. the same leaf key in two sub-trees) line up with the
+/// collector's document-order entries.
+fn collect_marked_yaml_key_positions(
+    node: &marked_yaml::types::Node,
+    path: &mut Vec<String>,
+    positions: &mut HashMap<String, VecDeque<(u32, u32)>>,
+) {
+    use marked_yaml::types::Node;
+    match node {
+        Node::Mapping(map) => {
+            for (key, value) in map.iter() {
+                let segment = key.as_str();
+                if !is_config_key_segment(segment) {
+                    continue;
+                }
+                path.push(segment.to_string());
+                let position = marked_marker_position(key.span().start());
+                positions
+                    .entry(path.join("."))
+                    .or_default()
+                    .push_back(position);
+                collect_marked_yaml_key_positions(value, path, positions);
+                path.pop();
+            }
+        }
+        Node::Sequence(sequence) => {
+            for item in sequence.iter() {
+                collect_marked_yaml_key_positions(item, path, positions);
+            }
+        }
+        Node::Scalar(_) => {}
+    }
+}
+
+/// Convert a `marked-yaml` start marker to the crate's 0-indexed (line, char).
+/// `marked-yaml` reports 1-indexed line and column.
+fn marked_marker_position(marker: Option<&marked_yaml::Marker>) -> (u32, u32) {
+    marker
+        .map(|marker| {
+            (
+                marker.line().saturating_sub(1) as u32,
+                marker.column().saturating_sub(1) as u32,
+            )
+        })
+        .unwrap_or((0, 0))
+}
+
+/// A `kustomization.yaml`/`.yml` (routed to YAML by M1.3) — the Kustomize
+/// overlay entry-point whose `resources`/`bases`/`components` lists are imports.
+fn is_kustomization_path(file_path: &str) -> bool {
+    matches!(
+        config_file_name(file_path).as_str(),
+        "kustomization.yaml" | "kustomization.yml"
+    )
 }
 
 fn parse_json_config_value(file_path: &str, content: &str) -> Option<serde_json::Value> {
@@ -8088,6 +9020,13 @@ fn collect_github_actions_step_keys(
     steps: &[serde_yaml::Value],
     entries: &mut Vec<ConfigKeyEntry>,
 ) {
+    // NOTE (§13, best-effort): the leaf segment here is the step's VALUE (its
+    // `name`/`uses`/`run`), not a literal mapping key, so `jobs.<id>.steps.<name>`
+    // is NOT present in the literal key-path index built by
+    // `collect_marked_yaml_key_positions`. These entries therefore carry no span
+    // and fall back to `locate_config_key` — value-keyed GitHub-Actions step
+    // positions remain best-effort. (The GENERIC repeated-leaf-key case — the same
+    // literal key under two sub-trees — IS span-accurate via the position queue.)
     for step in steps {
         let Some(step_map) = step.as_mapping() else {
             continue;
@@ -8118,8 +9057,12 @@ fn yaml_mapping_get<'a>(map: &'a serde_yaml::Mapping, key: &str) -> Option<&'a s
 }
 
 fn collect_toml_config_keys(content: &str, entries: &mut Vec<ConfigKeyEntry>) {
+    // M4.3 PART 3 — span-accurate by construction: this is a physical line scan,
+    // so each key entry carries the line it was seen on (and the column where the
+    // key starts), instead of being re-found by `locate_config_key` (which pins
+    // every duplicate-named key to its first occurrence).
     let mut table_path = Vec::<String>::new();
-    for line in content.lines() {
+    for (line_index, line) in content.lines().enumerate() {
         if entries.len() >= CONFIG_SYMBOL_LIMIT {
             break;
         }
@@ -8146,11 +9089,26 @@ fn collect_toml_config_keys(content: &str, entries: &mut Vec<ConfigKeyEntry>) {
         let Some(leaf_key) = path.last().cloned() else {
             continue;
         };
-        push_config_key_entry(&path, &leaf_key, entries);
+        let column = line.len().saturating_sub(line.trim_start().len()) as u32;
+        push_config_key_entry_at(
+            &path,
+            &leaf_key,
+            Some((line_index as u32, column)),
+            entries,
+        );
     }
 }
 
 fn push_config_key_entry(path: &[String], leaf_key: &str, entries: &mut Vec<ConfigKeyEntry>) {
+    push_config_key_entry_at(path, leaf_key, None, entries);
+}
+
+fn push_config_key_entry_at(
+    path: &[String],
+    leaf_key: &str,
+    position: Option<(u32, u32)>,
+    entries: &mut Vec<ConfigKeyEntry>,
+) {
     if entries.len() >= CONFIG_SYMBOL_LIMIT || path.is_empty() {
         return;
     }
@@ -8158,6 +9116,7 @@ fn push_config_key_entry(path: &[String], leaf_key: &str, entries: &mut Vec<Conf
     entries.push(ConfigKeyEntry {
         key_path: path.join("."),
         leaf_key: leaf_key.to_string(),
+        position,
     });
 }
 
@@ -8294,8 +9253,445 @@ fn push_config_symbol(
     });
 }
 
+// ============================================================================
+// M1.4 — shared comment/string/heredoc-aware preprocessing for line scanners.
+//
+// ZBlade's line-oriented scanner languages carry no cross-line lexical state, so
+// a `class`/`def`/`function` keyword sitting inside a `/* … */` block, a string
+// literal, or a heredoc was extracted as a real symbol, and a trailing
+// `// class Foo` comment minted a bogus symbol. `blank_noncode_spans` replaces
+// the bytes of commented / quoted / heredoc spans with spaces — preserving
+// newlines and the exact byte length, so every downstream line/column/byte
+// calculation is unchanged — BEFORE the per-line declaration scanners run.
+//
+// ONE implementation, parameterized per language by `LexSpec`. Strings are
+// always *tracked* (so a comment marker inside a string is never mistaken for a
+// comment), but only *blanked* when `blank_strings` is set: several scanners
+// read an identifier out of a string literal (Ruby `require "x"`, shell
+// `source "x"`, C/C++ `#include "x"`), and blanking those would erase real
+// symbols.
+// ============================================================================
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeredocStyle {
+    None,
+    /// PHP `<<<LABEL` / `<<<'LABEL'` heredoc & nowdoc (`<<<` is an unambiguous
+    /// opener, unlike the shell/Ruby `<<` which collides with operators).
+    Php,
+}
+
+#[derive(Clone, Copy)]
+struct StringDelim {
+    open: u8,
+    close: u8,
+}
+
+/// Per-language lexical surface used by `blank_noncode_spans`.
+struct LexSpec {
+    /// Line-comment markers (e.g. `//`, `#`, `--`). First match wins.
+    line_comments: &'static [&'static str],
+    /// Block-comment open/close (e.g. `("/*", "*/")`); spans lines.
+    block_comment: Option<(&'static str, &'static str)>,
+    /// String delimiters to track. A backslash escapes the next byte.
+    strings: &'static [StringDelim],
+    /// Blank string interiors too — only for languages that never read an
+    /// identifier out of a string literal.
+    blank_strings: bool,
+    heredoc: HeredocStyle,
+    /// PHP 8 attributes start with `#[`; never treat that `#` as a line comment.
+    attr_hash_guard: bool,
+}
+
+const STR_DQ_SQ: &[StringDelim] = &[
+    StringDelim {
+        open: b'"',
+        close: b'"',
+    },
+    StringDelim {
+        open: b'\'',
+        close: b'\'',
+    },
+];
+const STR_SQ_ONLY: &[StringDelim] = &[StringDelim {
+    open: b'\'',
+    close: b'\'',
+}];
+const STR_DQ_ONLY: &[StringDelim] = &[StringDelim {
+    open: b'"',
+    close: b'"',
+}];
+
+const PHP_LEX: LexSpec = LexSpec {
+    line_comments: &["//", "#"],
+    block_comment: Some(("/*", "*/")),
+    strings: STR_DQ_SQ,
+    blank_strings: true,
+    heredoc: HeredocStyle::Php,
+    attr_hash_guard: true,
+};
+const JAVA_LEX: LexSpec = LexSpec {
+    line_comments: &["//"],
+    block_comment: Some(("/*", "*/")),
+    strings: STR_DQ_SQ,
+    blank_strings: true,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+const CSHARP_LEX: LexSpec = LexSpec {
+    line_comments: &["//"],
+    block_comment: Some(("/*", "*/")),
+    strings: STR_DQ_SQ,
+    blank_strings: true,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+const KOTLIN_LEX: LexSpec = LexSpec {
+    line_comments: &["//"],
+    block_comment: Some(("/*", "*/")),
+    strings: STR_DQ_SQ,
+    blank_strings: true,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+// Ruby reads `require "x"` out of a string → track but do not blank strings.
+const RUBY_LEX: LexSpec = LexSpec {
+    line_comments: &["#"],
+    block_comment: None,
+    strings: STR_DQ_SQ,
+    blank_strings: false,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+// Shell reads `source "x"` out of a string → track but do not blank strings.
+const SHELL_LEX: LexSpec = LexSpec {
+    line_comments: &["#"],
+    block_comment: None,
+    strings: STR_DQ_SQ,
+    blank_strings: false,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+const DOCKERFILE_LEX: LexSpec = LexSpec {
+    line_comments: &["#"],
+    block_comment: None,
+    strings: STR_DQ_SQ,
+    blank_strings: false,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+// SQL: `'` is a string, `"` is a (quoted) identifier — track only `'`.
+const SQL_LEX: LexSpec = LexSpec {
+    line_comments: &["--"],
+    block_comment: Some(("/*", "*/")),
+    strings: STR_SQ_ONLY,
+    blank_strings: false,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+const BUILD_SCRIPT_LEX: LexSpec = LexSpec {
+    line_comments: &["#"],
+    block_comment: None,
+    strings: STR_DQ_ONLY,
+    blank_strings: false,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+// CSS/SCSS/Sass/Less: blank `/* */` blocks and strings so a `{`/`}` hiding in a
+// `content: "}"` value (or a comment) is not mis-counted as a real brace. Line
+// comments are intentionally omitted: a bare `//` is not a CSS comment and would
+// wrongly swallow `url(http://…)`. Used only for the structural brace/selector
+// view; symbol names are still read from the original line.
+const CSS_LEX: LexSpec = LexSpec {
+    line_comments: &[],
+    block_comment: Some(("/*", "*/")),
+    strings: STR_DQ_SQ,
+    blank_strings: true,
+    heredoc: HeredocStyle::None,
+    attr_hash_guard: false,
+};
+
+/// Blank comment / string / heredoc spans of `content`, preserving byte length
+/// and newlines so existing line/offset math is unchanged.
+fn blank_noncode_spans(content: &str, spec: &LexSpec) -> String {
+    let src = content.as_bytes();
+    let mut out = src.to_vec();
+    let mut in_block = false;
+    let mut heredoc_label: Option<Vec<u8>> = None;
+    let mut pos = 0usize;
+
+    for segment in content.split_inclusive('\n') {
+        let line_start = pos;
+        let line_end = pos + segment.len();
+        pos = line_end;
+        scrub_line(
+            src,
+            &mut out,
+            line_start,
+            line_end,
+            spec,
+            &mut in_block,
+            &mut heredoc_label,
+        );
+    }
+
+    String::from_utf8(out).unwrap_or_else(|_| content.to_string())
+}
+
+#[inline]
+fn blank_span_byte(out: &mut [u8], src: &[u8], i: usize) {
+    if src[i] != b'\n' && src[i] != b'\r' {
+        out[i] = b' ';
+    }
+}
+
+#[inline]
+fn bytes_match_at(src: &[u8], i: usize, needle: &str) -> bool {
+    let n = needle.as_bytes();
+    src.len() >= i + n.len() && &src[i..i + n.len()] == n
+}
+
+fn line_comment_len_at(src: &[u8], i: usize, spec: &LexSpec) -> Option<usize> {
+    for marker in spec.line_comments {
+        if bytes_match_at(src, i, marker) {
+            if spec.attr_hash_guard && *marker == "#" && src.get(i + 1) == Some(&b'[') {
+                continue; // PHP 8 attribute `#[…]`, not a comment.
+            }
+            return Some(marker.len());
+        }
+    }
+    None
+}
+
+fn string_open_at(src: &[u8], i: usize, spec: &LexSpec) -> Option<u8> {
+    let b = src[i];
+    spec.strings
+        .iter()
+        .find(|delim| delim.open == b)
+        .map(|delim| delim.close)
+}
+
+/// Detect a PHP heredoc/nowdoc opener `<<<LABEL` / `<<<'LABEL'` at `i`. Returns
+/// the label and the number of bytes consumed by the opener token.
+fn php_heredoc_open_at(src: &[u8], i: usize, end: usize) -> Option<(Vec<u8>, usize)> {
+    if !bytes_match_at(src, i, "<<<") {
+        return None;
+    }
+    let mut j = i + 3;
+    while j < end && (src[j] == b' ' || src[j] == b'\t') {
+        j += 1;
+    }
+    let quote = if j < end && (src[j] == b'\'' || src[j] == b'"') {
+        let q = src[j];
+        j += 1;
+        Some(q)
+    } else {
+        None
+    };
+    let label_start = j;
+    while j < end && (src[j] == b'_' || src[j].is_ascii_alphanumeric()) {
+        j += 1;
+    }
+    if j == label_start || src[label_start].is_ascii_digit() {
+        return None; // labels are non-empty and cannot start with a digit
+    }
+    let label = src[label_start..j].to_vec();
+    if let Some(q) = quote {
+        if src.get(j) != Some(&q) {
+            return None; // unterminated quoted label
+        }
+        j += 1;
+    }
+    Some((label, j - i))
+}
+
+/// Is this line a heredoc closing marker for `label`? (PHP 7.3+ allows the
+/// closing label to be indented and immediately followed by a non-identifier.)
+fn line_is_heredoc_terminator(line: &[u8], label: &[u8]) -> bool {
+    let mut endp = line.len();
+    while endp > 0 && (line[endp - 1] == b'\n' || line[endp - 1] == b'\r') {
+        endp -= 1;
+    }
+    let line = &line[..endp];
+    let mut s = 0usize;
+    while s < line.len() && (line[s] == b' ' || line[s] == b'\t') {
+        s += 1;
+    }
+    let rest = &line[s..];
+    if !rest.starts_with(label) {
+        return false;
+    }
+    match rest.get(label.len()) {
+        None => true,
+        Some(c) => !(c.is_ascii_alphanumeric() || *c == b'_'),
+    }
+}
+
+/// Scrub one line `src[start..end]` (the trailing `\n`, if any, is inside the
+/// range), updating the cross-line `in_block` / `heredoc_label` state.
+fn scrub_line(
+    src: &[u8],
+    out: &mut [u8],
+    start: usize,
+    end: usize,
+    spec: &LexSpec,
+    in_block: &mut bool,
+    heredoc_label: &mut Option<Vec<u8>>,
+) {
+    // Inside an open heredoc: blank body lines until the terminator line.
+    if let Some(label) = heredoc_label.as_ref() {
+        if line_is_heredoc_terminator(&src[start..end], label) {
+            *heredoc_label = None;
+        } else {
+            for i in start..end {
+                blank_span_byte(out, src, i);
+            }
+        }
+        return;
+    }
+
+    let mut pending_heredoc: Option<Vec<u8>> = None;
+    let mut cur_string: Option<u8> = None; // line-local; reset every line
+    let mut i = start;
+
+    while i < end {
+        let b = src[i];
+        if b == b'\n' {
+            break;
+        }
+
+        if *in_block {
+            if let Some((_, close)) = spec.block_comment {
+                if bytes_match_at(src, i, close) {
+                    for k in i..i + close.len() {
+                        blank_span_byte(out, src, k);
+                    }
+                    i += close.len();
+                    *in_block = false;
+                    continue;
+                }
+            }
+            blank_span_byte(out, src, i);
+            i += 1;
+            continue;
+        }
+
+        if let Some(close) = cur_string {
+            if b == b'\\' {
+                if spec.blank_strings {
+                    blank_span_byte(out, src, i);
+                    if i + 1 < end {
+                        blank_span_byte(out, src, i + 1);
+                    }
+                }
+                i += if i + 1 < end { 2 } else { 1 };
+                continue;
+            }
+            if spec.blank_strings {
+                blank_span_byte(out, src, i);
+            }
+            if b == close {
+                cur_string = None;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Normal state.
+        if let Some((open, _)) = spec.block_comment {
+            if bytes_match_at(src, i, open) {
+                for k in i..i + open.len() {
+                    blank_span_byte(out, src, k);
+                }
+                i += open.len();
+                *in_block = true;
+                continue;
+            }
+        }
+
+        if line_comment_len_at(src, i, spec).is_some() {
+            while i < end && src[i] != b'\n' {
+                blank_span_byte(out, src, i);
+                i += 1;
+            }
+            continue;
+        }
+
+        if let Some(close) = string_open_at(src, i, spec) {
+            if spec.blank_strings {
+                blank_span_byte(out, src, i);
+            }
+            cur_string = Some(close);
+            i += 1;
+            continue;
+        }
+
+        if spec.heredoc == HeredocStyle::Php {
+            if let Some((label, consumed)) = php_heredoc_open_at(src, i, end) {
+                pending_heredoc = Some(label);
+                i += consumed;
+                continue;
+            }
+        }
+
+        i += 1;
+    }
+
+    if let Some(label) = pending_heredoc {
+        *heredoc_label = Some(label);
+    }
+}
+
+/// Run the non-tree-sitter line/regex SCANNER extractor for a scanner-backed
+/// language and return the symbols it would index. The golden harness uses this
+/// to exercise the scanner path directly, which the public tree-sitter
+/// `extract_symbols` cannot reach. Returns an empty vec for tree-sitter
+/// languages and for Vue/Svelte (whose component extraction needs a
+/// `LanguageService`).
+pub fn extract_scanner_symbols(file_path: &str, content: &str, language: Language) -> Vec<Symbol> {
+    if matches!(language, Language::Markdown) {
+        return extract_markdown_header_symbols(file_path, content);
+    }
+    if language.is_stylesheet_scanner() {
+        return extract_css_symbols(file_path, content);
+    }
+    if language.is_markup_scanner() && !matches!(language, Language::Vue | Language::Svelte) {
+        return extract_markup_symbols(file_path, content);
+    }
+    if language.is_config_scanner() {
+        return extract_config_symbols(file_path, content, language);
+    }
+    if language.is_php_scanner() {
+        return extract_php_symbols(file_path, content);
+    }
+    if language.is_java_scanner() {
+        return extract_java_symbols(file_path, content);
+    }
+    if language.is_csharp_scanner() {
+        return extract_csharp_symbols(file_path, content);
+    }
+    if language.is_kotlin_scanner() {
+        return extract_kotlin_symbols(file_path, content);
+    }
+    if language.is_ruby_scanner() {
+        return extract_ruby_symbols(file_path, content);
+    }
+    if language.is_shell_scanner() {
+        return extract_shell_symbols(file_path, content);
+    }
+    if language.is_dockerfile_scanner() {
+        return extract_dockerfile_symbols(file_path, content);
+    }
+    if language.is_sql_scanner() {
+        return extract_sql_symbols(file_path, content);
+    }
+    if language.is_build_script_scanner() {
+        return extract_build_script_symbols(file_path, content);
+    }
+    Vec::new()
+}
+
 fn extract_php_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, php_declarations_in_line)
+    extract_line_scanner_symbols(file_path, content, &PHP_LEX, php_declarations_in_line)
 }
 
 #[derive(Debug, Clone)]
@@ -8309,13 +9705,18 @@ struct LineScannerDeclaration {
 fn extract_line_scanner_symbols(
     file_path: &str,
     content: &str,
+    spec: &LexSpec,
     declarations_in_line: fn(&str) -> Vec<LineScannerDeclaration>,
 ) -> Vec<Symbol> {
+    // Blank commented/quoted/heredoc spans first (byte-length and newlines
+    // preserved), so a keyword hiding in a comment/string/heredoc is not
+    // mis-extracted. Offsets computed below are identical to the original file.
+    let blanked = blank_noncode_spans(content, spec);
     let mut symbols = Vec::new();
     let mut seen = HashSet::new();
     let mut byte_offset = 0usize;
 
-    for (line_index, segment) in content.split_inclusive('\n').enumerate() {
+    for (line_index, segment) in blanked.split_inclusive('\n').enumerate() {
         let line_start = byte_offset;
         byte_offset += segment.len();
 
@@ -8521,7 +9922,7 @@ fn is_php_identifier_char(ch: char) -> bool {
 }
 
 fn extract_java_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, java_declarations_in_line)
+    extract_line_scanner_symbols(file_path, content, &JAVA_LEX, java_declarations_in_line)
 }
 
 fn java_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -8747,7 +10148,7 @@ fn is_java_identifier_char(ch: char) -> bool {
 }
 
 fn extract_csharp_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, csharp_declarations_in_line)
+    extract_line_scanner_symbols(file_path, content, &CSHARP_LEX, csharp_declarations_in_line)
 }
 
 fn csharp_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -8892,7 +10293,7 @@ fn csharp_method_declaration(code: &str, code_start: usize) -> Option<LineScanne
 }
 
 fn extract_kotlin_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, kotlin_declarations_in_line)
+    extract_line_scanner_symbols(file_path, content, &KOTLIN_LEX, kotlin_declarations_in_line)
 }
 
 fn kotlin_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -9070,7 +10471,7 @@ fn kotlin_function_declaration(code: &str, code_start: usize) -> Option<LineScan
 }
 
 fn extract_ruby_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, ruby_declarations_in_line)
+    extract_line_scanner_symbols(file_path, content, &RUBY_LEX, ruby_declarations_in_line)
 }
 
 fn ruby_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -9207,258 +10608,8 @@ fn ruby_read_method_name(text: &str) -> Option<(String, usize)> {
     (end > 0).then(|| (text[..end].to_string(), end))
 }
 
-fn extract_cpp_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, cpp_declarations_in_line)
-}
-
-fn cpp_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
-    let code = cpp_line_code(line);
-    if code.is_empty() {
-        return Vec::new();
-    }
-    let code_start = line.find(code).unwrap_or(0);
-
-    if let Some(declaration) = cpp_include_declaration(code, code_start) {
-        return vec![declaration];
-    }
-
-    let mut declarations = Vec::new();
-    if let Some(declaration) = cpp_namespace_declaration(code, code_start) {
-        declarations.push(declaration);
-    }
-    let has_enum_class = code.contains("enum class") || code.contains("enum struct");
-    for (keyword, symbol_type) in [
-        ("class", SymbolType::Class),
-        ("struct", SymbolType::Struct),
-        ("union", SymbolType::Struct),
-    ] {
-        if keyword == "class" && has_enum_class {
-            continue;
-        }
-        if let Some(declaration) = cpp_keyword_declaration(code, code_start, keyword, symbol_type) {
-            declarations.push(declaration);
-        }
-    }
-    if let Some(declaration) = cpp_enum_declaration(code, code_start) {
-        declarations.push(declaration);
-    }
-    if declarations.is_empty() {
-        if let Some(declaration) = cpp_function_declaration(code, code_start) {
-            declarations.push(declaration);
-        }
-    }
-
-    declarations
-}
-
-fn cpp_line_code(line: &str) -> &str {
-    let trimmed = line.trim_start();
-    if trimmed.starts_with("//") || trimmed.starts_with('*') || trimmed.starts_with("/*") {
-        ""
-    } else {
-        trimmed.split("//").next().unwrap_or(trimmed).trim_end()
-    }
-}
-
-fn cpp_include_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
-    let rest = code.strip_prefix("#include ")?;
-    let rest = rest.trim_start();
-    let (name_start, name_end) = if let Some(after_quote) = rest.strip_prefix('"') {
-        (1usize, after_quote.find('"')? + 1)
-    } else if let Some(after_angle) = rest.strip_prefix('<') {
-        (1usize, after_angle.find('>')? + 1)
-    } else {
-        return None;
-    };
-    let name = rest[name_start..name_end].to_string();
-    let leading_ws = code.len().saturating_sub(rest.len());
-    let start_char = code_start + leading_ws + name_start;
-    Some(LineScannerDeclaration {
-        name,
-        symbol_type: SymbolType::Import,
-        start_char,
-        end_char: start_char + name_end.saturating_sub(name_start),
-    })
-}
-
-fn cpp_namespace_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
-    let rest = code.strip_prefix("namespace ")?;
-    let name_start = code.len().saturating_sub(rest.len());
-    let rest = rest.trim_start();
-    if rest.starts_with('{') {
-        return None;
-    }
-    let leading_ws = code[name_start..].len().saturating_sub(rest.len());
-    let (name, name_len) = cpp_read_qualified_name(rest)?;
-    let start_char = code_start + name_start + leading_ws;
-    Some(LineScannerDeclaration {
-        name,
-        symbol_type: SymbolType::Namespace,
-        start_char,
-        end_char: start_char + name_len,
-    })
-}
-
-fn cpp_keyword_declaration(
-    code: &str,
-    code_start: usize,
-    keyword: &str,
-    symbol_type: SymbolType,
-) -> Option<LineScannerDeclaration> {
-    let keyword_start = java_find_keyword(code, keyword)?;
-    let after_keyword = keyword_start + keyword.len();
-    let rest = code[after_keyword..].trim_start();
-    let leading_ws = code[after_keyword..].len().saturating_sub(rest.len());
-    let (name, name_len) = cpp_read_identifier(rest)?;
-    let after_name = rest[name_len..].trim_start();
-    if !(after_name.is_empty()
-        || after_name.starts_with('{')
-        || after_name.starts_with(';')
-        || after_name.starts_with(':'))
-    {
-        return None;
-    }
-    let start_char = code_start + after_keyword + leading_ws;
-    Some(LineScannerDeclaration {
-        name,
-        symbol_type,
-        start_char,
-        end_char: start_char + name_len,
-    })
-}
-
-fn cpp_enum_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
-    let enum_start = java_find_keyword(code, "enum")?;
-    let after_enum = enum_start + "enum".len();
-    let mut rest = code[after_enum..].trim_start();
-    if let Some(after_kind) = rest
-        .strip_prefix("class ")
-        .or_else(|| rest.strip_prefix("struct "))
-    {
-        rest = after_kind.trim_start();
-    }
-    let leading_ws = code[after_enum..].len().saturating_sub(rest.len());
-    let (name, name_len) = cpp_read_identifier(rest)?;
-    let start_char = code_start + after_enum + leading_ws;
-    Some(LineScannerDeclaration {
-        name,
-        symbol_type: SymbolType::Enum,
-        start_char,
-        end_char: start_char + name_len,
-    })
-}
-
-fn cpp_function_declaration(code: &str, code_start: usize) -> Option<LineScannerDeclaration> {
-    if code.starts_with('#') || cpp_starts_with_statement_keyword(code) || code.contains('=') {
-        return None;
-    }
-    let paren_index = code.find('(')?;
-    let before_paren = code[..paren_index].trim_end();
-    let (name, name_start) = cpp_read_identifier_before(before_paren)?;
-    if cpp_is_control_or_builtin(&name) {
-        return None;
-    }
-    let before_name = before_paren[..name_start].trim_end();
-    if before_name.is_empty() || before_name.ends_with('.') || before_name.ends_with("->") {
-        return None;
-    }
-
-    let symbol_type = if code_start > 0 || before_name.ends_with("::") {
-        SymbolType::Method
-    } else {
-        SymbolType::Function
-    };
-    let start_char = code_start + name_start;
-    Some(LineScannerDeclaration {
-        name,
-        symbol_type,
-        start_char,
-        end_char: start_char + before_paren[name_start..].len(),
-    })
-}
-
-fn cpp_read_identifier(text: &str) -> Option<(String, usize)> {
-    let mut end = 0usize;
-    for (index, ch) in text.char_indices() {
-        if index == 0 && !(ch == '_' || ch.is_ascii_alphabetic()) {
-            return None;
-        }
-        if ch == '_' || ch.is_ascii_alphanumeric() {
-            end = index + ch.len_utf8();
-        } else {
-            break;
-        }
-    }
-    (end > 0).then(|| (text[..end].to_string(), end))
-}
-
-fn cpp_read_identifier_before(text: &str) -> Option<(String, usize)> {
-    let trimmed_len = text.trim_end().len();
-    let trimmed = &text[..trimmed_len];
-    let mut start = trimmed.len();
-    for (index, ch) in trimmed.char_indices().rev() {
-        if ch == '_' || ch.is_ascii_alphanumeric() {
-            start = index;
-        } else {
-            break;
-        }
-    }
-    if start == trimmed.len() {
-        return None;
-    }
-    let name = &trimmed[start..];
-    name.chars()
-        .next()
-        .filter(|ch| *ch == '_' || ch.is_ascii_alphabetic())?;
-    Some((name.to_string(), start))
-}
-
-fn cpp_read_qualified_name(text: &str) -> Option<(String, usize)> {
-    let mut end = 0usize;
-    for (index, ch) in text.char_indices() {
-        if index == 0 && !(ch == '_' || ch.is_ascii_alphabetic()) {
-            return None;
-        }
-        if ch == '_' || ch == ':' || ch.is_ascii_alphanumeric() {
-            end = index + ch.len_utf8();
-        } else {
-            break;
-        }
-    }
-    (end > 0).then(|| (text[..end].trim_end_matches(':').to_string(), end))
-}
-
-fn cpp_starts_with_statement_keyword(text: &str) -> bool {
-    [
-        "if",
-        "for",
-        "while",
-        "switch",
-        "catch",
-        "return",
-        "throw",
-        "static_assert",
-    ]
-    .iter()
-    .any(|keyword| text.trim_start().starts_with(keyword))
-}
-
-fn cpp_is_control_or_builtin(name: &str) -> bool {
-    matches!(
-        name,
-        "if" | "for"
-            | "while"
-            | "switch"
-            | "catch"
-            | "return"
-            | "sizeof"
-            | "alignof"
-            | "static_assert"
-    )
-}
-
 fn extract_shell_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, shell_declarations_in_line)
+    extract_line_scanner_symbols(file_path, content, &SHELL_LEX, shell_declarations_in_line)
 }
 
 fn shell_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -9585,7 +10736,12 @@ fn shell_read_identifier_before(text: &str) -> Option<(String, usize)> {
 }
 
 fn extract_dockerfile_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, dockerfile_declarations_in_line)
+    extract_line_scanner_symbols(
+        file_path,
+        content,
+        &DOCKERFILE_LEX,
+        dockerfile_declarations_in_line,
+    )
 }
 
 fn dockerfile_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -9720,7 +10876,7 @@ fn dockerfile_read_key(text: &str) -> Option<(String, usize)> {
 }
 
 fn extract_sql_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, sql_declarations_in_line)
+    extract_line_scanner_symbols(file_path, content, &SQL_LEX, sql_declarations_in_line)
 }
 
 fn sql_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -9877,7 +11033,12 @@ fn sql_read_identifier_at(text: &str, cursor: usize) -> Option<(String, usize, u
 }
 
 fn extract_build_script_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
-    extract_line_scanner_symbols(file_path, content, build_script_declarations_in_line)
+    extract_line_scanner_symbols(
+        file_path,
+        content,
+        &BUILD_SCRIPT_LEX,
+        build_script_declarations_in_line,
+    )
 }
 
 fn build_script_declarations_in_line(line: &str) -> Vec<LineScannerDeclaration> {
@@ -10439,6 +11600,9 @@ fn direct_relationship_score(relationship_type: SymbolRelationshipType) -> u32 {
         SymbolRelationshipType::Export => 78,
         SymbolRelationshipType::Usage => 76,
         SymbolRelationshipType::Import => 74,
+        SymbolRelationshipType::Handles => 73,
+        SymbolRelationshipType::UsesType => 72,
+        SymbolRelationshipType::ReadsEnv => 70,
     }
 }
 
@@ -10587,6 +11751,682 @@ mod tests {
         (service, temp_dir)
     }
 
+    /// Regression (M5.11): a cyclic module re-export graph must terminate.
+    ///
+    /// `export * from './x'` resolution indexes the target module, re-entering
+    /// `index_file` → enrich → resolve → index_file. Two files that re-export each
+    /// other (JS barrel files, Python `__init__` packages — both pervasive in e.g.
+    /// Firefox) used to recurse without bound: a stack overflow on small worker
+    /// stacks, a 100% CPU "stuck on one file" spin on the 256 MiB worker stacks.
+    /// The per-thread re-entrancy guard in `index_file_with_timings` breaks it.
+    #[test]
+    fn cyclic_module_reexport_terminates() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(
+            temp_dir.path().join("a.js"),
+            "export * from './b';\nexport const fromA = 1;\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("b.js"),
+            "export * from './a';\nexport const fromB = 2;\n",
+        )
+        .unwrap();
+
+        // Without the guard, either of these never returns (overflow / spin).
+        let symbols_a = service.index_file("a.js").expect("indexing a.js must terminate");
+        assert!(
+            symbols_a.iter().any(|s| s.name == "fromA"),
+            "a.js's own symbol must still be extracted"
+        );
+        let symbols_b = service.index_file("b.js").expect("indexing b.js must terminate");
+        assert!(symbols_b.iter().any(|s| s.name == "fromB"));
+    }
+
+    /// Regression (M5.11): the degenerate self-cycle (a file re-exporting itself)
+    /// must also terminate.
+    #[test]
+    fn self_module_reexport_terminates() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(
+            temp_dir.path().join("a.js"),
+            "export * from './a';\nexport const fromA = 1;\n",
+        )
+        .unwrap();
+        let symbols = service.index_file("a.js").expect("self re-export must terminate");
+        assert!(symbols.iter().any(|s| s.name == "fromA"));
+    }
+
+    /// Regression (M5.12): a YAML config file that `serde_yaml` cannot parse must
+    /// index without spinning. `serde_yaml`'s document `Deserializer` re-yields the
+    /// same `Err` on every poll, so a `continue`-on-error loop is infinite. Firefox's
+    /// `StaticPrefList.yaml` carries `value: @IS_XP_MACOSX@` (a build-time placeholder;
+    /// `@` is a reserved YAML indicator → a hard parse error) and pinned a core at
+    /// 100% CPU. The config collectors now `break` on the first parse error.
+    #[test]
+    fn unparseable_yaml_config_terminates() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(
+            temp_dir.path().join("prefs.yaml"),
+            "- name: accessibility.tabfocus\n  type: int32_t\n  value: 7\n  mirror: always\n\
+             \n- name: accessibility.tabfocus_applies_to_xul\n  type: bool\n  value: @IS_XP_MACOSX@\n  mirror: always\n",
+        )
+        .unwrap();
+        // Before the fix this never returned (100% CPU spin in the Deserializer loop).
+        service
+            .index_file("prefs.yaml")
+            .expect("unparseable YAML must index without hanging");
+    }
+
+    /// M5.1 receiver-type dispatch (the "type_slice"). Each test indexes a single
+    /// file whose `run` method name is AMBIGUOUS (defined on two classes), so the
+    /// resolver MUST use the receiver type to pick the right target — otherwise it
+    /// bails to NULL exactly as before. Named `receiver_type_slice_*` inside module
+    /// `resolution_slice` so `cargo test --lib {resolution_slice,receiver_type,
+    /// type_slice}` all select them.
+    mod resolution_slice {
+        use super::*;
+
+        /// Find a freshly-extracted symbol by its exact qualified name.
+        fn sym<'a>(symbols: &'a [Symbol], qn: &str) -> &'a Symbol {
+            symbols
+                .iter()
+                .find(|s| s.qualified_name == qn)
+                .unwrap_or_else(|| panic!("no symbol with qualified_name {qn:?}"))
+        }
+
+        /// The set of RESOLVED target ids of call edges named `target_name` leaving
+        /// `source` (a method/function symbol).
+        fn resolved_call_targets(
+            service: &LanguageService,
+            source: &Symbol,
+            target_name: &str,
+        ) -> std::collections::HashSet<String> {
+            let graph = service
+                .get_symbol_graph(source, SymbolRelationshipType::Call, 50)
+                .unwrap();
+            graph
+                .outgoing
+                .iter()
+                .filter(|edge| {
+                    edge.relationship_type == SymbolRelationshipType::Call
+                        && edge.target_name == target_name
+                })
+                .filter_map(|edge| edge.target_symbol_id.clone())
+                .collect()
+        }
+
+        fn index_source(file: &str, source: &str) -> (LanguageService, TempDir, Vec<Symbol>) {
+            let (service, temp_dir) = create_test_service();
+            fs::write(temp_dir.path().join(file), source).unwrap();
+            let symbols = service.index_file(file).unwrap();
+            (service, temp_dir, symbols)
+        }
+
+        /// M5.1b END-TO-END: extraction → store → M2.4 back-fill → GLOBAL mining.
+        /// `Dog(Animal)` lives in a different file from `Animal`; inside `Dog.bark`
+        /// the `self.speak()` call captures recv_type `Dog`, but `speak` is NOT a
+        /// same-file/imported candidate, so the per-file resolver leaves it NULL.
+        /// A decoy `Plant.speak` makes the name ambiguous so the M2.4 name-only
+        /// back-fill cannot resolve it either — only the cross-file supertype walk
+        /// can. After the two global passes it resolves to `Animal.speak` (NOT the
+        /// decoy `Plant.speak`), proving the registry + recv_type mine win.
+        #[test]
+        fn receiver_global_cross_file_inheritance_mines_supertype_call() {
+            let (service, temp_dir) = create_test_service();
+            fs::write(
+                temp_dir.path().join("base.py"),
+                "class Animal:\n    def speak(self):\n        return 1\n",
+            )
+            .unwrap();
+            fs::write(
+                temp_dir.path().join("decoy.py"),
+                "class Plant:\n    def speak(self):\n        return 9\n",
+            )
+            .unwrap();
+            fs::write(
+                temp_dir.path().join("derived.py"),
+                "from base import Animal\n\n\nclass Dog(Animal):\n    def bark(self):\n        return self.speak()\n",
+            )
+            .unwrap();
+
+            let base_syms = service.index_file("base.py").unwrap();
+            let _decoy_syms = service.index_file("decoy.py").unwrap();
+            let derived_syms = service.index_file("derived.py").unwrap();
+
+            let dog_bark = sym(&derived_syms, "Dog.bark");
+            let animal_speak = sym(&base_syms, "Animal.speak");
+
+            // Per-file + ambiguous name → speak() is NULL before the global passes.
+            let before = resolved_call_targets(&service, dog_bark, "speak");
+            assert!(
+                !before.contains(&animal_speak.id),
+                "speak() must be unresolved before the global mining pass; got {before:?}"
+            );
+
+            service
+                .symbol_store
+                .backfill_unresolved_relationship_targets()
+                .unwrap();
+            service
+                .symbol_store
+                .mine_receiver_type_relationship_targets()
+                .unwrap();
+
+            let after = resolved_call_targets(&service, dog_bark, "speak");
+            assert!(
+                after.contains(&animal_speak.id),
+                "self.speak() in Dog(Animal) must mine-resolve to Animal.speak; got {after:?}"
+            );
+        }
+
+        /// M5.1b PRECISION BLOCKER, the reviewer's EXACT scenario, end-to-end:
+        /// `from pathlib import Path` … `def use(p: Path): return p.compute()`, and a
+        /// PROJECT `class Path: def compute(self)` in another file. The `p: Path`
+        /// receiver type is a SIMPLE NAME inferred from the annotation (NOT `self`),
+        /// so extraction tags it `recv_self = false`. The correct answer for
+        /// `p.compute()` is NULL (`p` is the library `pathlib.Path`).
+        ///
+        /// A decoy `Other.compute` makes the method name `compute` AMBIGUOUS so the
+        /// M2.4 name-only back-fill cannot resolve it — the ONLY pass that could is
+        /// the GLOBAL receiver-type mining, which is exactly where the reviewer's
+        /// blocker lived (the pre-fix miner resolved recv_type `Path` to the unique
+        /// project class `Path` and tagged `p.compute()` as `Path.compute`). After
+        /// the fix the provenance gate defers the non-self recv_type, so the edge
+        /// stays NULL through the FULL pipeline.
+        #[test]
+        fn null_mining_library_typed_param_does_not_resolve_to_project_class() {
+            let (service, temp_dir) = create_test_service();
+            fs::write(
+                temp_dir.path().join("model.py"),
+                "class Path:\n    def compute(self):\n        return 1\n",
+            )
+            .unwrap();
+            // Decoy: a second `compute` so the name is NOT globally unique → the
+            // M2.4 back-fill leaves `p.compute()` NULL, isolating the mining pass.
+            fs::write(
+                temp_dir.path().join("decoy.py"),
+                "class Other:\n    def compute(self):\n        return 9\n",
+            )
+            .unwrap();
+            fs::write(
+                temp_dir.path().join("user.py"),
+                "from pathlib import Path\n\n\ndef use(p: Path):\n    return p.compute()\n",
+            )
+            .unwrap();
+
+            let model_syms = service.index_file("model.py").unwrap();
+            let _decoy_syms = service.index_file("decoy.py").unwrap();
+            let user_syms = service.index_file("user.py").unwrap();
+
+            let use_fn = sym(&user_syms, "use");
+            let project_compute = sym(&model_syms, "Path.compute");
+
+            // Run BOTH global passes — the edge must STILL be NULL afterwards.
+            service
+                .symbol_store
+                .backfill_unresolved_relationship_targets()
+                .unwrap();
+            service
+                .symbol_store
+                .mine_receiver_type_relationship_targets()
+                .unwrap();
+
+            let after = resolved_call_targets(&service, use_fn, "compute");
+            assert!(
+                !after.contains(&project_compute.id),
+                "p.compute() on a library-typed `p: Path` param must NOT mine-resolve \
+                 to the project Path.compute; got {after:?}"
+            );
+            // The receiver IS a library type; with `compute` ambiguous nothing should
+            // confidently resolve it (the pre-fix miner wrongly tagged it).
+            assert!(
+                after.is_empty(),
+                "no compute() target should be resolved for the library-typed param; got {after:?}"
+            );
+        }
+
+        // A Python file where `run` is defined on BOTH `A` and `B`; `A.go` calls
+        // `self.run()` (→ A), `b = B(); b.run()` (→ B), `unique_helper()` (unique),
+        // and `loose(y)` calls `y.run()` on an UNTYPED param (unknown receiver).
+        const AMBIG_PY: &str = "\
+class A:
+    def run(self):
+        return 1
+
+    def go(self):
+        self.run()
+        b = B()
+        b.run()
+        unique_helper()
+
+
+class B:
+    def run(self):
+        return 2
+
+
+def unique_helper():
+    return 0
+
+
+def loose(y):
+    y.run()
+";
+
+        #[test]
+        fn receiver_type_slice_resolves_self_to_enclosing_class_method() {
+            let (service, _tmp, symbols) = index_source("recv.py", AMBIG_PY);
+            let go = sym(&symbols, "A.go");
+            let a_run = sym(&symbols, "A.run");
+            let b_run = sym(&symbols, "B.run");
+
+            let resolved = resolved_call_targets(&service, go, "run");
+            assert!(
+                resolved.contains(&a_run.id),
+                "self.run() must resolve to A.run via the enclosing class; got {resolved:?}"
+            );
+            // And NOT to B.run — `self` is an `A`.
+            assert!(
+                !(resolved.len() == 1 && resolved.contains(&b_run.id)),
+                "self.run() must not resolve to B.run"
+            );
+        }
+
+        #[test]
+        fn receiver_type_slice_resolves_this_in_typescript() {
+            const TS: &str = "\
+class A {
+  run(): number {
+    return 1;
+  }
+  go(): number {
+    return this.run();
+  }
+}
+class B {
+  run(): number {
+    return 2;
+  }
+}
+";
+            let (service, _tmp, symbols) = index_source("recv.ts", TS);
+            let go = sym(&symbols, "A.go");
+            let a_run = sym(&symbols, "A.run");
+
+            let resolved = resolved_call_targets(&service, go, "run");
+            assert!(
+                resolved.contains(&a_run.id),
+                "this.run() must resolve to A.run; got {resolved:?}"
+            );
+        }
+
+        #[test]
+        fn receiver_type_slice_resolves_constructor_typed_local() {
+            let (service, _tmp, symbols) = index_source("recv.py", AMBIG_PY);
+            let go = sym(&symbols, "A.go");
+            let b_run = sym(&symbols, "B.run");
+
+            let resolved = resolved_call_targets(&service, go, "run");
+            assert!(
+                resolved.contains(&b_run.id),
+                "b.run() where `b = B()` must resolve to B.run; got {resolved:?}"
+            );
+        }
+
+        #[test]
+        fn receiver_type_slice_disambiguates_same_method_name_across_classes() {
+            let (service, _tmp, symbols) = index_source("recv.py", AMBIG_PY);
+            let go = sym(&symbols, "A.go");
+            let a_run = sym(&symbols, "A.run");
+            let b_run = sym(&symbols, "B.run");
+
+            let resolved = resolved_call_targets(&service, go, "run");
+            // EXACTLY the two correct, distinct targets — self→A.run, b→B.run.
+            let expected: std::collections::HashSet<String> =
+                [a_run.id.clone(), b_run.id.clone()].into_iter().collect();
+            assert_eq!(
+                resolved, expected,
+                "the two `run` calls must resolve to A.run and B.run respectively"
+            );
+        }
+
+        #[test]
+        fn receiver_type_slice_unknown_receiver_stays_unresolved() {
+            let (service, _tmp, symbols) = index_source("recv.py", AMBIG_PY);
+            let loose = sym(&symbols, "loose");
+            let a_run = sym(&symbols, "A.run");
+            let b_run = sym(&symbols, "B.run");
+
+            // `y` is untyped → recv_type Unknown → the ambiguous `run` falls through
+            // to today's behavior: it must NOT be mis-resolved to either class.
+            let resolved = resolved_call_targets(&service, loose, "run");
+            assert!(
+                !resolved.contains(&a_run.id) && !resolved.contains(&b_run.id),
+                "unknown-receiver y.run() must not be mis-resolved; got {resolved:?}"
+            );
+        }
+
+        #[test]
+        fn receiver_type_slice_unique_named_call_is_unchanged() {
+            // Regression guard: a uniquely-named call still resolves via the
+            // untouched `len() == 1` path (no receiver type involved).
+            let (service, _tmp, symbols) = index_source("recv.py", AMBIG_PY);
+            let go = sym(&symbols, "A.go");
+            let helper = sym(&symbols, "unique_helper");
+
+            let resolved = resolved_call_targets(&service, go, "unique_helper");
+            assert!(
+                resolved.contains(&helper.id),
+                "unique_helper() must still resolve to its single definition"
+            );
+        }
+
+        #[test]
+        fn receiver_type_slice_resolves_rust_self_and_constructor() {
+            const RS: &str = "\
+struct A;
+struct B;
+
+impl A {
+    fn run(&self) -> i32 {
+        1
+    }
+    fn go(&self) -> i32 {
+        let b = B::new();
+        let x = self.run();
+        let y = b.run();
+        x + y
+    }
+}
+
+impl B {
+    fn new() -> B {
+        B
+    }
+    fn run(&self) -> i32 {
+        2
+    }
+}
+";
+            let (service, _tmp, symbols) = index_source("recv.rs", RS);
+            let go = sym(&symbols, "A::go");
+            let a_run = sym(&symbols, "A::run");
+            let b_run = sym(&symbols, "B::run");
+
+            let resolved = resolved_call_targets(&service, go, "run");
+            let expected: std::collections::HashSet<String> =
+                [a_run.id.clone(), b_run.id.clone()].into_iter().collect();
+            assert_eq!(
+                resolved, expected,
+                "Rust self.run()→A::run and (b = B::new()) b.run()→B::run"
+            );
+        }
+
+        // ---- M5.1 CONSERVATISM probes (adversarial review) ------------------
+        // Each mirrors a reviewer probe where the OLD typing was too eager and
+        // produced a WRONG confidence-0.8 resolution. The fixed typing yields
+        // `Unknown`, which falls through to today's resolver → the ambiguous
+        // `run` call stays UNRESOLVED (never mis-resolved to the wrong class).
+        // (Every fixture has `run` defined on BOTH `Widget` and `Gadget`, so only
+        // a CORRECT receiver type could ever resolve it.)
+
+        /// Raw (pre-resolution) extraction so a test can inspect `recv_type`.
+        fn extract_raw(
+            file: &str,
+            source: &str,
+            language: Language,
+        ) -> (Vec<Symbol>, Vec<SymbolRelationship>) {
+            let tree = parse_with_thread_local_parser(source, language).unwrap();
+            let symbols = extract_symbols(&tree, source, language, file);
+            let relationships =
+                extract_symbol_relationships(&tree, source, language, file, &symbols);
+            (symbols, relationships)
+        }
+
+        /// The `recv_type`s carried by `target_name` Call edges leaving `source_qn`.
+        fn recv_types_for_call(
+            symbols: &[Symbol],
+            relationships: &[SymbolRelationship],
+            source_qn: &str,
+            target_name: &str,
+        ) -> Vec<Option<String>> {
+            let source = sym(symbols, source_qn);
+            relationships
+                .iter()
+                .filter(|r| {
+                    r.relationship_type == SymbolRelationshipType::Call
+                        && r.source_symbol_id == source.id
+                        && r.target_name == target_name
+                })
+                .map(|r| r.recv_type.clone())
+                .collect()
+        }
+
+        // FIX 1: `x = Widget(); for x in gadgets(): x.run()` — the loop target
+        // rebinds `x`, so its `Widget` type is stale. `x.run()` must NOT resolve to
+        // `Widget.run`.
+        #[test]
+        fn receiver_type_slice_loop_rebind_drops_stale_type() {
+            let source = "\
+class Widget:
+    def run(self):
+        return 1
+
+
+class Gadget:
+    def run(self):
+        return 2
+
+
+def gadgets():
+    return []
+
+
+def loop_rebind():
+    x = Widget()
+    for x in gadgets():
+        x.run()
+";
+            let (service, _tmp, symbols) = index_source("recv_loop.py", source);
+            let loop_rebind = sym(&symbols, "loop_rebind");
+            let widget_run = sym(&symbols, "Widget.run");
+
+            let resolved = resolved_call_targets(&service, loop_rebind, "run");
+            assert!(
+                !resolved.contains(&widget_run.id),
+                "loop-rebound x.run() must not resolve to the stale Widget.run; got {resolved:?}"
+            );
+            assert!(
+                resolved.is_empty(),
+                "the rebound x has no confident type → run stays unresolved; got {resolved:?}"
+            );
+
+            // And the captured receiver type is Unknown (no recv_type emitted).
+            let (raw_syms, raw_rels) = extract_raw("recv_loop.py", source, Language::Python);
+            assert_eq!(
+                recv_types_for_call(&raw_syms, &raw_rels, "loop_rebind", "run"),
+                vec![None],
+                "loop-rebound receiver must carry no recv_type"
+            );
+        }
+
+        // FIX 2: `if c: x = Widget() else: x = Gadget(); x.run()` — conflicting
+        // arms with no CFG → ambiguous. `x.run()` must NOT resolve to either arm.
+        #[test]
+        fn receiver_type_slice_if_else_conflict_is_unresolved() {
+            let source = "\
+class Widget:
+    def run(self):
+        return 1
+
+
+class Gadget:
+    def run(self):
+        return 2
+
+
+def cond():
+    return True
+
+
+def if_else_conflict():
+    if cond():
+        x = Widget()
+    else:
+        x = Gadget()
+    x.run()
+";
+            let (service, _tmp, symbols) = index_source("recv_if.py", source);
+            let if_else = sym(&symbols, "if_else_conflict");
+
+            let resolved = resolved_call_targets(&service, if_else, "run");
+            assert!(
+                resolved.is_empty(),
+                "conflicting if/else x.run() must stay unresolved; got {resolved:?}"
+            );
+
+            let (raw_syms, raw_rels) = extract_raw("recv_if.py", source, Language::Python);
+            assert_eq!(
+                recv_types_for_call(&raw_syms, &raw_rels, "if_else_conflict", "run"),
+                vec![None],
+                "conflicting reassignment must poison the type to Unknown (no recv_type)"
+            );
+        }
+
+        // FIX 3: `def outer(): w = Widget(); def inner(w): w.run()` — `inner`'s
+        // untyped param `w` shadows the outer `Widget`. `w.run()` inside `inner`
+        // must NOT resolve to the outer `Widget.run`.
+        #[test]
+        fn receiver_type_slice_inner_param_shadows_outer_type() {
+            let source = "\
+class Widget:
+    def run(self):
+        return 1
+
+
+class Gadget:
+    def run(self):
+        return 2
+
+
+def outer():
+    w = Widget()
+    def inner(w):
+        w.run()
+    return inner
+";
+            let (service, _tmp, symbols) = index_source("recv_shadow.py", source);
+            let inner = sym(&symbols, "outer.inner");
+            let widget_run = sym(&symbols, "Widget.run");
+
+            let resolved = resolved_call_targets(&service, inner, "run");
+            assert!(
+                !resolved.contains(&widget_run.id),
+                "shadowed inner w.run() must not leak the outer Widget type; got {resolved:?}"
+            );
+            assert!(
+                resolved.is_empty(),
+                "inner untyped param has no confident type → run unresolved; got {resolved:?}"
+            );
+
+            let (raw_syms, raw_rels) = extract_raw("recv_shadow.py", source, Language::Python);
+            assert_eq!(
+                recv_types_for_call(&raw_syms, &raw_rels, "outer.inner", "run"),
+                vec![None],
+                "the untyped inner param must shadow the outer type (no recv_type)"
+            );
+        }
+
+        // FIX 4: `def Widget(): return Gadget(); x = Widget(); x.run()` — `Widget`
+        // is a FACTORY FUNCTION, not a class, so `x` must not be typed `Widget`.
+        // The receiver carries no recv_type and the call stays unresolved.
+        #[test]
+        fn receiver_type_slice_python_factory_not_constructor_typed() {
+            const FACTORY_PY: &str = "\
+class Gadget:
+    def run(self):
+        return 2
+
+
+class Other:
+    def run(self):
+        return 3
+
+
+def Widget():
+    return Gadget()
+
+
+def factory_user():
+    x = Widget()
+    x.run()
+";
+            // Raw extraction: `Widget` is a function → `x = Widget()` is NOT
+            // constructor-typed → no recv_type on `x.run()` (old code wrongly
+            // captured "Widget").
+            let (raw_syms, raw_rels) = extract_raw("factory.py", FACTORY_PY, Language::Python);
+            assert_eq!(
+                recv_types_for_call(&raw_syms, &raw_rels, "factory_user", "run"),
+                vec![None],
+                "a factory function call must not be constructor-typed"
+            );
+
+            // End-to-end: with no receiver type, the ambiguous `run` stays
+            // unresolved rather than being mis-attributed.
+            let (service, _tmp, symbols) = index_source("factory.py", FACTORY_PY);
+            let factory_user = sym(&symbols, "factory_user");
+            let resolved = resolved_call_targets(&service, factory_user, "run");
+            assert!(
+                resolved.is_empty(),
+                "factory-typed x.run() must stay unresolved; got {resolved:?}"
+            );
+        }
+
+        // Minor (TS): a `this` inside a nested NON-arrow `function` is rebound at
+        // runtime, so it must NOT be typed as the enclosing class. The ambiguous
+        // `run` (defined on A and B) therefore stays unresolved from that call.
+        #[test]
+        fn receiver_type_slice_ts_nested_function_this_is_unknown() {
+            const TS: &str = "\
+class A {
+  run(): number {
+    return 1;
+  }
+  go(): number {
+    function inner(): number {
+      return this.run();
+    }
+    return inner();
+  }
+}
+class B {
+  run(): number {
+    return 2;
+  }
+}
+";
+            // The nested-function `this.run()` is attributed to `inner`; it must
+            // carry no recv_type (a plain function rebinds `this`).
+            let (raw_syms, raw_rels) = extract_raw("nested_this.ts", TS, Language::TypeScript);
+            let inner = raw_syms.iter().find(|s| s.name == "inner").expect("inner fn");
+            let recv_types: Vec<Option<String>> = raw_rels
+                .iter()
+                .filter(|r| {
+                    r.relationship_type == SymbolRelationshipType::Call
+                        && r.source_symbol_id == inner.id
+                        && r.target_name == "run"
+                })
+                .map(|r| r.recv_type.clone())
+                .collect();
+            assert_eq!(
+                recv_types,
+                vec![None],
+                "this inside a nested non-arrow function must not be typed as the class"
+            );
+        }
+    }
+
     struct ExpectedSymbol {
         name: &'static str,
         symbol_type: SymbolType,
@@ -10614,8 +12454,6 @@ mod tests {
         "csharp/UserService.cs",
         "kotlin/UserService.kt",
         "ruby/user_service.rb",
-        "cpp/user_service.cpp",
-        "c/user_service.c",
         "shell/deploy.sh",
         "docker/Dockerfile",
         "sql/001_users.sql",
@@ -10645,6 +12483,25 @@ mod tests {
         assert!(should_allow_non_indexed_live_sync("config/.env.local"));
         assert!(should_allow_non_indexed_live_sync("nested/.dockerignore"));
         assert!(!should_allow_non_indexed_live_sync("src/main.rs"));
+    }
+
+    #[test]
+    fn is_generated_path_matches_codegen_and_spares_real_code() {
+        // Generated → anchor-only.
+        assert!(is_generated_path("api/v1/types.pb.go"));
+        assert!(is_generated_path("k8s/zz_generated.deepcopy.go"));
+        assert!(is_generated_path("proto/foo_pb2.py"));
+        assert!(is_generated_path("proto/foo_pb2_grpc.py"));
+        assert!(is_generated_path("web/dist/bundle.min.js"));
+        assert!(is_generated_path("styles/app.min.css"));
+        assert!(is_generated_path("lib/models/user.freezed.dart"));
+        assert!(is_generated_path("Forms/Main.Designer.cs"));
+        assert!(is_generated_path("schema.generated.ts"));
+        // Real hand-written code → extracted normally.
+        assert!(!is_generated_path("kernel/sched/core.c"));
+        assert!(!is_generated_path("src/main.rs"));
+        assert!(!is_generated_path("include/linux/list.h"));
+        assert!(!is_generated_path("pkg/server/handler.go"));
     }
 
     #[test]
@@ -11108,72 +12965,6 @@ mod tests {
                 ],
             },
             SymbolFixture {
-                path: "cpp/user_service.cpp",
-                expected_symbols: &[
-                    ExpectedSymbol {
-                        name: "string",
-                        symbol_type: SymbolType::Import,
-                    },
-                    ExpectedSymbol {
-                        name: "user_service.hpp",
-                        symbol_type: SymbolType::Import,
-                    },
-                    ExpectedSymbol {
-                        name: "Example::Users",
-                        symbol_type: SymbolType::Namespace,
-                    },
-                    ExpectedSymbol {
-                        name: "UserView",
-                        symbol_type: SymbolType::Struct,
-                    },
-                    ExpectedSymbol {
-                        name: "UserStatus",
-                        symbol_type: SymbolType::Enum,
-                    },
-                    ExpectedSymbol {
-                        name: "UserService",
-                        symbol_type: SymbolType::Class,
-                    },
-                    ExpectedSymbol {
-                        name: "find_user",
-                        symbol_type: SymbolType::Method,
-                    },
-                    ExpectedSymbol {
-                        name: "normalize_user_id",
-                        symbol_type: SymbolType::Function,
-                    },
-                ],
-            },
-            SymbolFixture {
-                path: "c/user_service.c",
-                expected_symbols: &[
-                    ExpectedSymbol {
-                        name: "stdbool.h",
-                        symbol_type: SymbolType::Import,
-                    },
-                    ExpectedSymbol {
-                        name: "user_service.h",
-                        symbol_type: SymbolType::Import,
-                    },
-                    ExpectedSymbol {
-                        name: "user_view",
-                        symbol_type: SymbolType::Struct,
-                    },
-                    ExpectedSymbol {
-                        name: "user_status",
-                        symbol_type: SymbolType::Enum,
-                    },
-                    ExpectedSymbol {
-                        name: "find_user",
-                        symbol_type: SymbolType::Function,
-                    },
-                    ExpectedSymbol {
-                        name: "user_is_active",
-                        symbol_type: SymbolType::Function,
-                    },
-                ],
-            },
-            SymbolFixture {
                 path: "shell/deploy.sh",
                 expected_symbols: &[
                     ExpectedSymbol {
@@ -11365,12 +13156,6 @@ mod tests {
                 "normalizeUserId",
             ),
             ("active?", "ruby/user_service.rb", "active?"),
-            (
-                "normalize_user_id",
-                "cpp/user_service.cpp",
-                "normalize_user_id",
-            ),
-            ("user_is_active", "c/user_service.c", "user_is_active"),
             ("cleanup-trap", "shell/deploy.sh", "cleanup-trap"),
             ("APP_VERSION", "docker/Dockerfile", "APP_VERSION"),
             (
@@ -11445,7 +13230,6 @@ mod tests {
             ("C#", 1),
             ("Kotlin", 1),
             ("Ruby", 1),
-            ("C/C++", 2),
             ("Shell", 1),
             ("Dockerfile", 1),
             ("SQL", 1),
@@ -12016,6 +13800,207 @@ testpaths = ["tests"]
 
         let symbols = extract_config_symbols("large.json", &content, Language::Json);
         assert!(symbols.len() <= CONFIG_SYMBOL_LIMIT);
+    }
+
+    // ---- M4.3 — K8s Resource nodes + Kustomize IMPORTS + span-accurate config ----
+
+    #[test]
+    fn test_k8s_manifest_emits_single_resource_symbol() {
+        let manifest = "\
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27
+";
+        let symbols = extract_config_symbols("deploy.yaml", manifest, Language::Yaml);
+        // ONE Resource node, not a bag of repeated spec/metadata keys.
+        assert_eq!(
+            symbols.len(),
+            1,
+            "K8s manifest should collapse to a single Resource node, got {symbols:?}"
+        );
+        assert_eq!(symbols[0].symbol_type, SymbolType::Resource);
+        assert_eq!(symbols[0].name, "Deployment/web");
+        assert_eq!(symbols[0].qualified_name, "Deployment/web");
+
+        // A multi-document file yields one Resource per manifest doc.
+        let multi = "\
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+";
+        let resources = collect_k8s_resource_symbols("stack.yaml", multi);
+        assert_eq!(resources.len(), 2);
+        assert!(resources.iter().any(|s| s.name == "Service/web"));
+        assert!(resources.iter().any(|s| s.name == "Deployment/web"));
+        assert!(resources
+            .iter()
+            .all(|s| s.symbol_type == SymbolType::Resource));
+
+        // Missing metadata.name falls back to a stable placeholder.
+        let unnamed = collect_k8s_resource_symbols(
+            "cm.yaml",
+            "apiVersion: v1\nkind: ConfigMap\ndata:\n  key: value\n",
+        );
+        assert_eq!(unnamed.len(), 1);
+        assert_eq!(unnamed[0].name, "ConfigMap/<unnamed>");
+    }
+
+    #[test]
+    fn test_kustomization_emits_import_symbols_and_edges() {
+        let kustomization = "\
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: prod
+resources:
+  - ../base
+  - service.yaml
+bases:
+  - ../legacy
+components:
+  - ../components/logging
+";
+        let symbols = extract_config_symbols("kustomization.yaml", kustomization, Language::Yaml);
+        let imports: Vec<&str> = symbols
+            .iter()
+            .filter(|s| s.symbol_type == SymbolType::Import)
+            .map(|s| s.name.as_str())
+            .collect();
+        assert!(imports.contains(&"../base"), "imports: {imports:?}");
+        assert!(imports.contains(&"service.yaml"), "imports: {imports:?}");
+        assert!(imports.contains(&"../legacy"), "imports: {imports:?}");
+        assert!(
+            imports.contains(&"../components/logging"),
+            "imports: {imports:?}"
+        );
+        // A kustomization is imports, not a Resource manifest.
+        assert!(symbols.iter().all(|s| s.symbol_type != SymbolType::Resource));
+
+        // Each list entry becomes an Import edge (target = the referenced path).
+        let relationships = derive_config_import_relationships("kustomization.yaml", &symbols);
+        assert!(relationships
+            .iter()
+            .all(|r| r.relationship_type == SymbolRelationshipType::Import));
+        let targets: Vec<&str> = relationships
+            .iter()
+            .map(|r| r.target_name.as_str())
+            .collect();
+        assert_eq!(
+            targets.len(),
+            4,
+            "one Import edge per resources/bases/components entry, got {targets:?}"
+        );
+        assert!(targets.contains(&"../base"));
+        assert!(targets.contains(&"../components/logging"));
+    }
+
+    #[test]
+    fn test_yaml_duplicate_leaf_key_reports_its_own_line() {
+        // The leaf key `name` appears at the top level (line 0) and nested under
+        // `service` (line 2). The legacy `locate_config_key` re-find pinned
+        // `service.name` to the FIRST `name:` (line 0); the span-preserving
+        // parser pins each key to its OWN source line.
+        let yaml = "\
+name: top
+service:
+  name: inner
+  port: 9090
+";
+        let symbols = extract_config_symbols("app.yaml", yaml, Language::Yaml);
+
+        let top = symbols
+            .iter()
+            .find(|s| s.name == "name")
+            .expect("top-level `name`");
+        assert_eq!(top.range.start.line, 0);
+        assert_eq!(top.range.start.character, 0);
+
+        let nested = symbols
+            .iter()
+            .find(|s| s.name == "service.name")
+            .expect("nested `service.name`");
+        assert_eq!(
+            nested.range.start.line, 2,
+            "the second `name` key must report its own line, not the first"
+        );
+        assert_eq!(nested.range.start.character, 2, "nested key column");
+    }
+
+    #[test]
+    fn test_top_level_sequence_yaml_still_extracts_keys() {
+        // BUG 1 regression: `marked_yaml::parse_yaml` defaults to a mapping root
+        // and returns Err for a TOP-LEVEL SEQUENCE. The pre-M4.3 serde path
+        // extracted these keys; the span path must fall back to it so the key set
+        // is preserved (positions degrade to best-effort — that's acceptable for a
+        // non-mapping root). Drives the real scanner entry point.
+        let yaml = "\
+- name: alpha
+  port: 8080
+- name: beta
+  port: 9090
+";
+        let symbols = extract_scanner_symbols("list.yaml", yaml, Language::Yaml);
+        assert!(
+            !symbols.is_empty(),
+            "top-level-sequence YAML must still yield config keys, got none"
+        );
+        assert!(
+            symbols.iter().any(|s| s.name == "name"),
+            "expected the `name` key, got {symbols:?}"
+        );
+        assert!(
+            symbols.iter().any(|s| s.name == "port"),
+            "expected the `port` key, got {symbols:?}"
+        );
+        assert!(symbols
+            .iter()
+            .all(|s| s.symbol_type == SymbolType::Property));
+    }
+
+    #[test]
+    fn test_mixed_multidoc_yaml_emits_resource_and_non_manifest_keys() {
+        // BUG 2 regression: a manifest doc collapses to a `Resource`, but the
+        // OTHER `---`-separated (non-manifest) doc's flat config keys must still
+        // be extracted — not dropped by an early `return resources`.
+        let yaml = "\
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+---
+server:
+  port: 8080
+  host: localhost
+";
+        let symbols = extract_config_symbols("mixed.yaml", yaml, Language::Yaml);
+
+        let resource = symbols
+            .iter()
+            .find(|s| s.symbol_type == SymbolType::Resource)
+            .expect("manifest doc must still emit a Resource");
+        assert_eq!(resource.name, "ConfigMap/app-config");
+
+        for key in ["server", "server.port", "server.host"] {
+            assert!(
+                symbols
+                    .iter()
+                    .any(|s| s.name == key && s.symbol_type == SymbolType::Property),
+                "non-manifest doc key `{key}` must be extracted, got {symbols:?}"
+            );
+        }
     }
 
     #[test]
@@ -12945,12 +14930,13 @@ metadata:
             target_symbol_id: None,
             relationship_type: SymbolRelationshipType::Call,
             line: 5,
+            ..Default::default()
         }];
         assert_eq!(
             LanguageService::suppress_known_external_relationships(
                 Language::TypeScript,
                 &mut relationships,
-                &aliases
+                &aliases,
             ),
             1
         );
@@ -12973,6 +14959,30 @@ metadata:
         let anchors = extract_semantic_anchors("notes.md", "    The correct focus for €1M:\n");
 
         assert!(!anchors.iter().any(|anchor| anchor.value == "1M"));
+    }
+
+    /// M5.14 — the generic literal/token anchor scan is gated to front-end/style/
+    /// markup files. A C++ string literal on an assignment line used to mint a
+    /// `config_key` anchor (part of Firefox's ~5M C++ anchor noise); systems files
+    /// now produce no generic anchors, while the same literal still anchors in TS.
+    #[test]
+    fn generic_literal_anchors_are_gated_to_frontend_languages() {
+        let cpp = extract_semantic_anchors(
+            "src/foo.cpp",
+            "const char* kName = \"BladeProtocolGateway\";\n",
+        );
+        assert!(
+            cpp.is_empty(),
+            "systems-language files must not mint generic literal anchors (got {})",
+            cpp.len()
+        );
+
+        let ts =
+            extract_semantic_anchors("src/foo.ts", "const kName = \"BladeProtocolGateway\";\n");
+        assert!(
+            ts.iter().any(|anchor| anchor.value == "BladeProtocolGateway"),
+            "front-end files still anchor string-literal cross-references"
+        );
     }
 
     #[test]
@@ -13052,7 +15062,7 @@ metadata:
             .indexed_file_record("versioned.ts")
             .unwrap()
             .unwrap();
-        assert_eq!(initial_record.extractor_version, Some(1));
+        assert_eq!(initial_record.extractor_version, Some(2));
 
         service
             .symbol_store
@@ -13082,7 +15092,7 @@ metadata:
             .indexed_file_record("versioned.ts")
             .unwrap()
             .unwrap();
-        assert_eq!(refreshed_record.extractor_version, Some(1));
+        assert_eq!(refreshed_record.extractor_version, Some(2));
     }
 
     #[test]
@@ -13267,7 +15277,14 @@ metadata:
     }
 
     #[test]
-    fn common_library_method_names_still_resolve_to_project_symbols() {
+    fn external_named_call_is_suppressed_not_backfilled_to_unique_project_symbol() {
+        // library-named call resolution deferred to M5.1 (receiver typing);
+        // bare-name back-fill cannot distinguish project `parse()` from
+        // `JSON.parse()`. `findUnique` is a known external/library method name, so
+        // the unresolved `findUnique()` call in main.ts (which does NOT import
+        // project-api.ts) is suppressed at enrichment time rather than persisted
+        // as a NULL edge and mis-wired by the global-unique back-fill to the
+        // project symbol that merely shares its bare name.
         let (service, temp_dir) = create_test_service();
 
         fs::write(
@@ -13291,10 +15308,13 @@ metadata:
             .unwrap();
         let references = service.find_references_to_symbol(&target, 10).unwrap();
 
-        assert!(references.iter().any(|reference| {
-            reference.source_symbol.file_path == "main.ts"
-                && reference.target_symbol_id.as_deref() == Some(target.id.as_str())
-        }));
+        assert!(
+            !references.iter().any(|reference| {
+                reference.source_symbol.file_path == "main.ts"
+                    && reference.target_symbol_id.as_deref() == Some(target.id.as_str())
+            }),
+            "known external-named call must be suppressed, not back-filled to a same-named project symbol"
+        );
     }
 
     #[test]
@@ -15260,5 +17280,104 @@ func helper() {}
             .expect_err("json files should not be symbol-indexed yet");
 
         assert!(matches!(error, LanguageError::NotSupported(_)));
+    }
+
+    // ---- M1.4 — comment/string/heredoc-aware preprocessing ----
+
+    fn assert_length_and_newlines_preserved(input: &str, output: &str) {
+        assert_eq!(input.len(), output.len(), "byte length must be preserved");
+        let in_nl: Vec<usize> = input.match_indices('\n').map(|(i, _)| i).collect();
+        let out_nl: Vec<usize> = output.match_indices('\n').map(|(i, _)| i).collect();
+        assert_eq!(in_nl, out_nl, "newline byte positions must be preserved");
+    }
+
+    #[test]
+    fn blank_noncode_spans_blanks_multiline_block_comment() {
+        let src = "package p;\n/*\nclass Foo {\n*/\nclass Bar {}\n";
+        let out = blank_noncode_spans(src, &JAVA_LEX);
+        assert_length_and_newlines_preserved(src, out.as_str());
+        assert!(!out.contains("Foo"), "block-comment body must be blanked: {out:?}");
+        assert!(out.contains("class Bar {}"), "real code must survive: {out:?}");
+    }
+
+    #[test]
+    fn blank_noncode_spans_strips_trailing_line_comment() {
+        // PHP previously minted a bogus `Baz` class from the trailing comment.
+        let src = "return 1; // class Baz\n";
+        let out = blank_noncode_spans(src, &PHP_LEX);
+        assert_length_and_newlines_preserved(src, out.as_str());
+        assert!(out.starts_with("return 1;"));
+        assert!(!out.contains("class Baz"), "trailing comment must be blanked: {out:?}");
+    }
+
+    #[test]
+    fn blank_noncode_spans_protects_comment_marker_inside_string() {
+        // The `//` lives inside a string, so it must NOT start a comment.
+        let src = "var url = \"http://x // y\"; // real comment\n";
+        let out = blank_noncode_spans(src, &JAVA_LEX);
+        assert_length_and_newlines_preserved(src, out.as_str());
+        assert!(out.contains("var url ="), "code before the string survives: {out:?}");
+        assert!(!out.contains("real comment"), "trailing comment is blanked: {out:?}");
+    }
+
+    #[test]
+    fn blank_noncode_spans_keeps_string_for_string_reading_langs() {
+        // Ruby reads the import out of the string literal — it must NOT be blanked.
+        let src = "require \"json\" # load\n";
+        let out = blank_noncode_spans(src, &RUBY_LEX);
+        assert_length_and_newlines_preserved(src, out.as_str());
+        assert!(out.contains("\"json\""), "ruby string content must survive: {out:?}");
+        assert!(!out.contains("load"), "trailing `#` comment is still blanked: {out:?}");
+    }
+
+    #[test]
+    fn blank_noncode_spans_blanks_php_heredoc_body() {
+        let src = "$x = <<<EOT\nclass Hidden {}\nEOT;\nclass Real {}\n";
+        let out = blank_noncode_spans(src, &PHP_LEX);
+        assert_length_and_newlines_preserved(src, out.as_str());
+        assert!(!out.contains("Hidden"), "heredoc body must be blanked: {out:?}");
+        assert!(out.contains("class Real {}"), "code after EOT survives: {out:?}");
+    }
+
+    #[test]
+    fn blank_noncode_spans_keeps_php_attribute() {
+        // `#[...]` is a PHP 8 attribute, not a `#` line comment.
+        let src = "#[Route] class Controller {}\n";
+        let out = blank_noncode_spans(src, &PHP_LEX);
+        assert_length_and_newlines_preserved(src, out.as_str());
+        assert_eq!(out, src, "attribute line must be untouched: {out:?}");
+    }
+
+    #[test]
+    fn java_scanner_ignores_class_inside_block_comment() {
+        let symbols = extract_java_symbols(
+            "Demo.java",
+            "package com.example;\n/*\nclass Foo {\n    void hidden() {}\n*/\npublic class Bar {}\n",
+        );
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Bar"), "real class kept: {names:?}");
+        assert!(!names.contains(&"Foo"), "commented class dropped: {names:?}");
+        assert!(!names.contains(&"hidden"), "commented method dropped: {names:?}");
+    }
+
+    #[test]
+    fn php_scanner_ignores_trailing_comment_class() {
+        let symbols = extract_php_symbols(
+            "Service.php",
+            "<?php\nclass Bar\n{\n    public function handle()\n    {\n        return 1; // class Baz\n    }\n}\n",
+        );
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Bar"), "real class kept: {names:?}");
+        assert!(names.contains(&"handle"), "real method kept: {names:?}");
+        assert!(!names.contains(&"Baz"), "trailing-comment class dropped: {names:?}");
+    }
+
+    #[test]
+    fn ruby_scanner_keeps_require_from_string() {
+        // Regression guard: string blanking must stay disabled for Ruby.
+        let symbols = extract_ruby_symbols("svc.rb", "require \"json\"\nclass Svc\nend\n");
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"json"), "require target survives: {names:?}");
+        assert!(names.contains(&"Svc"), "class survives: {names:?}");
     }
 }

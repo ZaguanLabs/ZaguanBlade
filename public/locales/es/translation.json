@@ -550,7 +550,18 @@
     "sync": "Sincronizar",
     "extension": "Extensión",
     "feedback": "Opiniones",
-    "yoloMode": "YOLO: comandos autoaprobados"
+    "yoloMode": "YOLO: comandos autoaprobados",
+    "index": {
+      "indexingFile": "Indexando {{file}} ({{progress}})",
+      "indexingFileOnly": "Indexando {{file}}",
+      "indexingSymbols": "Indexando símbolos ({{progress}})",
+      "indexingSymbolsOnly": "Indexando símbolos",
+      "finalizing": "Finalizando índice…",
+      "checking": "Verificando índice de código",
+      "pending": "Índice de símbolos pendiente ({{count}} archivos)",
+      "partial": "Índice de símbolos parcial ({{count}} archivos pendientes)",
+      "unavailable": "Índice de símbolos no disponible"
+    }
   },
   "windowControls": {
     "minimize": "Minimizar",
