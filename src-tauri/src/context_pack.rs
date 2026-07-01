@@ -9,7 +9,7 @@ use crate::blade_protocol::{
     ContextSemanticAnchorSummary, ContextSkillSummary, ContextSymbolSummary, ContextWorkspace,
     ProjectDirectorySummary, ProjectLanguageSummary,
 };
-use crate::indexer::types::{detect_language, is_code_file};
+use crate::file_lang::{detect_language, is_code_file};
 use crate::language_service::{IndexHealthSnapshot, IndexHealthStatus, LanguageService};
 use crate::local_artifacts::LocalArtifactStore;
 use crate::project_settings::get_zblade_dir;

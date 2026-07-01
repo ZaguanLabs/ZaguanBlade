@@ -33,7 +33,7 @@ impl LanguageHandler {
         &self,
         intent: LanguageIntent,
         intent_id: Uuid,
-        app_state: Option<&State<'_, crate::AppState>>,
+        _app_state: Option<&State<'_, crate::AppState>>,
     ) -> BladeResult<Option<BladeEventEnvelope>> {
         let service = self.service.clone();
         let event_payload = match intent {
@@ -178,33 +178,6 @@ impl LanguageHandler {
                     symbol: symbol_data,
                 }
             }
-            LanguageIntent::GetFullContext {
-                max_files,
-                preview_lines,
-            } => {
-                let state = app_state.ok_or_else(|| BladeError::Internal {
-                    trace_id: intent_id.to_string(),
-                    message: "AppState not available for GetFullContext".to_string(),
-                })?;
-
-                let indexer_manager = get_or_init_indexer_manager(state, intent_id).await?;
-
-                let file_path = indexer_manager
-                    .get_full_context(max_files, preview_lines)
-                    .await
-                    .map_err(|e| BladeError::Internal {
-                        trace_id: intent_id.to_string(),
-                        message: format!("Failed to generate full context: {}", e),
-                    })?;
-
-                let file_count = indexer_manager.file_count();
-
-                LanguageEvent::FullContextGenerated {
-                    intent_id,
-                    file_path,
-                    file_count,
-                }
-            }
             LanguageIntent::ZlpMessage { .. } => {
                 return Err(BladeError::Internal {
                     trace_id: intent_id.to_string(),
@@ -225,50 +198,3 @@ impl LanguageHandler {
     }
 }
 
-async fn get_or_init_indexer_manager(
-    state: &State<'_, crate::AppState>,
-    intent_id: Uuid,
-) -> Result<crate::indexer::IndexerManager, BladeError> {
-    let workspace_root = {
-        let workspace = state.workspace.lock().unwrap();
-        workspace
-            .workspace
-            .clone()
-            .ok_or_else(|| BladeError::Internal {
-                trace_id: intent_id.to_string(),
-                message: "No workspace is open".to_string(),
-            })?
-    };
-
-    {
-        let guard = state.indexer_manager.lock().unwrap();
-        if let Some(manager) = guard.as_ref() {
-            if manager.matches_workspace(&workspace_root) {
-                return Ok(manager.clone());
-            }
-        }
-    }
-
-    let workspace_root_for_build = workspace_root.clone();
-    let manager =
-        spawn_blocking(move || crate::indexer::IndexerManager::new(&workspace_root_for_build))
-            .await
-            .map_err(|e| BladeError::Internal {
-                trace_id: intent_id.to_string(),
-                message: format!("Indexer task join error: {}", e),
-            })?
-            .map_err(|e| BladeError::Internal {
-                trace_id: intent_id.to_string(),
-                message: format!("Failed to initialize IndexerManager: {}", e),
-            })?;
-
-    let mut guard = state.indexer_manager.lock().unwrap();
-    if let Some(existing) = guard.as_ref() {
-        if existing.matches_workspace(&workspace_root) {
-            return Ok(existing.clone());
-        }
-    }
-
-    *guard = Some(manager.clone());
-    Ok(manager)
-}

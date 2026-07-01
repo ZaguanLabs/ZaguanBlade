@@ -41,7 +41,7 @@ pub mod git;
 pub mod gitignore_filter;
 pub mod history;
 pub mod idempotency;
-pub mod indexer;
+pub mod file_lang;
 pub mod language_service;
 pub mod linux_webkit_workaround;
 pub mod local_artifacts;
