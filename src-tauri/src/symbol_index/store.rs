@@ -553,10 +553,22 @@ fn configure_index_pragmas(conn: &Connection) -> Result<(), SymbolStoreError> {
         "PRAGMA journal_mode = WAL;\n\
          PRAGMA synchronous = NORMAL;\n\
          PRAGMA temp_store = MEMORY;\n\
-         PRAGMA cache_size = -65536;",
+         PRAGMA cache_size = -65536;\n\
+         PRAGMA wal_autocheckpoint = 262144;",
     )?;
     Ok(())
 }
+// M5.17 — `wal_autocheckpoint = 262144` (1 GiB, up from SQLite's default 1000
+// pages / 4 MiB). Live profiling of a Firefox cold index showed the single
+// commit thread pinned in `sqlite3WalDefaultHook → wal_checkpoint → fsync`: the
+// default fired a synchronous checkpoint+fsync on essentially every batch commit
+// (~1000 over a multi-GB index), serializing the committer on disk I/O while all
+// 31 extraction workers sat idle on backpressure (9% iowait, ~1 core of 32 busy).
+// Raising the threshold means only a handful of checkpoints fire mid-index; the
+// commits in between are cheap WAL appends, so the committer keeps up with
+// extraction and the cores stay busy. The final `checkpoint()` (M5.13,
+// TRUNCATE) still consolidates the WAL at the end. Interactive edits produce
+// tiny WAL growth, so they never approach the threshold — no downside there.
 
 impl SymbolStore {
     /// Create a new symbol store at the given path

@@ -301,7 +301,11 @@ struct SymbolExtraction<'a> {
 /// avg) the old cap bound long before `BATCH_BYTE_BUDGET`, making batches tiny and
 /// the extract→commit barrier fire constantly (cores idle each serial commit).
 /// Bigger batches amortize the barrier; `BATCH_BYTE_BUDGET` still bounds memory.
-const RECONCILE_BATCH_SIZE: usize = 4_000;
+/// M5.17 — 4_000 → 10_000. Now that the WAL auto-checkpoint no longer stalls the
+/// committer every few MB (see `configure_index_pragmas`), the committer keeps up
+/// with extraction, so larger batches (fewer inter-batch barriers) pay off;
+/// `BATCH_BYTE_BUDGET` still caps staged memory regardless of file count.
+const RECONCILE_BATCH_SIZE: usize = 10_000;
 
 /// M5.7 — defensive per-file cap. A pathological/generated file can declare an
 /// absurd number of symbols; we truncate (with a log) so a single file cannot
