@@ -375,7 +375,6 @@ struct StagedFileIndex {
     extraction_content: String,
     extraction_language: Language,
     source_language: Language,
-    snapshot: Arc<BufferSnapshot>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -2360,7 +2359,6 @@ impl LanguageService {
                     extraction_content: content,
                     extraction_language: Language::Markdown,
                     source_language: Language::Markdown,
-                    snapshot,
                 };
                 return Ok(StagedFileIndexOutcome {
                     metrics: IndexFileMetrics {
@@ -2456,7 +2454,6 @@ impl LanguageService {
             extraction_content: extraction_content.into_owned(),
             extraction_language,
             source_language: language,
-            snapshot,
         };
         Ok(StagedFileIndexOutcome {
             metrics: IndexFileMetrics {
