@@ -1986,6 +1986,42 @@ impl LanguageService {
     }
 
     fn index_file_with_timings(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
+        // M5.11 — re-entrancy guard against cyclic module graphs.
+        //
+        // `enrich_symbol_relationships` resolves module re-exports
+        // (`export * from './sibling'`, Python `__init__` package re-exports) by
+        // indexing the target module file: `get_file_module_symbol` →
+        // `ensure_file_fresh` → `index_file`, which itself enriches and resolves
+        // *its* re-exports. A cycle in the module graph (JS barrel files,
+        // `__init__.py` packages — both pervasive in e.g. Firefox) makes this
+        // recurse without bound: it overflows the worker stack on small stacks and
+        // grinds at 100% CPU "stuck on one file" on the 256 MiB worker stacks.
+        //
+        // Track the files currently being indexed on THIS thread. If asked to
+        // index one that is already in flight higher on the stack, do not
+        // re-enter — return whatever symbols it has committed so far. The in-flight
+        // file's own top-level call finishes its indexing; the only effect is that
+        // a back-edge in a re-export *cycle* may be skipped (acceptable — the
+        // forward edge is still recorded, and there is no hang).
+        thread_local! {
+            static INDEXING_STACK: std::cell::RefCell<std::collections::HashSet<String>> =
+                std::cell::RefCell::new(std::collections::HashSet::new());
+        }
+        struct StackGuard(String);
+        impl Drop for StackGuard {
+            fn drop(&mut self) {
+                INDEXING_STACK.with(|stack| {
+                    stack.borrow_mut().remove(&self.0);
+                });
+            }
+        }
+        let newly_entered =
+            INDEXING_STACK.with(|stack| stack.borrow_mut().insert(file_path.to_string()));
+        if !newly_entered {
+            return Ok(self.get_file_symbols_raw(file_path).unwrap_or_default());
+        }
+        let _stack_guard = StackGuard(file_path.to_string());
+
         let total_start = std::time::Instant::now();
         let load_start = std::time::Instant::now();
         let disk_metadata = file_index_metadata(&self.resolve_path(file_path)).ok();
@@ -8125,7 +8161,13 @@ fn dispatch_yaml_config_collector(
 fn collect_non_manifest_doc_config_keys(content: &str, entries: &mut Vec<ConfigKeyEntry>) {
     for document in serde_yaml::Deserializer::from_str(content) {
         let Ok(value) = serde_yaml::Value::deserialize(document) else {
-            continue;
+            // M5.12 — STOP on a parse error, never `continue`. `serde_yaml`'s
+            // Deserializer does NOT advance past a syntax error: it yields the same
+            // `Err` on every poll, so `continue` here is an infinite loop. (Firefox's
+            // `StaticPrefList.yaml` has `value: @IS_XP_MACOSX@`; `@` is a reserved
+            // YAML indicator → a hard parse error → a 100% CPU spin.) Once the
+            // document stream errors, no later document is recoverable, so break.
+            break;
         };
         if yaml_value_is_manifest(&value) {
             continue;
@@ -8162,7 +8204,10 @@ fn collect_k8s_resource_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
     let mut seen = HashSet::new();
     for document in serde_yaml::Deserializer::from_str(content) {
         let Ok(value) = serde_yaml::Value::deserialize(document) else {
-            continue;
+            // M5.12 — break, never `continue`: a `serde_yaml` parse error is sticky
+            // (the Deserializer re-yields the same `Err` forever), so `continue`
+            // spins at 100% CPU. See `collect_non_manifest_doc_config_keys`.
+            break;
         };
         let Some(map) = value.as_mapping() else {
             continue;
@@ -11614,6 +11659,73 @@ mod tests {
         let store = Arc::new(SymbolStore::new(&db_path).unwrap());
         let service = LanguageService::new(temp_dir.path().to_path_buf(), store).unwrap();
         (service, temp_dir)
+    }
+
+    /// Regression (M5.11): a cyclic module re-export graph must terminate.
+    ///
+    /// `export * from './x'` resolution indexes the target module, re-entering
+    /// `index_file` → enrich → resolve → index_file. Two files that re-export each
+    /// other (JS barrel files, Python `__init__` packages — both pervasive in e.g.
+    /// Firefox) used to recurse without bound: a stack overflow on small worker
+    /// stacks, a 100% CPU "stuck on one file" spin on the 256 MiB worker stacks.
+    /// The per-thread re-entrancy guard in `index_file_with_timings` breaks it.
+    #[test]
+    fn cyclic_module_reexport_terminates() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(
+            temp_dir.path().join("a.js"),
+            "export * from './b';\nexport const fromA = 1;\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("b.js"),
+            "export * from './a';\nexport const fromB = 2;\n",
+        )
+        .unwrap();
+
+        // Without the guard, either of these never returns (overflow / spin).
+        let symbols_a = service.index_file("a.js").expect("indexing a.js must terminate");
+        assert!(
+            symbols_a.iter().any(|s| s.name == "fromA"),
+            "a.js's own symbol must still be extracted"
+        );
+        let symbols_b = service.index_file("b.js").expect("indexing b.js must terminate");
+        assert!(symbols_b.iter().any(|s| s.name == "fromB"));
+    }
+
+    /// Regression (M5.11): the degenerate self-cycle (a file re-exporting itself)
+    /// must also terminate.
+    #[test]
+    fn self_module_reexport_terminates() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(
+            temp_dir.path().join("a.js"),
+            "export * from './a';\nexport const fromA = 1;\n",
+        )
+        .unwrap();
+        let symbols = service.index_file("a.js").expect("self re-export must terminate");
+        assert!(symbols.iter().any(|s| s.name == "fromA"));
+    }
+
+    /// Regression (M5.12): a YAML config file that `serde_yaml` cannot parse must
+    /// index without spinning. `serde_yaml`'s document `Deserializer` re-yields the
+    /// same `Err` on every poll, so a `continue`-on-error loop is infinite. Firefox's
+    /// `StaticPrefList.yaml` carries `value: @IS_XP_MACOSX@` (a build-time placeholder;
+    /// `@` is a reserved YAML indicator → a hard parse error) and pinned a core at
+    /// 100% CPU. The config collectors now `break` on the first parse error.
+    #[test]
+    fn unparseable_yaml_config_terminates() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(
+            temp_dir.path().join("prefs.yaml"),
+            "- name: accessibility.tabfocus\n  type: int32_t\n  value: 7\n  mirror: always\n\
+             \n- name: accessibility.tabfocus_applies_to_xul\n  type: bool\n  value: @IS_XP_MACOSX@\n  mirror: always\n",
+        )
+        .unwrap();
+        // Before the fix this never returned (100% CPU spin in the Deserializer loop).
+        service
+            .index_file("prefs.yaml")
+            .expect("unparseable YAML must index without hanging");
     }
 
     /// M5.1 receiver-type dispatch (the "type_slice"). Each test indexes a single
