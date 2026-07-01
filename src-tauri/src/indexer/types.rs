@@ -58,23 +58,24 @@ pub struct FileMetadata {
     pub size: u64,
     pub modified: SystemTime,
     pub language: String,
-    pub line_count: usize,
 }
 
 impl FileMetadata {
     pub fn from_path(path: &PathBuf) -> std::io::Result<Self> {
+        // M5.18 — stat-only: NO file-content read. `line_count` used to read every
+        // file's full content here (via `count_lines`/`read_to_string`) but was
+        // never consumed — pure dead I/O that, on a 469k-file Firefox index, made
+        // the project-indexer walk take ~10 min (all reads) after the symbol scan.
         let metadata = std::fs::metadata(path)?;
         let size = metadata.len();
         let modified = metadata.modified()?;
         let language = detect_language(path);
-        let line_count = count_lines(path)?;
 
         Ok(Self {
             path: path.clone(),
             size,
             modified,
             language,
-            line_count,
         })
     }
 }
@@ -226,7 +227,3 @@ pub fn detect_language(path: &PathBuf) -> String {
         .to_string()
 }
 
-fn count_lines(path: &PathBuf) -> std::io::Result<usize> {
-    let content = std::fs::read_to_string(path)?;
-    Ok(content.lines().count())
-}
