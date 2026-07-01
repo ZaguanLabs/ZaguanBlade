@@ -296,7 +296,12 @@ struct SymbolExtraction<'a> {
 /// it. Accumulating ALL files before a single commit blew memory to 14 GiB on the
 /// Linux kernel (77k files). Instead we commit in bounded batches of this many
 /// files and drop each batch, so peak memory is O(batch), not O(repo).
-const RECONCILE_BATCH_SIZE: usize = 1_000;
+///
+/// M5.15 — raised 1_000 → 4_000. On repos of many SMALL files (Firefox: ~5 KB
+/// avg) the old cap bound long before `BATCH_BYTE_BUDGET`, making batches tiny and
+/// the extract→commit barrier fire constantly (cores idle each serial commit).
+/// Bigger batches amortize the barrier; `BATCH_BYTE_BUDGET` still bounds memory.
+const RECONCILE_BATCH_SIZE: usize = 4_000;
 
 /// M5.7 — defensive per-file cap. A pathological/generated file can declare an
 /// absurd number of symbols; we truncate (with a log) so a single file cannot
@@ -310,7 +315,12 @@ const MAX_SYMBOLS_PER_FILE: usize = 25_000;
 /// generated multi-MB headers mean a 1000-file batch landing in such a directory
 /// holds gigabytes. Bounding by content bytes keeps peak memory flat regardless
 /// of how large files are distributed.
-const BATCH_BYTE_BUDGET: u64 = 24 * 1024 * 1024;
+///
+/// M5.15 — 24 → 48 MiB. With the overlap committer (extract↔commit pipeline) at
+/// most ~3 batches are in flight, so peak staged content is ~3 × this; 48 MiB
+/// keeps that ~144 MiB — trivial — while making each parallel-extract phase longer
+/// relative to its commit, so the cores stay busy.
+const BATCH_BYTE_BUDGET: u64 = 48 * 1024 * 1024;
 
 /// M5.4 — minimum wall-clock between progress (IPC) emits during the parallel
 /// extraction pass. With the worker pool saturating every core, the main drain
@@ -1328,6 +1338,32 @@ impl LanguageService {
             // kept the Linux kernel (77k files) from blowing to 14 GiB. Each batch
             // is its own committed transaction, so an interruption leaves a valid,
             // partially-populated DB rather than a corrupt stub.
+            // M5.15 — OVERLAP extract↔commit. A dedicated committer thread owns the
+            // single-writer DB commit; while it writes batch N, the extraction
+            // workers already stage batch N+1, so the cores are no longer idle
+            // during each serial commit. The bounded channel gives backpressure
+            // (peak memory stays O(batch)), and FIFO delivery preserves the
+            // cross-file resolution order the commit-time enrichment relies on.
+            // Staging never touches the store (workers only parse), so it races
+            // safely against the committer's writes.
+            let commit_outcome = std::thread::scope(|commit_scope| -> Result<usize, LanguageError> {
+                let (commit_tx, commit_rx) =
+                    std::sync::mpsc::sync_channel::<Vec<StagedFileIndex>>(1);
+                // Large stack like the extraction workers: commit-time enrichment
+                // resolves module re-exports by recursively indexing target files
+                // (bounded by the M5.11 re-entrancy guard, but still deep on big
+                // re-export chains), which the default ~2 MB thread stack can't hold.
+                let committer = std::thread::Builder::new()
+                    .stack_size(256 * 1024 * 1024)
+                    .spawn_scoped(commit_scope, move || -> Result<usize, LanguageError> {
+                        let mut suppressed = 0usize;
+                        while let Ok(staged) = commit_rx.recv() {
+                            suppressed += self.commit_staged_file_indexes(&staged)?;
+                        }
+                        Ok(suppressed)
+                    })
+                    .expect("spawn index committer thread");
+
             for (batch_start, batch_end) in self.size_bounded_batch_ranges(&queued_files) {
                 let batch = &queued_files[batch_start..batch_end];
                 let worker_count = indexing_worker_count(batch.len());
@@ -1434,24 +1470,25 @@ impl LanguageService {
                 completed_files += batch_completed;
 
                 if !staged_files.is_empty() {
-                    health.active_workers = 1;
-                    health.current_file = None;
-                    health.message = format!(
-                        "Writing symbol index... {}/{} files",
-                        completed_files, total_queued
-                    );
-                    self.set_index_health(health.clone());
-                    progress(&health);
-                    suppressed_external_relationships +=
-                        self.commit_staged_file_indexes(&staged_files)?;
+                    // Hand this batch to the background committer and immediately
+                    // begin staging the next. `send` blocks ONLY while the committer
+                    // is still writing the previous batch (bounded channel =
+                    // backpressure, capping staged memory). A send error means the
+                    // committer stopped on a DB error — surfaced at `join` below.
+                    if commit_tx.send(staged_files).is_err() {
+                        break;
+                    }
                     committed_any = true;
                 }
-
-                // Free this batch's staged data (symbols + full source text —
-                // buffer snapshots) before indexing the next batch — the whole
-                // point of streaming.
-                drop(staged_files);
             }
+
+                // Close the queue and wait for the committer to drain it; its
+                // Result (total suppressed edges, or the first DB error) is the
+                // scope's value.
+                drop(commit_tx);
+                committer.join().expect("index committer thread panicked")
+            });
+            suppressed_external_relationships += commit_outcome?;
 
             // M5.10 — SECOND PASS: retry the files that errored in the parallel
             // pass, ONE AT A TIME. Sequential means no worker contention and the
@@ -2520,19 +2557,15 @@ impl LanguageService {
         // `index_directory`) run it exactly once after all files are committed.
         db_write_ms += relationship_db_write_start.elapsed().as_millis() as u64;
 
-        let cache_start = std::time::Instant::now();
-        let mut cache = self.file_cache.write().unwrap();
-        for file in staged_files {
-            cache.insert(
-                file.file_path.clone(),
-                CachedFile {
-                    hash: file.hash.clone(),
-                    _snapshot: file.snapshot.clone(),
-                    symbols: file.symbols.clone(),
-                },
-            );
-        }
-        let cache_update_ms = cache_start.elapsed().as_millis() as u64;
+        // M5.15 — do NOT populate `file_cache` from the bulk commit path. This
+        // helper only runs during full indexing (reconcile / index_directory), and
+        // caching every committed file retained its source text (via the buffer
+        // snapshot) plus a clone of its symbols for the whole run — a monotonic RAM
+        // climb (~2 GB of source text + ~5M symbols across the 469k-file Firefox
+        // index) with no payoff: the data is already in the DB, and this cache only
+        // accelerates INTERACTIVE re-lookups of OPEN files, which `index_file` /
+        // `did_open` still populate on demand.
+        let cache_update_ms = 0;
 
         Ok(CommitStagedFileMetrics {
             suppressed_external_relationships,
