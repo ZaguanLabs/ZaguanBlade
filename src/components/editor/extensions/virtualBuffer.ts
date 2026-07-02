@@ -28,15 +28,3 @@ export const virtualBufferField = StateField.define<VirtualBufferState>({
         return value;
     }
 });
-
-// Helper to get base content from editor state
-export function getVirtualContent(view: EditorView): string {
-    const bufferState = view.state.field(virtualBufferField);
-    return bufferState.baseContent;
-}
-
-// Helper to check if content has changed from base
-export function hasVirtualChanges(view: EditorView): boolean {
-    const bufferState = view.state.field(virtualBufferField);
-    return view.state.doc.toString() !== bufferState.baseContent;
-}

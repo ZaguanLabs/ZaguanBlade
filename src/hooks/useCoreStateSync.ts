@@ -33,7 +33,6 @@ export interface CoreStateSyncResult {
  * On mount:
  * 1. Loads feature flags
  * 2. Fetches core state snapshot
- * 3. Dispatches 'core-state-recovered' event for other components
  * 
  * Also listens for editor state events to keep local cache updated.
  */
@@ -52,10 +51,6 @@ export function useCoreStateSync(): CoreStateSyncResult {
         setCoreState(state);
         setError(null);
         setIsRecovering(false);
-
-        window.dispatchEvent(new CustomEvent('core-state-recovered', {
-            detail: { state, flags }
-        }));
 
         console.debug('[CoreStateSync] Recovery complete:', {
             workspace: state.workspace.path,
@@ -160,23 +155,4 @@ export function useCoreStateSync(): CoreStateSyncResult {
         error,
         recover,
     };
-}
-
-/**
- * Hook to listen for core state recovery events.
- * Useful for components that need to react to state recovery.
- */
-export function useOnCoreStateRecovered(
-    callback: (state: CoreStateSnapshot, flags: FeatureFlagsSnapshot) => void
-) {
-    useEffect(() => {
-        const handler = (event: CustomEvent<{ state: CoreStateSnapshot; flags: FeatureFlagsSnapshot }>) => {
-            callback(event.detail.state, event.detail.flags);
-        };
-
-        window.addEventListener('core-state-recovered', handler as EventListener);
-        return () => {
-            window.removeEventListener('core-state-recovered', handler as EventListener);
-        };
-    }, [callback]);
 }

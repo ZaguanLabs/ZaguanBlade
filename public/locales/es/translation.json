@@ -976,9 +976,6 @@
     "untrustedWorkspace": "Este espacio de trabajo no es de confianza",
     "workspaceSettings": "Ajustes del espacio de trabajo"
   },
-  "titleBar": {
-    "openFolder": "Abrir carpeta..."
-  },
   "language": {
     "title": "Idioma",
     "selectLanguage": "Seleccionar idioma",

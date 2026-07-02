@@ -248,20 +248,3 @@ const ContextMenuPortal: React.FC = () => {
         </div>
     );
 };
-
-/**
- * Hook to easily add context menu to any element
- */
-export const useContextMenuTrigger = (items: ContextMenuItem[] | (() => ContextMenuItem[]), context?: unknown) => {
-    const { showMenu } = useContextMenu();
-
-    const handleContextMenu = useCallback((e: React.MouseEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-
-        const menuItems = typeof items === 'function' ? items() : items;
-        showMenu({ x: e.clientX, y: e.clientY }, menuItems, context);
-    }, [items, context, showMenu]);
-
-    return { onContextMenu: handleContextMenu };
-};
