@@ -1317,7 +1317,7 @@ pub async fn handle_send_message<R: Runtime>(
                                 .collect();
 
                             window
-                                .emit("propose-changes", proposals)
+                                .emit(crate::events::event_names::PROPOSE_EDIT, proposals)
                                 .unwrap_or_default();
                         }
 

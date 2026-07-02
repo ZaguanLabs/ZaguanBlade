@@ -134,11 +134,6 @@ export function useLayoutEvents({
             handleOpenFile(event.payload, 'open-file');
         }));
 
-        // Backwards-compatible alias (kept for older emitters)
-        unlistenPromises.push(listen<string>('file-opened', (event) => {
-            handleOpenFile(event.payload, 'file-opened');
-        }));
-
         unlistenPromises.push(listen<{ path: string; start_line: number; end_line: number }>('open-file-with-highlight', (event) => {
             console.debug('Opening file with highlight from backend:', event.payload);
             const { path, start_line, end_line } = event.payload;
