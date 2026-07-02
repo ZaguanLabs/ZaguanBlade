@@ -3415,11 +3415,6 @@ impl ChatManager {
         ))
     }
 
-    /// Check if a stream can be stopped
-    pub fn is_stoppable(&self) -> bool {
-        self.streaming && self.abort_handle.is_some()
-    }
-
     pub fn handle_tool_calls(
         &self,
         calls: Vec<ToolCall>,

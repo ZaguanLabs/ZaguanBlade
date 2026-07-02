@@ -3181,7 +3181,6 @@ fn support_level_name(level: crate::tree_sitter::SupportLevel) -> &'static str {
     match level {
         crate::tree_sitter::SupportLevel::Full => "full",
         crate::tree_sitter::SupportLevel::Partial => "partial",
-        crate::tree_sitter::SupportLevel::AnchorOnly => "anchor_only",
     }
 }
 
@@ -3191,7 +3190,6 @@ fn parser_kind_name(parser: crate::tree_sitter::ParserKind) -> &'static str {
         crate::tree_sitter::ParserKind::Projection { .. } => "projection",
         crate::tree_sitter::ParserKind::Scanner => "scanner",
         crate::tree_sitter::ParserKind::MarkdownHeadings => "markdown_headings",
-        crate::tree_sitter::ParserKind::AnchorOnly => "anchor_only",
     }
 }
 
@@ -4916,7 +4914,6 @@ pub fn apply_patch_to_string_with_line_hint(
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct PatchHunk {
     old_text: String,
     new_text: String,

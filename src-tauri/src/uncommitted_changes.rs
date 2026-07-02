@@ -76,19 +76,6 @@ impl UncommittedChangeTracker {
         changes.remove(id)
     }
 
-    pub fn accept_by_path(&self, path: &PathBuf) -> Option<UncommittedChange> {
-        let mut changes = self.changes.lock().unwrap();
-        let id = changes
-            .values()
-            .find(|c| &c.file_path == path)
-            .map(|c| c.id.clone());
-        if let Some(id) = id {
-            changes.remove(&id)
-        } else {
-            None
-        }
-    }
-
     pub fn accept_all(&self) -> Vec<UncommittedChange> {
         let mut changes = self.changes.lock().unwrap();
         let all: Vec<_> = changes.drain().map(|(_, v)| v).collect();
@@ -113,27 +100,6 @@ impl UncommittedChangeTracker {
                 Ok(c)
             }
             None => Err(format!("Change not found: {}", id)),
-        }
-    }
-
-    pub fn reject_by_path(
-        &self,
-        path: &PathBuf,
-        history_service: &HistoryService,
-    ) -> Result<UncommittedChange, String> {
-        let change = {
-            let changes = self.changes.lock().unwrap();
-            changes.values().find(|c| &c.file_path == path).cloned()
-        };
-
-        match change {
-            Some(c) => {
-                history_service.revert_to(&c.snapshot_id)?;
-                let mut changes = self.changes.lock().unwrap();
-                changes.remove(&c.id);
-                Ok(c)
-            }
-            None => Err(format!("No uncommitted change for path: {:?}", path)),
         }
     }
 

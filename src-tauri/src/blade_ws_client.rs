@@ -365,9 +365,6 @@ struct WsIncomingMessage {
     request_id: Option<String>,
     #[serde(rename = "type")]
     msg_type: String,
-    #[allow(dead_code)]
-    #[serde(default)]
-    timestamp: i64,
     #[serde(default)]
     payload: Value,
 }
@@ -724,62 +721,8 @@ impl BladeWsClient {
         Ok(event_rx)
     }
 
-    /// Send a chat message
-    pub async fn send_message(
-        &self,
-        session_id: Option<String>,
-        model_id: String,
-        message: String,
-        images: Option<Vec<crate::protocol::ChatImage>>,
-        workspace: Option<WorkspaceInfo>,
-    ) -> Result<String, String> {
-        self.send_message_with_storage_mode(
-            session_id, model_id, message, images, workspace, None, None, None, None, None, None,
-            None, None,
-        )
-        .await
-    }
-
     pub fn new_chat_request_id() -> String {
         format!("chat-{}", uuid::Uuid::new_v4())
-    }
-
-    /// Send a chat message with explicit storage mode (RFC-002)
-    pub async fn send_message_with_storage_mode(
-        &self,
-        session_id: Option<String>,
-        model_id: String,
-        message: String,
-        images: Option<Vec<crate::protocol::ChatImage>>,
-        workspace: Option<WorkspaceInfo>,
-        storage_mode: Option<String>,
-        mode: Option<String>,
-        local_conversation_state: Option<LocalConversationState>,
-        tools: Option<Vec<Value>>,
-        tool_choice: Option<Value>,
-        parallel_tool_calls: Option<bool>,
-        tag: Option<String>,
-        tags: Option<Vec<String>>,
-    ) -> Result<String, String> {
-        let request_id = Self::new_chat_request_id();
-        self.send_message_with_storage_mode_and_id(
-            request_id.clone(),
-            session_id,
-            model_id,
-            message,
-            images,
-            workspace,
-            storage_mode,
-            mode,
-            local_conversation_state,
-            tools,
-            tool_choice,
-            parallel_tool_calls,
-            tag,
-            tags,
-        )
-        .await?;
-        Ok(request_id)
     }
 
     pub async fn send_message_with_storage_mode_and_id(

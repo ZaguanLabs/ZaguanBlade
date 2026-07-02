@@ -17,15 +17,6 @@ fn workspace_root_path(state: &AppState) -> Result<std::path::PathBuf, String> {
         .ok_or_else(|| "No workspace open".to_string())
 }
 
-pub(crate) fn resolve_path_under_workspace(
-    state: &AppState,
-    path: &std::path::Path,
-) -> Result<std::path::PathBuf, String> {
-    let workspace_root = workspace_root_path(state)?;
-
-    resolve_path_under_workspace_root(&workspace_root, path)
-}
-
 pub(crate) async fn resolve_path_under_workspace_async(
     state: &AppState,
     path: std::path::PathBuf,
@@ -167,17 +158,6 @@ pub async fn search_workspace_paths(
     })
     .await
     .map_err(|e| format!("search workspace paths task failed: {}", e))?
-}
-
-pub fn write_file_content_logic(
-    path: String,
-    content: String,
-    state: &AppState,
-) -> Result<(), String> {
-    let requested_path = std::path::PathBuf::from(&path);
-    let resolved_path = resolve_path_under_workspace(state, &requested_path)?;
-
-    std::fs::write(&resolved_path, content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

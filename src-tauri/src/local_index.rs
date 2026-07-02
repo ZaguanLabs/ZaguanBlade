@@ -331,39 +331,6 @@ impl LocalIndex {
         rows.collect()
     }
 
-    /// Get moments by conversation ID
-    pub fn get_moments_for_conversation(
-        &self,
-        conversation_id: &str,
-    ) -> SqliteResult<Vec<MomentIndex>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, conversation_id, moment_type, content, context, tags, created_at, relevance_score, artifact_path FROM moments WHERE conversation_id = ?1 ORDER BY created_at DESC"
-        )?;
-
-        let rows = stmt.query_map(params![conversation_id], |row| {
-            let tags_json: String = row.get(5)?;
-            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-
-            Ok(MomentIndex {
-                id: row.get(0)?,
-                conversation_id: row.get(1)?,
-                moment_type: row.get(2)?,
-                content: row.get(3)?,
-                context: row.get(4)?,
-                tags,
-                created_at: row.get(6)?,
-                relevance_score: row.get(7)?,
-                artifact_path: row.get(8)?,
-            })
-        })?;
-
-        rows.collect()
-    }
-
-    // =========================================================================
-    // Code Reference Operations
-    // =========================================================================
-
     /// Insert a code reference
     pub fn insert_code_reference(&self, ref_: &CodeReferenceIndex) -> SqliteResult<i64> {
         self.conn.execute(

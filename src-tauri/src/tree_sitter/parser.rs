@@ -44,7 +44,6 @@ pub enum Language {
 pub enum SupportLevel {
     Full,
     Partial,
-    AnchorOnly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +63,6 @@ pub enum ParserKind {
     Projection { target: Language },
     Scanner,
     MarkdownHeadings,
-    AnchorOnly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

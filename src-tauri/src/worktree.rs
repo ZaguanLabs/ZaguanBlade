@@ -214,12 +214,6 @@ pub fn resolve_path_under_workspace_root(
     Ok(normalized)
 }
 
-pub fn workspace_relative_path(workspace_root: &Path, path: &Path) -> Option<String> {
-    path.strip_prefix(workspace_root)
-        .ok()
-        .map(normalize_rel_path)
-}
-
 impl WorktreeStore {
     pub fn new(workspace_root: PathBuf) -> Result<Self, String> {
         let workspace_root = std::fs::canonicalize(&workspace_root).unwrap_or(workspace_root);
@@ -246,17 +240,6 @@ impl WorktreeStore {
         self.snapshot.read().unwrap().clone()
     }
 
-    pub fn list_directory(&self, path: Option<&Path>) -> Result<Vec<FileEntry>, String> {
-        let relative = match path {
-            Some(path) => {
-                let resolved = resolve_path_under_workspace_root(&self.workspace_root, path)?;
-                workspace_relative_path(&self.workspace_root, &resolved).unwrap_or_default()
-            }
-            _ => String::new(),
-        };
-        Ok(self.snapshot().list_directory(&relative))
-    }
-
     pub fn search_paths(&self, query: &str, limit: Option<usize>) -> Vec<SnapshotPathMatch> {
         self.snapshot()
             .search_paths(query, limit.unwrap_or(12).min(50))
@@ -264,10 +247,6 @@ impl WorktreeStore {
 
     pub fn supported_language_files(&self, scope: &str) -> Vec<String> {
         self.snapshot().supported_language_files(scope)
-    }
-
-    pub fn workspace_root(&self) -> &Path {
-        &self.workspace_root
     }
 }
 

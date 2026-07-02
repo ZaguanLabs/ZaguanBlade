@@ -225,41 +225,6 @@ impl ConversationHistory {
         messages
     }
 
-    /// Capture content from the last assistant message for tool call context
-    pub fn capture_assistant_content(&self) -> Option<String> {
-        self.messages
-            .last()
-            .filter(|m| m.role == ChatRole::Assistant)
-            .map(|m| {
-                let mut c = String::new();
-                if let Some(r) = &m.reasoning {
-                    c.push_str("<think>");
-                    c.push_str(r);
-                    c.push_str("</think>\n");
-                }
-                c.push_str(&m.content);
-                c
-            })
-    }
-
-    /// Store tool results in history
-    pub fn store_tool_results(
-        &mut self,
-        calls: &[ToolCall],
-        results: &[(ToolCall, crate::tools::ToolResult)],
-    ) {
-        for (call, result) in calls.iter().zip(results.iter()) {
-            let mut tool_msg = ChatMessage::new(
-                ChatRole::Tool,
-                result.1.to_tool_content_for_tool(&call.function.name),
-            );
-            tool_msg.tool_call_id = Some(call.id.clone());
-            self.messages.push(tool_msg);
-        }
-        self.metadata.message_count = self.messages.len();
-        self.metadata.updated_at = Utc::now();
-    }
-
     /// Convert to StoredConversation for persistence
     pub fn to_stored(&self) -> StoredConversation {
         StoredConversation {

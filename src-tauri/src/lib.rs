@@ -214,10 +214,6 @@ pub fn run() {
             commands::misc::frontend_shell_ready,
             commands::misc::set_window_title,
             commands::misc::get_runtime_debug_flags,
-            // commands::misc::set_virtual_buffer,
-            // commands::misc::clear_virtual_buffer,
-            // commands::misc::has_virtual_buffer,
-            // commands::misc::get_virtual_files,
             // Files
             commands::files::open_workspace,
             commands::files::list_files,

@@ -660,18 +660,10 @@ pub fn save_api_config(path: &Path, cfg: &ApiConfig) -> Result<(), String> {
     fs::write(path, json).map_err(|e| e.to_string())
 }
 
-pub fn load_remote_ai_config(path: &Path) -> RemoteAiConfig {
-    load_api_config(path).remote_config()
-}
-
 pub fn save_remote_ai_config(path: &Path, remote: &RemoteAiConfig) -> Result<(), String> {
     let mut cfg = load_api_config(path);
     cfg.apply_remote_config(remote);
     save_api_config(path, &cfg)
-}
-
-pub fn load_local_ai_config(path: &Path) -> LocalAiConfig {
-    load_api_config(path).local_ai_config()
 }
 
 pub fn save_local_ai_config(path: &Path, local: &LocalAiConfig) -> Result<(), String> {

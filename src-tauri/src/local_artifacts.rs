@@ -123,10 +123,6 @@ impl ConversationArtifact {
         self.updated_at = chrono::Utc::now().to_rfc3339();
     }
 
-    pub fn add_moment(&mut self, moment: Moment) {
-        self.moments.push(moment);
-        self.updated_at = chrono::Utc::now().to_rfc3339();
-    }
 }
 
 /// Local artifact store for a project

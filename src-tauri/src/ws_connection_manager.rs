@@ -67,11 +67,6 @@ impl WsConnectionManager {
         self.disconnect().await;
     }
 
-    /// Get current connection state
-    pub async fn get_state(&self) -> ConnectionState {
-        self.state.read().await.clone()
-    }
-
     /// Get current session ID
     pub async fn get_session_id(&self) -> Option<String> {
         self.session_id.read().await.clone()
@@ -462,68 +457,6 @@ impl WsConnectionManager {
         .map_err(|_| "Timed out waiting for ZLP response".to_string())?
     }
 
-    /// Send a chat message using the persistent connection
-    pub async fn send_message(
-        &self,
-        session_id: Option<String>,
-        model_id: String,
-        message: String,
-        images: Option<Vec<crate::protocol::ChatImage>>,
-        workspace: Option<WorkspaceInfo>,
-    ) -> Result<String, String> {
-        {
-            let mut current_storage_mode = self.storage_mode.write().await;
-            *current_storage_mode = None;
-        }
-        let client_lock = self.client.lock().await;
-        let client = client_lock.as_ref().ok_or("Not connected")?;
-        client
-            .send_message(session_id, model_id, message, images, workspace)
-            .await
-    }
-
-    /// Send a chat message with storage mode
-    pub async fn send_message_with_storage_mode(
-        &self,
-        session_id: Option<String>,
-        model_id: String,
-        message: String,
-        images: Option<Vec<crate::protocol::ChatImage>>,
-        workspace: Option<WorkspaceInfo>,
-        storage_mode: Option<String>,
-        mode: Option<String>,
-        local_conversation_state: Option<crate::blade_ws_client::LocalConversationState>,
-        tools: Option<Vec<Value>>,
-        tool_choice: Option<Value>,
-        parallel_tool_calls: Option<bool>,
-        tag: Option<String>,
-        tags: Option<Vec<String>>,
-    ) -> Result<String, String> {
-        {
-            let mut current_storage_mode = self.storage_mode.write().await;
-            *current_storage_mode = storage_mode.clone();
-        }
-
-        let client = self.get_client().await?;
-        client
-            .send_message_with_storage_mode(
-                session_id,
-                model_id,
-                message,
-                images,
-                workspace,
-                storage_mode,
-                mode,
-                local_conversation_state,
-                tools,
-                tool_choice,
-                parallel_tool_calls,
-                tag,
-                tags,
-            )
-            .await
-    }
-
     /// Send a chat message with storage mode and an explicit request id.
     pub async fn send_message_with_storage_mode_and_id(
         &self,
@@ -675,8 +608,4 @@ impl WsConnectionManager {
         eprintln!("[WS MANAGER] Disconnected");
     }
 
-    /// Check if connected
-    pub async fn is_connected(&self) -> bool {
-        matches!(self.get_state().await, ConnectionState::Connected)
-    }
 }
