@@ -83,18 +83,6 @@ fn build_core_state_snapshot(state: &AppState) -> CoreStateSnapshot {
     }
 }
 
-/// Returns a complete snapshot of the core application state.
-/// Used for UI initialization, reload recovery, and debugging.
-#[tauri::command]
-pub async fn get_core_state(app_handle: tauri::AppHandle) -> Result<CoreStateSnapshot, String> {
-    tokio::task::spawn_blocking(move || {
-        let state = app_handle.state::<AppState>();
-        build_core_state_snapshot(&*state)
-    })
-    .await
-    .map_err(|e| format!("get core state task failed: {}", e))
-}
-
 /// Returns the startup bootstrap payload used to hydrate the frontend shell.
 #[tauri::command]
 pub async fn bootstrap_state(app_handle: tauri::AppHandle) -> Result<BootstrapState, String> {
@@ -125,32 +113,4 @@ pub async fn bootstrap_state(app_handle: tauri::AppHandle) -> Result<BootstrapSt
 #[tauri::command]
 pub fn get_feature_flags(state: State<'_, AppState>) -> FeatureFlagsSnapshot {
     state.feature_flags.snapshot()
-}
-
-/// Sets a feature flag value. Used for testing and gradual rollout.
-#[tauri::command]
-pub fn set_feature_flag(
-    flag: String,
-    value: bool,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    match flag.as_str() {
-        "editor_backend_authority" => {
-            state.feature_flags.set_editor_backend_authority(value);
-            Ok(())
-        }
-        "tabs_backend_authority" => {
-            state.feature_flags.set_tabs_backend_authority(value);
-            Ok(())
-        }
-        "composite_tools_enabled" => {
-            state.feature_flags.set_composite_tools_enabled(value);
-            Ok(())
-        }
-        "grep_timeout_enforced" => {
-            state.feature_flags.set_grep_timeout_enforced(value);
-            Ok(())
-        }
-        _ => Err(format!("Unknown feature flag: {}", flag)),
-    }
 }

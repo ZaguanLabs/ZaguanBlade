@@ -209,12 +209,10 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             // Misc
-            commands::misc::greet,
             commands::misc::toggle_devtools,
             commands::misc::log_frontend,
             commands::misc::frontend_shell_ready,
             commands::misc::set_window_title,
-            commands::misc::get_blade_event_metrics,
             commands::misc::get_runtime_debug_flags,
             // commands::misc::set_virtual_buffer,
             // commands::misc::clear_virtual_buffer,
@@ -224,18 +222,13 @@ pub fn run() {
             commands::files::open_workspace,
             commands::files::list_files,
             commands::files::search_workspace_paths,
-            commands::files::read_file_content,
             commands::files::write_file_content,
             commands::files::open_file_in_editor,
             // Project
-            commands::project::read_binary_file,
-            commands::project::get_recent_workspaces,
             commands::project::get_current_workspace,
             commands::project::load_project_state,
             commands::project::save_project_state,
             commands::project::graceful_shutdown_with_state,
-            commands::project::get_project_state_path,
-            commands::project::get_user_id,
             commands::project::get_project_id,
             commands::project::load_project_settings,
             commands::project::save_project_settings,
@@ -244,9 +237,7 @@ pub fn run() {
             // Screenshot
             commands::screenshot::list_capturable_windows,
             commands::screenshot::capture_window,
-            commands::screenshot::capture_full_screen,
             commands::screenshot::capture_window_region,
-            commands::screenshot::capture_screen_region,
             // Settings
             commands::settings_remote::get_remote_ai_settings,
             commands::settings_remote::save_remote_ai_settings,
@@ -257,17 +248,11 @@ pub fn run() {
             commands::settings_local_ai::test_local_openai_compat_connection,
             commands::settings_local_ai::refresh_local_openai_compat_models,
             // Chat
-            commands::chat::send_message,
             commands::chat::list_models,
             commands::chat::get_conversation,
             commands::chat::truncate_conversation,
             commands::chat::list_conversations,
             commands::chat::load_conversation,
-            commands::chat::new_conversation,
-            commands::chat::delete_conversation,
-            commands::chat::save_conversation,
-            commands::chat::set_selected_model,
-            commands::chat::get_selected_model,
             commands::chat::get_chat_status,
             commands::chat::is_local_model_active,
             // Tools & Changes
@@ -284,7 +269,6 @@ pub fn run() {
             commands::history::undo_batch,
             // Uncommitted Changes (Accept/Reject)
             commands::uncommitted::get_uncommitted_changes,
-            commands::uncommitted::get_uncommitted_change,
             commands::uncommitted::get_uncommitted_change_for_file,
             commands::uncommitted::accept_change,
             commands::uncommitted::accept_file_changes,
@@ -292,23 +276,13 @@ pub fn run() {
             commands::uncommitted::reject_change,
             commands::uncommitted::reject_file_changes,
             commands::uncommitted::reject_all_changes,
-            commands::uncommitted::get_uncommitted_changes_count,
             // Cache
             commands::cache::warmup_cache,
             commands::cache::should_rewarm_cache,
-            // Local Context
-            commands::local_context::list_local_conversations,
-            commands::local_context::load_local_conversation,
-            commands::local_context::search_local_moments,
-            commands::local_context::get_file_context,
-            commands::local_context::delete_local_conversation,
             // State (Headless Core)
             commands::state::bootstrap_state,
-            commands::state::get_core_state,
             commands::state::get_feature_flags,
-            commands::state::set_feature_flag,
             // Git commands
-            git::git_status,
             git::git_status_summary,
             git::git_status_files,
             git::git_stage_file,
@@ -329,12 +303,7 @@ pub fn run() {
             commands::remote_control::set_telegram_bot_token,
             commands::remote_control::disconnect_remote_control,
             // Ephemeral
-            ephemeral_commands::create_ephemeral_document,
-            ephemeral_commands::get_ephemeral_document,
-            ephemeral_commands::update_ephemeral_document,
             ephemeral_commands::close_ephemeral_document,
-            ephemeral_commands::list_ephemeral_documents,
-            ephemeral_commands::save_ephemeral_document,
             ephemeral_commands::save_ephemeral_document_to_workspace,
             // Protocol Dispatcher
             protocol_dispatcher::dispatch,

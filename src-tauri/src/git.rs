@@ -1167,19 +1167,6 @@ pub async fn git_status_files(
 }
 
 #[tauri::command]
-pub async fn git_status(
-    _state: State<'_, AppState>,
-    app_handle: AppHandle,
-) -> Result<GitStatusSnapshot, String> {
-    tokio::task::spawn_blocking(move || {
-        let state = app_handle.state::<AppState>();
-        collect_git_status_snapshot(&state)
-    })
-    .await
-    .map_err(|e| format!("git status task failed: {}", e))?
-}
-
-#[tauri::command]
 pub async fn git_stage_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
     let Some(root) = workspace_root(&state) else {
         return Err("No workspace open".to_string());

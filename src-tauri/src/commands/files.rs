@@ -169,67 +169,6 @@ pub async fn search_workspace_paths(
     .map_err(|e| format!("search workspace paths task failed: {}", e))?
 }
 
-pub fn read_file_content_logic(path: String, state: &AppState) -> Result<String, String> {
-    // Virtual buffers removal - surgically removed.
-
-    let requested_path = std::path::PathBuf::from(&path);
-    let resolved_path = resolve_path_under_workspace(state, &requested_path)?;
-
-    // No virtual content, read from disk
-    match std::fs::read_to_string(&resolved_path) {
-        Ok(content) => {
-            if content.is_empty() {
-                println!(
-                    "[READ FILE CONTENT] Read empty content from: {} (requested: {})",
-                    resolved_path.display(),
-                    path
-                );
-            }
-            Ok(content)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            println!(
-                "[READ FILE CONTENT] Not found: {} (requested: {})",
-                resolved_path.display(),
-                path
-            );
-            Ok(String::new())
-        }
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-#[tauri::command]
-pub async fn read_file_content(
-    path: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<String, String> {
-    let requested_path = std::path::PathBuf::from(&path);
-    let resolved_path = resolve_path_under_workspace_async(&*state, requested_path).await?;
-
-    match fs::read_to_string(&resolved_path).await {
-        Ok(content) => {
-            if content.is_empty() {
-                println!(
-                    "[READ FILE CONTENT] Read empty content from: {} (requested: {})",
-                    resolved_path.display(),
-                    path
-                );
-            }
-            Ok(content)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            println!(
-                "[READ FILE CONTENT] Not found: {} (requested: {})",
-                resolved_path.display(),
-                path
-            );
-            Ok(String::new())
-        }
-        Err(e) => Err(e.to_string()),
-    }
-}
-
 pub fn write_file_content_logic(
     path: String,
     content: String,

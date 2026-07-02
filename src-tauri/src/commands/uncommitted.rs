@@ -221,11 +221,6 @@ pub async fn get_uncommitted_changes(
 }
 
 #[tauri::command]
-pub fn get_uncommitted_change(state: State<'_, AppState>, id: String) -> Option<UncommittedChange> {
-    state.uncommitted_changes.get(&id)
-}
-
-#[tauri::command]
 pub fn get_uncommitted_change_for_file(
     state: State<'_, AppState>,
     file_path: String,
@@ -347,11 +342,6 @@ pub async fn reject_all_changes(
     })
     .await
     .map_err(|e| format!("reject all changes task failed: {}", e))?
-}
-
-#[tauri::command]
-pub fn get_uncommitted_changes_count(state: State<'_, AppState>) -> usize {
-    state.uncommitted_changes.count()
 }
 
 #[cfg(test)]

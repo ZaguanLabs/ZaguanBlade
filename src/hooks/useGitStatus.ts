@@ -30,11 +30,6 @@ export interface GitFileStatus {
     statusCode: string;
 }
 
-interface GitStatusSnapshot {
-    summary: GitStatusSummary;
-    files: GitFileStatus[];
-}
-
 export interface CommitPreflightResult {
     canCommit: boolean;
     isRepo: boolean;

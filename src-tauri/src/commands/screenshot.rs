@@ -15,13 +15,6 @@ pub async fn capture_window(window_id: u32) -> Result<screenshot::CaptureResult,
 }
 
 #[tauri::command]
-pub async fn capture_full_screen() -> Result<screenshot::CaptureResult, String> {
-    tokio::task::spawn_blocking(screenshot::capture_full_screen)
-        .await
-        .map_err(|e| format!("capture full screen task failed: {}", e))?
-}
-
-#[tauri::command]
 pub async fn capture_window_region(
     window_id: u32,
     x: u32,
@@ -34,16 +27,4 @@ pub async fn capture_window_region(
     })
     .await
     .map_err(|e| format!("capture window region task failed: {}", e))?
-}
-
-#[tauri::command]
-pub async fn capture_screen_region(
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
-) -> Result<screenshot::CaptureResult, String> {
-    tokio::task::spawn_blocking(move || screenshot::capture_screen_region(x, y, width, height))
-        .await
-        .map_err(|e| format!("capture screen region task failed: {}", e))?
 }
