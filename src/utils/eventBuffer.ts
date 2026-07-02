@@ -104,7 +104,7 @@ export class EventBuffer<T> {
 /**
  * Manager for multiple event buffers (e.g., multiple messages or terminals)
  */
-export class BufferManager<T> {
+class BufferManager<T> {
     private buffers: Map<string, EventBuffer<T>>;
     private onApply: (id: string, data: T, is_final?: boolean, seq?: number) => void;
     private onComplete?: (id: string) => void;

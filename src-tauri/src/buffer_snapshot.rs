@@ -10,7 +10,6 @@ pub enum BufferSnapshotSource {
 
 #[derive(Debug, Clone)]
 pub struct BufferSnapshot {
-    path: String,
     version: Option<i32>,
     hash: String,
     language: Option<Language>,
@@ -32,7 +31,6 @@ impl BufferSnapshot {
         let hash = compute_hash(&content);
         let line_starts = compute_line_starts(&content);
         Self {
-            path,
             version,
             hash,
             language,
@@ -40,10 +38,6 @@ impl BufferSnapshot {
             content: Arc::<str>::from(content),
             line_starts: Arc::new(line_starts),
         }
-    }
-
-    pub fn path(&self) -> &str {
-        &self.path
     }
 
     pub fn version(&self) -> Option<i32> {
@@ -56,10 +50,6 @@ impl BufferSnapshot {
 
     pub fn language(&self) -> Option<Language> {
         self.language
-    }
-
-    pub fn source(&self) -> BufferSnapshotSource {
-        self.source
     }
 
     pub fn is_live(&self) -> bool {

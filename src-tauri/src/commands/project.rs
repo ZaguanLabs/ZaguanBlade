@@ -1,18 +1,7 @@
 use crate::app_state::AppState;
 use crate::project_settings;
 use crate::project_state;
-use tauri::{Manager, State};
-
-#[tauri::command]
-pub async fn get_recent_workspaces(app_handle: tauri::AppHandle) -> Result<Vec<String>, String> {
-    tokio::task::spawn_blocking(move || {
-        let state = app_handle.state::<AppState>();
-        let workspace = state.workspace.lock().unwrap();
-        workspace.get_recent_workspaces()
-    })
-    .await
-    .map_err(|e| format!("get recent workspaces task failed: {}", e))
-}
+use tauri::State;
 
 #[tauri::command]
 pub fn get_current_workspace(state: State<'_, AppState>) -> Option<String> {
@@ -78,29 +67,6 @@ pub async fn graceful_shutdown_with_state(
 
     app_handle.exit(0);
     Ok(())
-}
-
-#[tauri::command]
-pub async fn get_project_state_path(project_path: String) -> Result<Option<String>, String> {
-    tokio::task::spawn_blocking(move || {
-        project_state::get_project_state_path(&project_path)
-            .map(|p| p.to_string_lossy().to_string())
-    })
-    .await
-    .map_err(|e| format!("get project state path task failed: {}", e))
-}
-
-#[tauri::command]
-pub async fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
-    tokio::task::spawn_blocking(move || std::fs::read(&path))
-        .await
-        .map_err(|e| format!("read binary file task failed: {}", e))?
-        .map_err(|e| format!("Failed to read binary file: {}", e))
-}
-
-#[tauri::command]
-pub fn get_user_id(state: State<'_, AppState>) -> Option<String> {
-    state.user_id.lock().unwrap().clone()
 }
 
 #[tauri::command]

@@ -127,11 +127,6 @@ fn discover_available_skills_with_global_root(
     discovered.into_values().collect()
 }
 
-pub fn discover_global_skills() -> Vec<SkillCatalogEntry> {
-    let skills_root = crate::config::global_skills_dir();
-    discover_global_skills_from_root(&skills_root)
-}
-
 fn discover_global_skills_from_root(skills_root: &Path) -> Vec<SkillCatalogEntry> {
     discover_skills_from_root(skills_root, skills_root, SkillSource::Global)
 }

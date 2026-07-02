@@ -458,4 +458,3 @@ export const StreamingMarkdownRenderer = React.memo(StreamingMarkdownRendererCom
         && prevProps.profile === nextProps.profile
         && prevProps.mode === nextProps.mode;
 });
-export default MarkdownRenderer;

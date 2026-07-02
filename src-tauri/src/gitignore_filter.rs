@@ -148,20 +148,6 @@ impl GitignoreFilter {
         ignored
     }
 
-    /// Helper to filter a list of paths, removing those that should be ignored.
-    pub fn filter_paths<P: AsRef<Path>>(&self, paths: Vec<P>) -> Vec<PathBuf> {
-        paths
-            .into_iter()
-            .filter_map(|p| {
-                let path = p.as_ref();
-                if self.should_ignore(path) {
-                    None
-                } else {
-                    Some(path.to_path_buf())
-                }
-            })
-            .collect()
-    }
 }
 
 /// Fold one matcher's verdict into the running decision. `Ignore` excludes,

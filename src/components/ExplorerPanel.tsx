@@ -66,7 +66,6 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
     useEffect(() => {
         // Listen for refresh requests from backend
         let unlistenFn: (() => void) | undefined;
-        let unlistenWorkspaceFn: (() => void) | undefined;
         let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
         const setupListener = async () => {
@@ -79,18 +78,11 @@ export const ExplorerPanel: React.FC<ExplorerPanelProps> = ({ onFileSelect, acti
                     debounceTimer = null;
                 }, 500);
             });
-
-            unlistenWorkspaceFn = await listen<{ workspace_path: string }>('workspace-changed', (event) => {
-                setWorkspaceRoot(event.payload.workspace_path);
-                setRefreshKey(prev => prev + 1);
-                loadRoot();
-            });
         };
         setupListener();
 
         return () => {
             if (unlistenFn) unlistenFn();
-            if (unlistenWorkspaceFn) unlistenWorkspaceFn();
             if (debounceTimer) clearTimeout(debounceTimer);
         };
     }, [loadRoot]);

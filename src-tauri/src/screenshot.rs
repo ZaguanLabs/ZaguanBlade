@@ -154,16 +154,6 @@ pub fn capture_window(window_id: u32) -> Result<CaptureResult, String> {
     encode_png(image::DynamicImage::ImageRgba8(image))
 }
 
-pub fn capture_full_screen() -> Result<CaptureResult, String> {
-    let monitors = xcap::Monitor::all().map_err(|e| e.to_string())?;
-    let monitor = monitors
-        .into_iter()
-        .next()
-        .ok_or_else(|| "No monitors available".to_string())?;
-    let image = monitor.capture_image().map_err(|e| e.to_string())?;
-    encode_png(image::DynamicImage::ImageRgba8(image))
-}
-
 pub fn capture_window_region(
     window_id: u32,
     x: u32,
@@ -181,30 +171,6 @@ pub fn capture_window_region(
     let (img_width, img_height) = dyn_image.dimensions();
     let safe_x = x.min(img_width.saturating_sub(1));
     let safe_y = y.min(img_height.saturating_sub(1));
-    let safe_width = width.min(img_width.saturating_sub(safe_x));
-    let safe_height = height.min(img_height.saturating_sub(safe_y));
-    let cropped = dyn_image.crop_imm(safe_x, safe_y, safe_width, safe_height);
-    encode_png(cropped)
-}
-
-pub fn capture_screen_region(
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
-) -> Result<CaptureResult, String> {
-    let monitors = xcap::Monitor::all().map_err(|e| e.to_string())?;
-    let monitor = monitors
-        .into_iter()
-        .next()
-        .ok_or_else(|| "No monitors available".to_string())?;
-    let image = monitor.capture_image().map_err(|e| e.to_string())?;
-    let dyn_image = image::DynamicImage::ImageRgba8(image);
-    let (img_width, img_height) = dyn_image.dimensions();
-    let max_x = img_width.saturating_sub(1);
-    let max_y = img_height.saturating_sub(1);
-    let safe_x = x.min(max_x);
-    let safe_y = y.min(max_y);
     let safe_width = width.min(img_width.saturating_sub(safe_x));
     let safe_height = height.min(img_height.saturating_sub(safe_y));
     let cropped = dyn_image.crop_imm(safe_x, safe_y, safe_width, safe_height);

@@ -364,7 +364,6 @@ fn take_active_command_exit(
 
 // Commands to be exposed to Tauri
 
-// #[tauri::command]
 pub fn create_terminal<R: Runtime>(
     id: String,
     cwd: Option<String>,
@@ -1001,7 +1000,6 @@ mod tests {
 }
 
 // Execute a command in a terminal (non-interactive, for AI command execution)
-// #[tauri::command]
 pub fn execute_command_in_terminal<R: Runtime>(
     id: String,
     command: String,

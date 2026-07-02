@@ -43,25 +43,9 @@ impl EphemeralDocumentStore {
         docs.get(id).cloned()
     }
 
-    pub fn update_content(&self, id: &str, content: String) -> bool {
-        let mut docs = self.documents.lock().unwrap();
-        if let Some(doc) = docs.get_mut(id) {
-            doc.content = content;
-            doc.modified = true;
-            true
-        } else {
-            false
-        }
-    }
-
     pub fn remove(&self, id: &str) -> bool {
         let mut docs = self.documents.lock().unwrap();
         docs.remove(id).is_some()
-    }
-
-    pub fn list(&self) -> Vec<EphemeralDocument> {
-        let docs = self.documents.lock().unwrap();
-        docs.values().cloned().collect()
     }
 }
 

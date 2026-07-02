@@ -44,26 +44,6 @@ impl SearchQuery {
         }
     }
 
-    /// Create a query for symbols in a specific file
-    pub fn in_file(file_path: &str) -> Self {
-        Self {
-            file_path: Some(file_path.to_string()),
-            limit: Some(100),
-            recursive: false,
-            ..Default::default()
-        }
-    }
-
-    /// Create a query for symbols of a specific type
-    pub fn of_type(symbol_type: SymbolType) -> Self {
-        Self {
-            symbol_types: Some(vec![symbol_type]),
-            limit: Some(50),
-            recursive: true,
-            ..Default::default()
-        }
-    }
-
     /// Add a limit to the query
     pub fn with_limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);

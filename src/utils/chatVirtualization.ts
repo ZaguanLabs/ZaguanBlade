@@ -1,4 +1,4 @@
-export const DEFAULT_CHAT_VIRTUALIZATION_OVERSCAN_PX = 720;
+const DEFAULT_CHAT_VIRTUALIZATION_OVERSCAN_PX = 720;
 
 export interface VisibleVirtualRange {
     startIndex: number;

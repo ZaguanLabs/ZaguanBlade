@@ -27,7 +27,6 @@ let cachedUnifiedDiffState: DiffState | null = null;
 // ─── State Effects ───────────────────────────────────────────────────────────
 
 export const setDiffState = StateEffect.define<DiffState | null>();
-export const clearDiff = StateEffect.define<void>();
 
 // ─── Diff Parsing (using `diff` library) ─────────────────────────────────────
 
@@ -348,9 +347,6 @@ export const diffStateField = StateField.define<DiffState | null>({
             if (effect.is(setDiffState)) {
                 return effect.value;
             }
-            if (effect.is(clearDiff)) {
-                return null;
-            }
         }
         return value;
     }
@@ -573,7 +569,7 @@ const diffDecorationsField = StateField.define<DecorationSet>({
     update(decorations, tr) {
         let diffChanged = false;
         for (const effect of tr.effects) {
-            if (effect.is(setDiffState) || effect.is(clearDiff)) {
+            if (effect.is(setDiffState)) {
                 diffChanged = true;
                 break;
             }

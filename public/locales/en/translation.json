@@ -980,9 +980,6 @@
     "untrustedWorkspace": "This workspace is not trusted",
     "workspaceSettings": "Workspace Settings"
   },
-  "titleBar": {
-    "openFolder": "Open Folder..."
-  },
   "language": {
     "title": "Language",
     "selectLanguage": "Select Language",

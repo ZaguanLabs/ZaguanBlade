@@ -34,7 +34,6 @@ marked-yaml = "0.8"
 reqwest = { version = "0.13.3", features = ["json", "stream"] }
 tokio = { version = "1.52.3", features = ["full"] }
 chrono = { version = "0.4", features = ["clock", "serde"] }
-futures = "0.3"
 regex = "1.12.2"
 walkdir = "2.5.0"
 directories = "6.0.0"
@@ -50,10 +49,8 @@ glob = "0.3"
 rusqlite = { version = "0.39", features = ["bundled"] }
 notify = "8"
 ignore = "0.4"
-diffy = "0.5.0"
 similar = "3.1.0"
 gix = "0.85.0"
-bstr = "1.12.3"
 
 # Tree-sitter for AST parsing (ZLP - Zaguán Language Protocol)
 tree-sitter = "0.26.10"

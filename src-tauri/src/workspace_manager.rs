@@ -134,15 +134,4 @@ impl WorkspaceManager {
             }
         }
     }
-
-    pub fn get_recent_workspaces(&self) -> Vec<String> {
-        if self.state_path.exists() {
-            if let Ok(content) = fs::read_to_string(&self.state_path) {
-                if let Ok(state) = serde_json::from_str::<WorkspaceState>(&content) {
-                    return state.recent_workspaces;
-                }
-            }
-        }
-        Vec::new()
-    }
 }

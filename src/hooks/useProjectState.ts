@@ -2,14 +2,14 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
-export interface TabState {
+interface TabState {
     id: string;
     title: string;
     type: string;
     path?: string;
 }
 
-export interface TerminalState {
+interface TerminalState {
     id: string;
     title: string;
     cwd?: string;

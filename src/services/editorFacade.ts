@@ -60,7 +60,7 @@ export function isTabsBackendAuthoritative(): boolean {
  * Passthrough error - thrown when the facade should not handle the operation
  * and the caller should use its own (legacy) implementation.
  */
-export class PassthroughError extends Error {
+class PassthroughError extends Error {
     constructor() {
         super('PASSTHROUGH');
         this.name = 'PassthroughError';

@@ -212,8 +212,3 @@ pub fn provider_prefers_opportunistic_cache(provider: &str) -> bool {
     )
 }
 
-/// Check if a provider supports prompt caching
-#[allow(dead_code)]
-pub fn provider_supports_cache(provider: &str) -> bool {
-    provider_requires_explicit_minimal(provider) || provider_prefers_opportunistic_cache(provider)
-}

@@ -1097,17 +1097,6 @@ impl AiWorkflow {
         None
     }
 
-    /*
-        // UI Pending Tool Actions (Commented for Tauri Migration)
-        pub fn ui_pending_tool_actions(
-            &mut self,
-            ui: &mut egui::Ui,
-            workspace_root: Option<&Path>,
-        ) -> Option<PendingToolBatch> {
-            // ... implementation commented out ...
-            None
-        }
-    */
     pub fn take_pending(&mut self) -> Option<PendingToolBatch> {
         self.pending.take()
     }
@@ -1267,20 +1256,6 @@ fn should_block_irrelevant_language_scan(
     }
 
     None
-}
-
-pub fn run_command_in_workspace(
-    workspace_root: &Path,
-    command: &str,
-    cwd: Option<&str>,
-) -> tools::ToolResult {
-    let legacy_spec = CommandSpec {
-        command_line: Some(command.to_string()),
-        program: None,
-        args: Vec::new(),
-        shell: true,
-    };
-    run_command_spec_in_workspace(workspace_root, &legacy_spec, cwd)
 }
 
 #[allow(clippy::disallowed_methods, clippy::disallowed_types)]

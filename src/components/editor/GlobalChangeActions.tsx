@@ -65,4 +65,3 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
   );
 };
 
-export default GlobalChangeActions;

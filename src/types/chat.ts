@@ -137,14 +137,6 @@ export interface ModelInfo {
     api_id?: string;
 }
 
-export interface EditProposal {
-    id: string;
-    path: string;
-    old_content: string;
-    new_content: string;
-    is_new_file?: boolean;
-}
-
 export interface CommandExecution {
     id: string;  // Unique ID for referencing in blocks
     command: string;

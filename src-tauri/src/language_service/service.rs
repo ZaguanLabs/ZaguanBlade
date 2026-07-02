@@ -1671,26 +1671,8 @@ impl LanguageService {
         })
     }
 
-    pub fn get_buffer_snapshot(
-        &self,
-        file_path: &str,
-    ) -> Result<Arc<BufferSnapshot>, LanguageError> {
-        self.load_buffer_snapshot(file_path)
-    }
-
     pub fn get_file_content(&self, file_path: &str) -> Result<String, LanguageError> {
         Ok(self.load_buffer_snapshot(file_path)?.to_string())
-    }
-
-    pub fn get_cursor_excerpt(
-        &self,
-        file_path: &str,
-        line: u32,
-        padding: usize,
-    ) -> Result<String, LanguageError> {
-        Ok(self
-            .load_buffer_snapshot(file_path)?
-            .excerpt_around_line(line, padding))
     }
 
     pub fn get_symbol_byte_range(
@@ -7558,7 +7540,6 @@ fn support_level_label(level: crate::tree_sitter::SupportLevel) -> &'static str 
     match level {
         crate::tree_sitter::SupportLevel::Full => "full",
         crate::tree_sitter::SupportLevel::Partial => "partial",
-        crate::tree_sitter::SupportLevel::AnchorOnly => "anchor_only",
     }
 }
 
@@ -12000,15 +11981,12 @@ class A:
         b.run()
         unique_helper()
 
-
 class B:
     def run(self):
         return 2
 
-
 def unique_helper():
     return 0
-
 
 def loose(y):
     y.run()
@@ -12213,15 +12191,12 @@ class Widget:
     def run(self):
         return 1
 
-
 class Gadget:
     def run(self):
         return 2
 
-
 def gadgets():
     return []
-
 
 def loop_rebind():
     x = Widget()
@@ -12260,15 +12235,12 @@ class Widget:
     def run(self):
         return 1
 
-
 class Gadget:
     def run(self):
         return 2
 
-
 def cond():
     return True
-
 
 def if_else_conflict():
     if cond():
@@ -12304,11 +12276,9 @@ class Widget:
     def run(self):
         return 1
 
-
 class Gadget:
     def run(self):
         return 2
-
 
 def outer():
     w = Widget()
@@ -12348,15 +12318,12 @@ class Gadget:
     def run(self):
         return 2
 
-
 class Other:
     def run(self):
         return 3
 
-
 def Widget():
     return Gadget()
-
 
 def factory_user():
     x = Widget()

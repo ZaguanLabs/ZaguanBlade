@@ -2,14 +2,8 @@
 // use tauri::{AppHandle, Manager, State};
 use std::collections::HashMap;
 
-use serde_json::Value;
 use tauri::AppHandle;
 use tauri::Manager;
-
-#[tauri::command]
-pub fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
 
 #[tauri::command]
 pub fn toggle_devtools(app: AppHandle) {
@@ -45,11 +39,6 @@ pub fn set_window_title(app: AppHandle, title: String) -> Result<(), String> {
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
     window.set_title(&title).map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub fn get_blade_event_metrics() -> Value {
-    crate::blade_event_scheduler::metrics_snapshot()
 }
 
 #[tauri::command]

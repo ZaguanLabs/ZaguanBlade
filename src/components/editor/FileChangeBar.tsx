@@ -84,4 +84,3 @@ export const FileChangeBar: React.FC<FileChangeBarProps> = ({
   );
 };
 
-export default FileChangeBar;

@@ -9,11 +9,9 @@
 //! - Symbol Index: Persistent SQLite storage with FTS5 search
 
 pub mod handler;
-mod indexer;
 mod service;
 
 pub use handler::LanguageHandler;
-pub use indexer::{FileIndexer, IndexEvent};
 pub use service::{
     extract_scanner_symbols, IndexDiscoverySnapshot, IndexHealthSnapshot, IndexHealthStatus,
     IndexLanguageCount, IndexSchemaCount, IndexSchemaLanguageCount, IndexSchemaSnapshot,

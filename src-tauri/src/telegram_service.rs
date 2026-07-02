@@ -24,7 +24,6 @@ struct Update {
 
 #[derive(Deserialize, Debug)]
 struct Message {
-    #[allow(dead_code)]
     message_id: i64,
     chat: Chat,
     text: Option<String>,

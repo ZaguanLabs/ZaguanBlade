@@ -1,6 +1,6 @@
 import type { ChatMessage, MessageBlock } from '../types/chat';
 
-export function findLastActivityBlockIndex(blocks: MessageBlock[]): number {
+function findLastActivityBlockIndex(blocks: MessageBlock[]): number {
     for (let index = blocks.length - 1; index >= 0; index -= 1) {
         const block = blocks[index];
         if (block.type === 'tool_call' || block.type === 'command_execution') {
@@ -103,7 +103,7 @@ export function insertAssistantMessageAfterLastUser(messages: ChatMessage[], mes
  * 5. TODOs (if present)
  * 6. Content after tools
  */
-export function reconstructBlocks(message: ChatMessage): MessageBlock[] {
+function reconstructBlocks(message: ChatMessage): MessageBlock[] {
     // If blocks already exist and are populated, return them
     if (message.blocks && message.blocks.length > 0) {
         return message.blocks;

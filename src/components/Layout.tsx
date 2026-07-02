@@ -11,9 +11,8 @@ import { AppBar } from './AppBar';
 import { AlertTriangle, GitBranch, Settings, Clock, Loader2 } from 'lucide-react';
 import { useStartupBootstrap } from '../contexts/StartupBootstrapContext';
 import { EditorProvider, useEditorActions } from '../contexts/EditorContext';
-import { useChatPanelV3Flag } from '../contexts/ChatPanelFlagContext';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
-import { useChat } from '../hooks/useChat';
+import { useChatV2 } from '../hooks/useChatV2';
 import { useProjectState, type ProjectState } from '../hooks/useProjectState';
 import { useWarmup } from '../hooks/useWarmup';
 import { useGitStatus } from '../hooks/useGitStatus';
@@ -45,7 +44,6 @@ import {
     type EditorBufferRegistry,
 } from '../utils/editorBufferRegistry';
 const ExplorerPanel = React.lazy(() => import('./ExplorerPanel').then(module => ({ default: module.ExplorerPanel })));
-const LegacyChatPanel = React.lazy(() => import('./ChatPanel').then(module => ({ default: module.ChatPanel })));
 const ChatPanelV3 = React.lazy(() => import('../chat/rendering/ChatPanel').then(module => ({ default: module.ChatPanel })));
 const GitPanel = React.lazy(() => import('./GitPanel').then(module => ({ default: module.GitPanel })));
 const FileHistoryPanel = React.lazy(() => import('./FileHistoryPanel').then(module => ({ default: module.FileHistoryPanel })));
@@ -313,7 +311,6 @@ const AppLayoutInner: React.FC = () => {
     const disableEditorChrome = useMemo(() => readDebugFlag('disableEditorChrome'), []);
     const disableChatChrome = useMemo(() => readDebugFlag('disableChatChrome'), []);
     const disableEditorWidthObserver = useMemo(() => readDebugFlag('disableEditorWidthObserver'), []);
-    const chatPanelV3 = useChatPanelV3Flag();
 
     // Sidebar State
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -356,7 +353,7 @@ const AppLayoutInner: React.FC = () => {
         });
     }, [appWindow]);
 
-    const chat = disableChatHook ? useNoopChat() : useChat({ autoApproveRunCommands });
+    const chat = disableChatHook ? useNoopChat() : useChatV2({ autoApproveRunCommands });
     const [wasStoppedByUser, setWasStoppedByUser] = useState(false);
     const {
         changes: uncommittedChanges,
@@ -1501,7 +1498,7 @@ const AppLayoutInner: React.FC = () => {
                             className="min-w-[280px] max-w-[800px] flex flex-col z-30 overflow-hidden"
                         >
                             <Suspense fallback={<div className="flex-1 bg-(--bg-panel) h-full w-full" />}>
-                                {chatPanelV3 ? <ChatPanelV3
+                                <ChatPanelV3
                                     messages={chat.messages}
                                     loading={chat.loading}
                                     error={chat.error}
@@ -1536,41 +1533,8 @@ const AppLayoutInner: React.FC = () => {
                                     queuedRequests={chat.messageQueue}
                                     deleteQueuedRequest={chat.deleteQueuedRequest}
                                     editLastUserMessage={chat.editLastUserMessage}
-                                /> : <LegacyChatPanel
-                                    messages={chat.messages}
-                                    loading={chat.loading}
-                                    error={chat.error}
-                                    sendMessage={chat.sendMessage}
-                                    stopGeneration={handleStopGeneration}
-                                    models={chat.models}
-                                    selectedModelId={chat.selectedModelId}
-                                    setSelectedModelId={chat.setSelectedModelId}
-                                    chatMode={chat.chatMode}
-                                    setChatMode={chat.setChatMode}
-                                    pendingActions={chat.pendingActions}
-                                    pendingApprovalRequest={chat.pendingApprovalRequest}
-                                    waitingForApproval={chat.waitingForApproval}
-                                    approveToolDecision={chat.approveToolDecision}
-                                    respondToApprovalRequest={chat.respondToApprovalRequest}
-                                    approveSingleCommand={chat.approveSingleCommand}
-                                    skipSingleCommand={chat.skipSingleCommand}
-                                    projectId={projectId || "default-project"}
-                                    onLoadConversation={chat.loadConversation}
-                                    researchProgress={researchProgress}
-                                    onNewConversation={chat.newConversation}
-                                    onUndoTool={chat.undoTool}
-                                    onOpenFile={handleOpenChatFile}
-                                    workspaceRoot={workspacePath}
-                                    uncommittedChanges={uncommittedChanges}
-                                    onAcceptAllChanges={acceptAllChanges}
-                                    onRejectAllChanges={rejectAllChanges}
-                                    toolActivity={chat.toolActivity}
-                                    activeTodos={chat.activeTodos}
-                                    queuedRequests={chat.messageQueue}
-                                    deleteQueuedRequest={chat.deleteQueuedRequest}
-                                    editLastUserMessage={chat.editLastUserMessage}
                                     onImplementPlan={handleImplementPlan}
-                                />}
+                                />
                             </Suspense>
                         </div>
                     )}

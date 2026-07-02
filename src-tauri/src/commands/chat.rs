@@ -1,8 +1,7 @@
 use crate::app_state::AppState;
-use crate::chat_orchestrator::handle_send_message;
 use crate::conversation::ConversationHistory;
 use crate::conversation_store;
-use tauri::{AppHandle, Emitter, Manager, Runtime, State, Window};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 const DISCONNECT_FLUSH_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
 const SHUTDOWN_DISCONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(900);
@@ -51,40 +50,6 @@ pub(crate) async fn graceful_close_active_chat_session(state: &AppState) {
     }
 }
 
-#[tauri::command]
-pub async fn send_message<R: Runtime>(
-    message: String,
-    images: Option<Vec<crate::protocol::ChatImage>>,
-    model_id: Option<String>,
-    active_file: Option<String>,
-    open_files: Option<Vec<String>>,
-    cursor_line: Option<usize>,
-    cursor_column: Option<usize>,
-    selection_start_line: Option<usize>,
-    selection_end_line: Option<usize>,
-    window: Window<R>,
-    state: State<'_, AppState>,
-    app: AppHandle<R>,
-) -> Result<(), String> {
-    handle_send_message(
-        message,
-        images,
-        model_id,
-        active_file,
-        open_files,
-        cursor_line,
-        cursor_column,
-        selection_start_line,
-        selection_end_line,
-        None,
-        None,
-        None,
-        window,
-        state,
-        app,
-    )
-    .await
-}
 #[tauri::command]
 pub async fn list_models(
     state: State<'_, AppState>,
@@ -236,35 +201,6 @@ pub async fn new_conversation(
     Ok(id)
 }
 
-#[tauri::command]
-pub async fn delete_conversation(
-    id: String,
-    _state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        state.with_conversation_store(|store| store.delete_conversation(&id))
-    })
-    .await
-    .map_err(|e| format!("delete conversation task failed: {}", e))?
-}
-
-#[tauri::command]
-pub async fn save_conversation(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
-    let stored = {
-        let conversation = state.conversation.lock().unwrap();
-        conversation.to_stored()
-    };
-    tokio::task::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        state.with_conversation_store(|store| store.save_conversation(&stored))
-    })
-    .await
-    .map_err(|e| format!("save conversation task failed: {}", e))?
-}
-
-#[tauri::command]
 pub fn stop_generation(state: State<'_, AppState>, app_handle: tauri::AppHandle) -> bool {
     let mut mgr = state.chat_manager.lock().unwrap();
     let stop_signal_target = mgr.stop_signal_target();
@@ -400,13 +336,6 @@ pub async fn set_selected_model(
     } else {
         Err(format!("Model not found: {}", model_id))
     }
-}
-
-#[tauri::command]
-pub fn get_selected_model(_state: State<'_, AppState>) -> Option<String> {
-    // Model is now stored in project state only, not main config
-    // Return None to let the frontend use project state or default
-    None
 }
 
 /// Returns whether the backend is currently streaming a response.

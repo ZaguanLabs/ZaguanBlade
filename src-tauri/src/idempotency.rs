@@ -78,19 +78,6 @@ impl IdempotencyCache {
         );
     }
 
-    /// Clear all entries (useful for testing)
-    #[allow(dead_code)]
-    pub fn clear(&self) {
-        let mut cache = self.cache.lock().unwrap();
-        cache.clear();
-    }
-
-    /// Get the number of cached entries (useful for monitoring)
-    #[allow(dead_code)]
-    pub fn len(&self) -> usize {
-        let cache = self.cache.lock().unwrap();
-        cache.len()
-    }
 }
 
 impl Default for IdempotencyCache {

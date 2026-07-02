@@ -74,15 +74,6 @@ impl ParseResult {
         Self::default()
     }
 
-    pub fn with_text(mut self, text: impl Into<String>) -> Self {
-        self.text = text.into();
-        self
-    }
-
-    pub fn with_reasoning(mut self, reasoning: impl Into<String>) -> Self {
-        self.reasoning = reasoning.into();
-        self
-    }
 }
 
 /// Parser state for streaming reasoning extraction
@@ -116,17 +107,6 @@ impl ReasoningParser {
                 ReasoningFormat::Thinking,
                 ReasoningFormat::GemmaThought,
             ],
-            current_format: None,
-            tag_buffer: String::new(),
-            in_reasoning: false,
-            interrupted_reasoning: None,
-        }
-    }
-
-    /// Create a parser with specific formats
-    pub fn with_formats(formats: Vec<ReasoningFormat>) -> Self {
-        Self {
-            formats,
             current_format: None,
             tag_buffer: String::new(),
             in_reasoning: false,
