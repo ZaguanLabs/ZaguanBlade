@@ -833,7 +833,7 @@ pub async fn handle_send_message<R: Runtime>(
 
                 window
                     .emit(
-                        "open-ephemeral-document",
+                        crate::events::event_names::OPEN_EPHEMERAL_DOCUMENT,
                         EphemeralDocPayload {
                             id: document_id,
                             title: "Research Results".to_string(),
@@ -890,7 +890,7 @@ pub async fn handle_send_message<R: Runtime>(
             } else if let DrainResult::Error(e) = result {
                 window
                     .emit(
-                        "chat-error",
+                        crate::events::event_names::CHAT_ERROR,
                         crate::events::ChatErrorPayload {
                             code: "request_failed".to_string(),
                             error: Some("Request failed".to_string()),
@@ -1134,7 +1134,7 @@ pub async fn handle_send_message<R: Runtime>(
                 );
                 window
                     .emit(
-                        "chat-error",
+                        crate::events::event_names::CHAT_ERROR,
                         crate::events::ChatErrorPayload {
                             code: "response_too_large".to_string(),
                             error: Some("Response too large".to_string()),

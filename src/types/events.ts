@@ -108,34 +108,8 @@ export const EventNames = {
   TODO_UPDATED: 'todo_updated',
 } as const;
 
-/**
- * Payload for chat-update event
- */
-export interface ChatUpdatePayload {
-  content: string;
-}
-
 export interface ChatDonePayload {
   finish_reason: string;
-}
-
-/**
- * Payload for command-executed event
- */
-export interface CommandExecutedPayload {
-  command: string;
-  cwd?: string;
-  output: string;
-  exitCode: number;
-  duration?: number;
-}
-
-/**
- * Payload for terminal-cwd-changed event
- */
-export interface TerminalCwdChangedPayload {
-  id: string;
-  cwd: string;
 }
 
 /**
@@ -212,36 +186,12 @@ export interface ProposeEditPayload {
 }
 
 /**
- * Payload for open-ephemeral-document event
- */
-export interface OpenEphemeralDocumentPayload {
-  id: string;
-  title: string;
-  content: string;
-}
-
-/**
  * Todo item for task progress tracking
  */
 export interface TodoItem {
   content: string;      // Imperative form: "Fix authentication bug"
   activeForm: string;   // Present continuous: "Fixing authentication bug"
   status: 'pending' | 'in_progress' | 'completed';
-}
-
-/**
- * Payload for todo_updated event
- */
-export interface TodoUpdatedPayload {
-  todos: TodoItem[];
-}
-
-/**
- * Payload for tool-execution-started event
- */
-export interface ToolExecutionStartedPayload {
-  tool_name: string;
-  tool_call_id: string;
 }
 
 /**
@@ -254,163 +204,3 @@ export interface ToolExecutionCompletedPayload {
   skipped?: boolean;
 }
 
-/**
- * Payload for model-changed event
- */
-export interface ModelChangedPayload {
-  model_id: string;
-  model_name: string;
-}
-
-/**
- * Payload for change-applied event
- */
-export interface ChangeAppliedPayload {
-  change_id: string;
-  file_path: string;
-  file_paths?: string[];
-}
-
-/**
- * Payload for change-rejected event
- */
-export interface ChangeRejectedPayload {
-  change_id: string;
-  file_path: string;
-}
-
-/**
- * Payload for edit-failed event
- */
-export interface EditFailedPayload {
-  edit_id: string;
-  file_path: string;
-  error: string;
-}
-
-/**
- * Payload for all-edits-applied event
- */
-export interface AllEditsAppliedPayload {
-  count: number;
-  file_paths: string[];
-}
-
-/**
- * Payload for file-opened event
- */
-export interface FileOpenedPayload {
-  file_path: string;
-}
-
-/**
- * Payload for file-closed event
- */
-export interface FileClosedPayload {
-  file_path: string;
-}
-
-/**
- * Payload for file-saved event
- */
-export interface FileSavedPayload {
-  file_path: string;
-}
-
-/**
- * Payload for file-modified event
- */
-export interface FileModifiedPayload {
-  file_path: string;
-  has_unsaved_changes: boolean;
-}
-
-/**
- * Payload for active-file-changed event
- */
-export interface ActiveFileChangedPayload {
-  file_path: string | null;
-  previous_file_path: string | null;
-}
-
-/**
- * Payload for workspace-changed event
- */
-export interface WorkspaceChangedPayload {
-  workspace_path: string;
-}
-
-/**
- * Payload for project-files-changed event
- */
-export interface ProjectFilesChangedPayload {
-  added: string[];
-  removed: string[];
-  modified: string[];
-}
-
-/**
- * Connection status enum
- */
-export type ConnectionStatus = 'connected' | 'disconnected' | 'reconnecting' | 'error';
-
-/**
- * Payload for connection-status event
- */
-export interface ConnectionStatusPayload {
-  status: ConnectionStatus;
-  message?: string;
-}
-
-/**
- * Payload for backend-error event
- */
-export interface BackendErrorPayload {
-  error: string;
-  context?: string;
-}
-
-/**
- * Type-safe event name to payload mapping
- */
-export interface EventMap {
-  // Chat & AI Workflow
-  [EventNames.CHAT_UPDATE]: ChatUpdatePayload;
-  [EventNames.CHAT_DONE]: void;
-  [EventNames.CHAT_ERROR]: ChatErrorPayload;
-  [EventNames.REQUEST_CONFIRMATION]: RequestConfirmationPayload;
-  [EventNames.TOOL_EXECUTION_STARTED]: ToolExecutionStartedPayload;
-  [EventNames.TOOL_EXECUTION_COMPLETED]: ToolExecutionCompletedPayload;
-  [EventNames.MODEL_CHANGED]: ModelChangedPayload;
-  
-  // File Edit Workflow
-  [EventNames.PROPOSE_EDIT]: ProposeEditPayload;
-  [EventNames.CHANGE_APPLIED]: ChangeAppliedPayload;
-  [EventNames.CHANGE_REJECTED]: ChangeRejectedPayload;
-  [EventNames.EDIT_FAILED]: EditFailedPayload;
-  [EventNames.ALL_EDITS_APPLIED]: AllEditsAppliedPayload;
-  
-  // File Operations
-  [EventNames.FILE_OPENED]: FileOpenedPayload;
-  [EventNames.FILE_CLOSED]: FileClosedPayload;
-  [EventNames.FILE_SAVED]: FileSavedPayload;
-  [EventNames.FILE_MODIFIED]: FileModifiedPayload;
-  [EventNames.ACTIVE_FILE_CHANGED]: ActiveFileChangedPayload;
-  
-  // Workspace
-  [EventNames.WORKSPACE_CHANGED]: WorkspaceChangedPayload;
-  [EventNames.PROJECT_FILES_CHANGED]: ProjectFilesChangedPayload;
-  
-  // Connection & Status
-  [EventNames.CONNECTION_STATUS]: ConnectionStatusPayload;
-  [EventNames.BACKEND_ERROR]: BackendErrorPayload;
-  
-  // Documents
-  [EventNames.OPEN_EPHEMERAL_DOCUMENT]: OpenEphemeralDocumentPayload;
-
-  /** Request explorer refresh */
-  [EventNames.REFRESH_EXPLORER]: void;
-  
-  // Task Management
-  [EventNames.TODO_UPDATED]: TodoUpdatedPayload;
-}

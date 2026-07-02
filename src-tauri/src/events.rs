@@ -22,14 +22,8 @@ pub mod event_names {
     /// Tool execution requires user confirmation
     pub const REQUEST_CONFIRMATION: &str = "request-confirmation";
 
-    /// Tool execution started
-    pub const TOOL_EXECUTION_STARTED: &str = "tool-execution-started";
-
     /// Tool execution completed successfully
     pub const TOOL_EXECUTION_COMPLETED: &str = "tool-execution-completed";
-
-    /// AI model changed
-    pub const MODEL_CHANGED: &str = "model-changed";
 
     /// Command execution completed
     pub const COMMAND_EXECUTED: &str = "command-executed";
@@ -45,50 +39,10 @@ pub mod event_names {
     /// Change successfully applied to disk
     pub const CHANGE_APPLIED: &str = "change-applied";
 
-    /// Change rejected by user
-    pub const CHANGE_REJECTED: &str = "change-rejected";
-
-    /// Edit application failed
-    pub const EDIT_FAILED: &str = "edit-failed";
-
-    /// All edits applied successfully (Accept All completed)
-    pub const ALL_EDITS_APPLIED: &str = "all-edits-applied";
-
-    // === File Operations ===
-
-    /// File opened in editor
-    pub const FILE_OPENED: &str = "file-opened";
-
-    /// File closed in editor
-    pub const FILE_CLOSED: &str = "file-closed";
-
-    /// File saved to disk
-    pub const FILE_SAVED: &str = "file-saved";
-
-    /// File content modified (unsaved)
-    pub const FILE_MODIFIED: &str = "file-modified";
-
-    /// Active file/tab changed
-    pub const ACTIVE_FILE_CHANGED: &str = "active-file-changed";
-
     // === Workspace ===
-
-    /// Workspace folder changed
-    pub const WORKSPACE_CHANGED: &str = "workspace-changed";
-
-    /// Project files changed (added/deleted)
-    pub const PROJECT_FILES_CHANGED: &str = "project-files-changed";
 
     /// Request explorer refresh
     pub const REFRESH_EXPLORER: &str = "refresh-explorer";
-
-    // === Connection & Status ===
-
-    /// Connection status to zcoderd changed
-    pub const CONNECTION_STATUS: &str = "connection-status";
-
-    /// General backend error
-    pub const BACKEND_ERROR: &str = "backend-error";
 
     // === Documents ===
 
@@ -110,31 +64,12 @@ pub mod event_names {
     /// History entry added (snapshot created)
     pub const HISTORY_ENTRY_ADDED: &str = "history-entry-added";
 
-    // === Remote Control ===
-
-    /// Remote control status changed (pairing, connected, disconnected)
-    pub const REMOTE_CONTROL_STATUS: &str = "remote-control-status";
-
-    /// Remote command execution started
-    pub const REMOTE_COMMAND_STARTED: &str = "remote-command-started";
-
-    /// Remote command output chunk received
-    pub const REMOTE_COMMAND_OUTPUT: &str = "remote-command-output";
-
-    /// Remote command execution finished
-    pub const REMOTE_COMMAND_FINISHED: &str = "remote-command-finished";
 }
 
 /// Payload for history-entry-added event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntryAddedPayload {
     pub entry: crate::history::HistoryEntry,
-}
-
-/// Payload for chat-update event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatUpdatePayload {
-    pub content: String,
 }
 
 /// Payload for chat-done event
@@ -237,14 +172,6 @@ pub struct ProposeEditPayload {
     pub new_content: String,
 }
 
-/// Payload for open-ephemeral-document event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenEphemeralDocumentPayload {
-    pub id: String,
-    pub title: String,
-    pub content: String,
-}
-
 /// Todo item for task progress tracking
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TodoItem {
@@ -267,13 +194,6 @@ pub struct TerminalCwdChangedPayload {
     pub cwd: String,
 }
 
-/// Payload for tool-execution-started event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolExecutionStartedPayload {
-    pub tool_name: String,
-    pub tool_call_id: String,
-}
-
 /// Payload for tool-execution-completed event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolExecutionCompletedPayload {
@@ -282,13 +202,6 @@ pub struct ToolExecutionCompletedPayload {
     pub success: bool,
     #[serde(default)]
     pub skipped: bool,
-}
-
-/// Payload for model-changed event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelChangedPayload {
-    pub model_id: String,
-    pub model_name: String,
 }
 
 /// Payload for command-executed event
@@ -312,91 +225,6 @@ pub struct ChangeAppliedPayload {
     pub file_paths: Vec<String>,
 }
 
-/// Payload for edit-rejected event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EditRejectedPayload {
-    pub edit_id: String,
-    pub file_path: String,
-}
-
-/// Payload for edit-failed event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EditFailedPayload {
-    pub edit_id: String,
-    pub file_path: String,
-    pub error: String,
-}
-
-/// Payload for all-edits-applied event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AllEditsAppliedPayload {
-    pub count: usize,
-    pub file_paths: Vec<String>,
-}
-
-/// Payload for file-opened event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileOpenedPayload {
-    pub file_path: String,
-}
-
-/// Payload for file-closed event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileClosedPayload {
-    pub file_path: String,
-}
-
-/// Payload for file-saved event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileSavedPayload {
-    pub file_path: String,
-}
-
-/// Payload for file-modified event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileModifiedPayload {
-    pub file_path: String,
-    pub has_unsaved_changes: bool,
-}
-
-/// Payload for active-file-changed event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActiveFileChangedPayload {
-    pub file_path: Option<String>,
-    pub previous_file_path: Option<String>,
-}
-
-/// Payload for workspace-changed event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceChangedPayload {
-    pub workspace_path: String,
-}
-
-/// Payload for project-files-changed event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectFilesChangedPayload {
-    pub added: Vec<String>,
-    pub removed: Vec<String>,
-    pub modified: Vec<String>,
-}
-
-/// Connection status enum
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ConnectionStatus {
-    Connected,
-    Disconnected,
-    Reconnecting,
-    Error,
-}
-
-/// Payload for connection-status event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConnectionStatusPayload {
-    pub status: ConnectionStatus,
-    pub message: Option<String>,
-}
-
 /// Payload for command-execution-started event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandExecutionStartedPayload {
@@ -411,9 +239,3 @@ pub struct CommandExecutionStartedPayload {
     pub wait_ms_before_async: Option<u64>,
 }
 
-/// Payload for backend-error event
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BackendErrorPayload {
-    pub error: String,
-    pub context: Option<String>,
-}
