@@ -8,7 +8,6 @@ import { ContextMenuProvider } from './components/ui/ContextMenu';
 import { LanguageProvider } from './contexts/LanguageContext';
 import { StartupBootstrapProvider, useStartupBootstrap } from './contexts/StartupBootstrapContext';
 import { ThemeProvider } from './contexts/ThemeContext';
-import { ChatPanelFlagProvider } from './contexts/ChatPanelFlagContext';
 import { DisplaySettingsProvider } from './contexts/DisplaySettingsContext';
 import './index.css';
 import './i18n'; // Initialize i18n
@@ -211,13 +210,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <LanguageProvider>
                 <ThemeProvider>
                     <DisplaySettingsProvider>
-                        <ChatPanelFlagProvider>
-                            <ContextMenuProvider>
-                                <DebugFlagBootstrap>
-                                    <AppWrapper />
-                                </DebugFlagBootstrap>
-                            </ContextMenuProvider>
-                        </ChatPanelFlagProvider>
+                        <ContextMenuProvider>
+                            <DebugFlagBootstrap>
+                                <AppWrapper />
+                            </DebugFlagBootstrap>
+                        </ContextMenuProvider>
                     </DisplaySettingsProvider>
                 </ThemeProvider>
             </LanguageProvider>
