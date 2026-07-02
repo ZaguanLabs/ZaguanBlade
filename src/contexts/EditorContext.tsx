@@ -244,7 +244,7 @@ export const EditorProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     );
 };
 
-export const useEditorState = () => {
+const useEditorState = () => {
     const context = useContext(EditorStateContext);
     if (!context) {
         throw new Error('useEditorState must be used within EditorProvider');

@@ -359,11 +359,6 @@ export type LanguageRange = {
     end: LanguagePosition;
 }
 
-export type LanguageLocation = {
-    file_path: string;
-    range: LanguageRange;
-}
-
 export type LanguageSymbol = {
     id: string;
     name: string;

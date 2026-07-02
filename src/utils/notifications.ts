@@ -33,7 +33,7 @@ export async function initNotifications(): Promise<boolean> {
  * @param body - Notification body text
  * @param options - Optional notification options
  */
-export async function notify(
+async function notify(
     title: string,
     body: string,
     options?: {
@@ -85,36 +85,3 @@ export async function notifyFileChanges(
     await notify(title, body);
 }
 
-/**
- * Notify about build completion
- * @param success - Whether the build succeeded
- * @param duration - Build duration in seconds
- */
-export async function notifyBuildComplete(
-    success: boolean,
-    duration?: number
-): Promise<void> {
-    const title = success ? 'Build Succeeded' : 'Build Failed';
-    let body = success ? 'Your build completed successfully' : 'Build encountered errors';
-    
-    if (duration) {
-        body += ` (${duration.toFixed(1)}s)`;
-    }
-    
-    await notify(title, body);
-}
-
-/**
- * Notify about task completion
- * @param taskName - Name of the completed task
- * @param message - Optional additional message
- */
-export async function notifyTaskComplete(
-    taskName: string,
-    message?: string
-): Promise<void> {
-    const title = 'Task Complete';
-    const body = message || `${taskName} has finished`;
-    
-    await notify(title, body);
-}

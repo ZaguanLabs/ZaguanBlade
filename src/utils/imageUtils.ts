@@ -5,7 +5,7 @@ export const fileToDataUrl = (file: File): Promise<string> => new Promise((resol
     reader.readAsDataURL(file);
 });
 
-export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 export const SUPPORTED_IMAGE_MIME_TYPES = new Set([
     'image/png',
     'image/jpeg',
@@ -23,10 +23,6 @@ export const validateImageByteLength = (byteLength: number): string | null => {
         return `Image too large (${sizeMb} MB). Max ${limitMb} MB. Try a smaller image.`;
     }
     return null;
-};
-
-export const validateImageSize = (file: File): string | null => {
-    return validateImageByteLength(file.size);
 };
 
 export const validateImageMimeType = (mimeType?: string | null): string | null => {

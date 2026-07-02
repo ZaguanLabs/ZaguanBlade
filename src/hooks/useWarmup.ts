@@ -1,7 +1,7 @@
 import { useCallback, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
-export interface WarmupResponse {
+interface WarmupResponse {
     response_type: string;
     session_id: string;
     provider: string;
@@ -12,7 +12,7 @@ export interface WarmupResponse {
     message?: string;
 }
 
-export type WarmupTrigger = 'launch' | 'model_change' | 'workspace_change' | 'session_resume';
+type WarmupTrigger = 'launch' | 'model_change' | 'workspace_change' | 'session_resume';
 
 const INACTIVITY_THRESHOLD = 5 * 60 * 1000; // 5 minutes
 

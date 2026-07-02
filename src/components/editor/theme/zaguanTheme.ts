@@ -571,7 +571,3 @@ export function getZaguanTheme(isDark: boolean): Extension {
         syntaxHighlighting(classHighlighter),
     ];
 }
-
-export const zaguanTheme: Extension = getZaguanTheme(true);
-
-export default zaguanTheme;

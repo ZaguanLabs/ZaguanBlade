@@ -14,7 +14,7 @@ import { subscribeBladeNestedEventType } from '../services/bladeEvents';
 import type { BootstrapState } from '../types/bootstrap';
 import type { CoreStateSnapshot, FeatureFlagsSnapshot } from '../types/coreState';
 
-export interface CoreStateSyncResult {
+interface CoreStateSyncResult {
     /** Whether initial state recovery is in progress */
     isRecovering: boolean;
     /** The last recovered core state snapshot */

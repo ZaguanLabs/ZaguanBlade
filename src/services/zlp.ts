@@ -1,20 +1,10 @@
 import { v4 as uuidv4 } from 'uuid';
 import { BladeDispatcher } from './blade';
 import { subscribeBladeNestedEventType } from './bladeEvents';
-import type { ZLPCapabilitiesResult, ZLPStructureResponse, ZLPValidationError, ZLPValidationResponse, ZLPGraphResponse, StructureNode } from '../types/zlp';
+import type { ZLPStructureResponse, ZLPValidationError, ZLPValidationResponse, ZLPGraphResponse, StructureNode } from '../types/zlp';
 
 export class ZLPService {
     private static TIMEOUT_MS = 15000;
-
-    /**
-     * Check server capabilities (The "Ping")
-     */
-    static async capabilities(): Promise<ZLPCapabilitiesResult> {
-        return this.send<ZLPCapabilitiesResult>("zlp.capabilities", {
-            client_name: "zblade",
-            version: "0.0.4"
-        });
-    }
 
     /**
      * Get structural outline of the file

@@ -5,7 +5,7 @@ import { BladeDispatcher } from '../services/blade';
 import { subscribeBladeNestedEventType } from '../services/bladeEvents';
 import { BLADE_TERMINAL_ID, BLADE_TERMINAL_TITLE } from '../constants/terminal';
 
-export interface CommandExecution {
+interface CommandExecution {
     commandId: string;
     callId: string;
     command: string;

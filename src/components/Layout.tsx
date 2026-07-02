@@ -12,7 +12,7 @@ import { AlertTriangle, GitBranch, Settings, Clock, Loader2 } from 'lucide-react
 import { useStartupBootstrap } from '../contexts/StartupBootstrapContext';
 import { EditorProvider, useEditorActions } from '../contexts/EditorContext';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
-import { useChat } from '../hooks/useChat';
+import { useChatV2 } from '../hooks/useChatV2';
 import { useProjectState, type ProjectState } from '../hooks/useProjectState';
 import { useWarmup } from '../hooks/useWarmup';
 import { useGitStatus } from '../hooks/useGitStatus';
@@ -353,7 +353,7 @@ const AppLayoutInner: React.FC = () => {
         });
     }, [appWindow]);
 
-    const chat = disableChatHook ? useNoopChat() : useChat({ autoApproveRunCommands });
+    const chat = disableChatHook ? useNoopChat() : useChatV2({ autoApproveRunCommands });
     const [wasStoppedByUser, setWasStoppedByUser] = useState(false);
     const {
         changes: uncommittedChanges,

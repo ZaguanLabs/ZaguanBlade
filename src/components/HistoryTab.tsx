@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Clock, MessageSquare, Loader2 } from 'lucide-react';
 import { useHistory } from '../hooks/useHistory';
-import type { ConversationSummary } from '../types/history';
+import type { ConversationSummary } from '../types/blade';
 import { ScrollArea } from './ui/ScrollArea';
 import { Surface } from './ui/Surface';
 import { ListRow } from './ui/ListRow';
