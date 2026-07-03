@@ -755,18 +755,26 @@ pub async fn handle_send_message<R: Runtime>(
                                         title,
                                     );
 
-                                    // Convert messages
+                                    // Convert messages, extracting file:line
+                                    // references from each body (reference-only).
                                     for (idx, msg) in stored.messages.iter().enumerate() {
                                         let local_msg = local_artifacts::Message {
                                             id: format!("msg_{}", idx),
                                             role: msg.role.clone(),
                                             content: msg.content.clone(),
                                             timestamp: chrono::Utc::now().to_rfc3339(),
-                                            code_references: vec![], // TODO: Extract from content
+                                            code_references:
+                                                crate::conversation_memory::extract_code_references(
+                                                    &msg.content,
+                                                ),
                                         };
                                         artifact.messages.push(local_msg);
                                     }
                                     artifact.metadata.total_messages = artifact.messages.len() as i32;
+                                    // Reason-gated decision moments feed future
+                                    // context packs via search_moments.
+                                    artifact.moments =
+                                        crate::conversation_memory::extract_moments(&artifact.messages);
 
                                     let artifact_store =
                                         local_artifacts::LocalArtifactStore::new(&ws_path);

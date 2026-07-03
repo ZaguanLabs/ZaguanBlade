@@ -836,9 +836,12 @@ fn collect_context_semantic_anchors(
         if seen.insert(key) {
             anchors.push(ContextSemanticAnchorSummary {
                 kind: anchor.kind,
-                value: anchor.value,
+                value: crate::secrets::redact_secret_tokens(&anchor.value),
                 line: anchor.line.saturating_add(1),
-                preview: truncate_chars(&anchor.preview, 220),
+                preview: truncate_chars(
+                    &crate::secrets::redact_secret_tokens(&anchor.preview),
+                    220,
+                ),
                 confidence: anchor.confidence,
             });
         }
@@ -861,9 +864,12 @@ fn collect_context_semantic_anchors(
             if seen.insert(key) {
                 anchors.push(ContextSemanticAnchorSummary {
                     kind: result.anchor.kind,
-                    value: result.anchor.value,
+                    value: crate::secrets::redact_secret_tokens(&result.anchor.value),
                     line: result.anchor.line.saturating_add(1),
-                    preview: truncate_chars(&result.anchor.preview, 220),
+                    preview: truncate_chars(
+                        &crate::secrets::redact_secret_tokens(&result.anchor.preview),
+                        220,
+                    ),
                     confidence: result.anchor.confidence,
                 });
             }

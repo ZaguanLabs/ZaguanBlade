@@ -539,6 +539,7 @@ mod tests {
         compact_outline_nodes_for_parent, execute_tool, execute_tool_with_editor,
         fast_context_tool, grep_search, impact_confidence, impact_risk_level,
         is_batch_read_only_tool, language_support_for_path_json, language_support_meta_json,
+        format_investigation_markdown, investigation_confidence, merge_language_diagnostics,
         paginate_tool_results, parse_grep_timeout_ms, parse_relationship_types_arg,
         related_symbol_to_json, related_test_files_for_paths, stage_semantic_patch_writes,
         symbol_inventory_entries, symbol_inventory_summary, symbol_language_diagnostics,
@@ -583,6 +584,78 @@ mod tests {
         assert_eq!(metadata["support_level"], "full");
         assert_eq!(metadata["parser"], "tree_sitter");
         assert_eq!(metadata["extracts"]["definitions"], true);
+    }
+
+    #[test]
+    fn merge_language_diagnostics_appends_to_healing_report_diagnostics() {
+        // A serialized self-healing report carries its own process diagnostics;
+        // symbol_search must surface the language-support hints alongside them,
+        // not replace or drop either.
+        let health = serde_json::json!({
+            "enabled": true,
+            "triggered": true,
+            "diagnostics": ["Symbol index health is Stale: 2 stale, 0 missing, 0 orphaned"],
+        });
+        let merged = merge_language_diagnostics(
+            health,
+            &["foo.xyz is not supported by the Symbols Index. Use grep_search.".to_string()],
+        );
+        let diagnostics = merged["diagnostics"].as_array().expect("diagnostics array");
+        assert_eq!(diagnostics.len(), 2);
+        assert!(diagnostics[0].as_str().unwrap().contains("Stale"));
+        assert!(diagnostics[1].as_str().unwrap().contains("not supported"));
+        // The healing signal is preserved.
+        assert_eq!(merged["triggered"], true);
+    }
+
+    #[test]
+    fn merge_language_diagnostics_is_noop_without_hints() {
+        let health = serde_json::json!({ "diagnostics": ["only healing note"] });
+        let merged = merge_language_diagnostics(health, &[]);
+        assert_eq!(merged["diagnostics"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn investigation_confidence_is_zero_without_hits() {
+        assert_eq!(investigation_confidence(0.0, 0.0), 0.0);
+        assert_eq!(investigation_confidence(0.0, 1.0), 0.0);
+    }
+
+    #[test]
+    fn investigation_confidence_blends_score_and_coverage() {
+        // Perfect top score + full coverage → 1.0; partial coverage lowers it.
+        assert!((investigation_confidence(1.0, 1.0) - 1.0).abs() < 1e-9);
+        let partial = investigation_confidence(1.0, 0.0);
+        assert!((partial - 0.7).abs() < 1e-9, "got {partial}");
+        assert!(investigation_confidence(0.8, 0.5) < investigation_confidence(0.8, 1.0));
+    }
+
+    #[test]
+    fn investigation_markdown_lists_findings_with_locators() {
+        let report = serde_json::json!({
+            "objective": "where is auth handled",
+            "confidence": 0.82,
+            "findings": [
+                { "finding_kind": "symbol", "name": "authenticate", "file_path": "src/auth.rs",
+                  "range": { "start": { "line": 42 } }, "score": 0.9 },
+                { "finding_kind": "semantic_anchor", "value": "/login", "file_path": "routes.ts",
+                  "line": 7, "score": 0.6 },
+            ]
+        });
+        let md = format_investigation_markdown(&report);
+        assert!(md.contains("where is auth handled"));
+        assert!(md.contains("`src/auth.rs:42`"));
+        assert!(md.contains("authenticate"));
+        assert!(md.contains("`routes.ts:7`"));
+    }
+
+    #[test]
+    fn investigation_markdown_handles_empty_findings() {
+        let report = serde_json::json!({
+            "objective": "nothing", "confidence": 0.0, "findings": []
+        });
+        let md = format_investigation_markdown(&report);
+        assert!(md.contains("No findings generated."));
     }
 
     #[test]
@@ -1866,7 +1939,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "get_project_index_chunk" => get_project_index_chunk(workspace_root, &args),
         "read_many_files" => read_many_files(workspace_root, &args),
         "batch" => batch(workspace_root, &args, editor_state),
-        "codebase_investigator" => codebase_investigator(workspace_root, &args),
+        "codebase_investigator" => codebase_investigator(workspace_root, &args, app_handle),
 
         // New file system tools
         "find_files" => find_files(workspace_root, &args),
@@ -2382,9 +2455,56 @@ fn extract_objective_keywords(objective: &str) -> Vec<String> {
     keywords
 }
 
-fn codebase_investigator(
+const INVESTIGATOR_MAX_KEYWORDS: usize = 8;
+const INVESTIGATOR_PER_KEYWORD: usize = 5;
+const INVESTIGATOR_MAX_FINDINGS: usize = 24;
+
+/// Blend the best finding score with keyword coverage into a [0,1] confidence.
+/// Zero when nothing was found, so the caller can trust an empty investigation.
+fn investigation_confidence(top_score: f32, coverage: f64) -> f64 {
+    if top_score <= 0.0 {
+        return 0.0;
+    }
+    let ts = (top_score as f64).clamp(0.0, 1.0);
+    ((ts * 0.7) + (coverage.clamp(0.0, 1.0) * 0.3)).clamp(0.0, 1.0)
+}
+
+/// Render an investigator report (the JSON produced below) as Markdown.
+fn format_investigation_markdown(report: &serde_json::Value) -> String {
+    let objective = report["objective"].as_str().unwrap_or("");
+    let confidence = report["confidence"].as_f64().unwrap_or(0.0);
+    let empty = Vec::new();
+    let findings = report["findings"].as_array().unwrap_or(&empty);
+    let mut out = format!(
+        "# Codebase Investigator Report\n\n**Objective:** {objective}\n**Confidence:** {confidence:.2}\n\n## Findings\n"
+    );
+    if findings.is_empty() {
+        out.push_str("- No findings generated.\n");
+        return out;
+    }
+    for finding in findings {
+        let file = finding["file_path"].as_str().unwrap_or("?");
+        let line = finding["line"]
+            .as_u64()
+            .or_else(|| finding["range"]["start"]["line"].as_u64())
+            .unwrap_or(0);
+        let label = finding["name"]
+            .as_str()
+            .or_else(|| finding["value"].as_str())
+            .unwrap_or("");
+        let kind = finding["finding_kind"].as_str().unwrap_or("hit");
+        let score = finding["score"].as_f64().unwrap_or(0.0);
+        out.push_str(&format!(
+            "- `{file}:{line}` — {label} ({kind}, score {score:.2})\n"
+        ));
+    }
+    out
+}
+
+fn codebase_investigator<R: tauri::Runtime>(
     _workspace_root: &Path,
     args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
 ) -> ToolResult {
     let Some(objective) = get_str_arg(args, &["objective", "query", "task"]) else {
         return ToolResult::err("codebase_investigator requires 'objective'");
@@ -2393,25 +2513,117 @@ fn codebase_investigator(
     let started = Instant::now();
     let keywords = extract_objective_keywords(&objective);
     let output_format = get_str_arg(args, &["output_format"]).unwrap_or_else(|| "json".to_string());
+
+    // Orchestrate the existing structural + literal search primitives over the
+    // objective's keywords, then aggregate ranked, reference-only findings.
+    let mut scored: Vec<(f32, serde_json::Value)> = Vec::new();
+    let mut seen: std::collections::HashSet<(String, u32, String)> = std::collections::HashSet::new();
+    let mut keywords_with_hits = 0usize;
+    let mut considered = 0usize;
+    let service = language_service_from_app_handle(app_handle);
+    let service_available = service.is_ok();
+
+    if let Ok(service) = service {
+        for keyword in keywords.iter().take(INVESTIGATOR_MAX_KEYWORDS) {
+            considered += 1;
+            let mut hit = false;
+
+            if let Ok(results) =
+                service.search_symbols_filtered(keyword, None, None, INVESTIGATOR_PER_KEYWORD)
+            {
+                for result in results {
+                    let key = (
+                        result.symbol.file_path.clone(),
+                        result.symbol.range.start.line,
+                        result.symbol.name.clone(),
+                    );
+                    if !seen.insert(key) {
+                        continue;
+                    }
+                    hit = true;
+                    let mut value = symbol_to_json(&result.symbol);
+                    value["finding_kind"] = serde_json::json!("symbol");
+                    value["matched_keyword"] = serde_json::json!(keyword);
+                    value["score"] = serde_json::json!(result.score);
+                    scored.push((result.score, value));
+                }
+            }
+
+            if let Ok(results) = service.search_semantic_anchors(keyword, None, INVESTIGATOR_PER_KEYWORD)
+            {
+                for result in results {
+                    let anchor = result.anchor;
+                    let key = (
+                        anchor.file_path.clone(),
+                        anchor.line,
+                        anchor.value.clone(),
+                    );
+                    if !seen.insert(key) {
+                        continue;
+                    }
+                    hit = true;
+                    scored.push((
+                        result.score,
+                        serde_json::json!({
+                            "finding_kind": "semantic_anchor",
+                            "anchor_kind": anchor.kind,
+                            // Reference-only, and scrub any secret value (M2 guard).
+                            "value": crate::secrets::redact_secret_tokens(&anchor.value),
+                            "file_path": anchor.file_path,
+                            "line": anchor.line.saturating_add(1),
+                            "character": anchor.character,
+                            "score": result.score,
+                            "matched_keyword": keyword,
+                        }),
+                    ));
+                }
+            }
+
+            if hit {
+                keywords_with_hits += 1;
+            }
+        }
+    }
+
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let top_score = scored.first().map(|(score, _)| *score).unwrap_or(0.0);
+    let coverage = if considered > 0 {
+        keywords_with_hits as f64 / considered as f64
+    } else {
+        0.0
+    };
+    let confidence = investigation_confidence(top_score, coverage);
+    let findings: Vec<serde_json::Value> = scored
+        .into_iter()
+        .take(INVESTIGATOR_MAX_FINDINGS)
+        .map(|(_, value)| value)
+        .collect();
+
     let elapsed_ms = started.elapsed().as_millis() as u64;
     record_tool_metric("codebase_investigator", elapsed_ms, true);
 
     let report = serde_json::json!({
         "objective": objective,
-        "findings": [],
+        "findings": findings,
         "recommended_changes": [],
-        "confidence": 0.0,
+        "confidence": confidence,
         "meta": {
             "keywords": keywords,
+            "keywords_searched": considered,
+            "keywords_with_hits": keywords_with_hits,
+            "service_available": service_available,
             "elapsed_ms": elapsed_ms,
-            "metrics": metric_snapshot("codebase_investigator")
+            "metrics": metric_snapshot("codebase_investigator"),
+            "note": if service_available {
+                serde_json::Value::Null
+            } else {
+                serde_json::json!("symbol index unavailable; no structural search performed")
+            },
         }
     });
 
     if output_format.eq_ignore_ascii_case("markdown") {
-        return ToolResult::ok(
-            "# Codebase Investigator Report\n\n## Findings\n- No findings generated.\n",
-        );
+        return ToolResult::ok(format_investigation_markdown(&report));
     }
 
     ToolResult::ok(serde_json::to_string_pretty(&report).unwrap_or_default())
@@ -3908,8 +4120,23 @@ fn symbol_search_tool<R: tauri::Runtime>(
     let file_is_unsupported = file_filter
         .as_deref()
         .is_some_and(|path| crate::tree_sitter::Language::capability_for_path(path).is_none());
-    let results = if file_is_unsupported {
-        Vec::new()
+    // Bare queries (no file filter, no structural patterns) go through the
+    // self-healing search path: it repairs a stale index and falls back to
+    // literal + semantic-anchor matches on empty/low-confidence results, and
+    // reports what it did via `search_health`. Pattern/file-filtered queries keep
+    // the plain path — self-healing is gated to `file_path.is_none()` regardless.
+    let self_healing_applies = !file_is_unsupported
+        && file_filter.is_none()
+        && file_pattern.is_none()
+        && name_pattern.is_none()
+        && qualified_name_pattern.is_none();
+    let (results, healing_report) = if file_is_unsupported {
+        (Vec::new(), None)
+    } else if self_healing_applies {
+        match service.search_symbols_filtered_self_healing(&query, None, symbol_types, fetch_limit) {
+            Ok(outcome) => (outcome.results, Some(outcome.healing)),
+            Err(err) => return ToolResult::err(err.to_string()),
+        }
     } else {
         match service.search_symbols_filtered_with_patterns(
             &query,
@@ -3920,7 +4147,7 @@ fn symbol_search_tool<R: tauri::Runtime>(
             qualified_name_pattern.as_deref(),
             fetch_limit,
         ) {
-            Ok(results) => results,
+            Ok(results) => (results, None),
             Err(err) => return ToolResult::err(err.to_string()),
         }
     };
@@ -3934,22 +4161,28 @@ fn symbol_search_tool<R: tauri::Runtime>(
     let diagnostic_result_count = if available_count > 0 { 1 } else { 0 };
     let search_diagnostics =
         symbol_language_diagnostics(file_filter.as_deref(), diagnostic_result_count);
-    let search_health = serde_json::json!({
-        "enabled": false,
-        "triggered": false,
-        "reason": null,
-        "confidence": symbol_search_confidence(available_count, initial_top_score),
-        "initial_result_count": available_count,
-        "initial_top_score": initial_top_score,
-        "reran_after_reindex": false,
-        "reindexed_files": [],
-        "removed_files": [],
-        "literal_matches": [],
-        "semantic_anchor_matches": [],
-        "diagnostics": search_diagnostics,
-        "health_before": null,
-        "health_after": null,
-    });
+    let search_health = match healing_report {
+        Some(healing) => merge_language_diagnostics(
+            serde_json::to_value(&healing).unwrap_or_else(|_| serde_json::json!({})),
+            &search_diagnostics,
+        ),
+        None => serde_json::json!({
+            "enabled": false,
+            "triggered": false,
+            "reason": null,
+            "confidence": symbol_search_confidence(available_count, initial_top_score),
+            "initial_result_count": available_count,
+            "initial_top_score": initial_top_score,
+            "reran_after_reindex": false,
+            "reindexed_files": [],
+            "removed_files": [],
+            "literal_matches": [],
+            "semantic_anchor_matches": [],
+            "diagnostics": search_diagnostics,
+            "health_before": null,
+            "health_after": null,
+        }),
+    };
     let language_support = language_support_meta_json(file_filter.as_deref());
     let payload = serde_json::json!({
         "query": query,
@@ -3991,6 +4224,28 @@ fn symbol_search_tool<R: tauri::Runtime>(
         }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+/// Append language-support diagnostics to a serialized self-healing search
+/// report's own `diagnostics` array so the `symbol_search` tool surfaces both
+/// (the report's process notes and any "unsupported file / use grep" hints)
+/// instead of dropping one. Returns `health` unchanged when there is nothing to
+/// merge or the payload has no `diagnostics` array.
+fn merge_language_diagnostics(
+    mut health: serde_json::Value,
+    language_diagnostics: &[String],
+) -> serde_json::Value {
+    if !language_diagnostics.is_empty() {
+        if let Some(existing) = health.get_mut("diagnostics").and_then(|d| d.as_array_mut()) {
+            existing.extend(
+                language_diagnostics
+                    .iter()
+                    .cloned()
+                    .map(serde_json::Value::from),
+            );
+        }
+    }
+    health
 }
 
 fn symbol_search_confidence(result_count: usize, top_score: Option<f32>) -> &'static str {

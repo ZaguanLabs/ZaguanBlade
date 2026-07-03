@@ -6146,6 +6146,13 @@ fn tag_body_ranges(content: &str, tag_name: &str) -> Vec<(usize, usize)> {
 }
 
 fn extract_semantic_anchors(file_path: &str, content: &str) -> Vec<SemanticAnchor> {
+    // Credentials/key-material files are all secret and carry no useful anchors —
+    // never index their contents (secret values in normal files are scrubbed at
+    // context-pack emission via `redact_secret_tokens`). See `crate::secrets`.
+    if crate::secrets::is_secret_file(file_path) {
+        return Vec::new();
+    }
+
     let mut anchors = Vec::new();
     let mut seen = HashSet::new();
     let limit = semantic_anchor_limit_for_file(file_path);
