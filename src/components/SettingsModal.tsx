@@ -1,5 +1,5 @@
 'use client';
-import React, { useId, useState, useEffect } from 'react';
+import React, { useId, useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
@@ -12,6 +12,7 @@ import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
 import { availableThemes, normalizeThemeId } from '../themes';
 import { formatUnknownBackendError } from '../utils/backendErrors';
 import { ScrollArea } from './ui/ScrollArea';
+import { ConfirmModal } from './ui/Modal';
 import { DEFAULT_CHAT_FONT_SIZE, DEFAULT_EDITOR_FONT_SIZE, MAX_CONTENT_FONT_SIZE, MIN_CONTENT_FONT_SIZE } from '../contexts/DisplaySettingsContext';
 
 type StorageMode = 'local' | 'server';
@@ -60,6 +61,7 @@ interface SettingsState {
         ollamaCloudApiKey: string;
         openaiCompatEnabled: boolean;
         openaiCompatUrl: string;
+        hiddenModels: string[];
     };
     allowGitIgnoredFiles?: boolean;  // Per-project setting
     autoApproveRunCommands?: boolean;
@@ -104,6 +106,7 @@ const defaultSettings: SettingsState = {
         ollamaCloudApiKey: '',
         openaiCompatEnabled: false,
         openaiCompatUrl: 'http://localhost:8080',
+        hiddenModels: [],
     },
     allowGitIgnoredFiles: false,  // Default: respect .gitignore
     autoApproveRunCommands: false,
@@ -141,6 +144,7 @@ function backendLocalToFrontend(backend: LocalAiConfig): Pick<SettingsState, 'lo
             ollamaCloudApiKey: backend.ollama_cloud_api_key,
             openaiCompatEnabled: backend.openai_compat_enabled,
             openaiCompatUrl: normalizeOpenAiCompatUrl(backend.openai_compat_url),
+            hiddenModels: backend.hidden_local_models ?? [],
         },
     };
 }
@@ -166,6 +170,7 @@ function frontendLocalToBackend(frontend: SettingsState): LocalAiConfig {
         ollama_cloud_api_key: frontend.localAi.ollamaCloudApiKey,
         openai_compat_enabled: frontend.localAi.openaiCompatEnabled,
         openai_compat_url: normalizeOpenAiCompatUrl(frontend.localAi.openaiCompatUrl),
+        hidden_local_models: frontend.localAi.hiddenModels,
     };
 }
 
@@ -242,19 +247,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+
+    // Intercept close requests: if there are unsaved changes, confirm before discarding.
+    const requestClose = useCallback(() => {
+        if (hasChanges) {
+            setShowDiscardConfirm(true);
+        } else {
+            onClose();
+        }
+    }, [hasChanges, onClose]);
 
     useEffect(() => {
         if (!isOpen) return;
 
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                onClose();
+            // While the discard confirm is open, let it own Escape (it cancels itself).
+            if (e.key === 'Escape' && !showDiscardConfirm) {
+                requestClose();
             }
         };
 
         document.addEventListener('keydown', handleKeyDown);
         return () => document.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, onClose]);
+    }, [isOpen, showDiscardConfirm, requestClose]);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -294,6 +310,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                 setSettings(mergedSettings);
                 setLoadedSettings(mergedSettings);
                 setHasChanges(false);
+                setShowDiscardConfirm(false);
                 console.debug('[Settings] Loaded settings:', mergedSettings);
             } catch (e) {
                 console.error('[Settings] Failed to load global settings:', e);
@@ -434,7 +451,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
             <div
                 className="absolute inset-0 bg-black/72"
                 aria-hidden="true"
-                onClick={onClose}
+                onClick={requestClose}
             />
 
             {/* Modal */}
@@ -453,7 +470,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                     </div>
                     <button
                         type="button"
-                        onClick={onClose}
+                        onClick={requestClose}
                         aria-label={t('common.close')}
                         className="rounded-[calc(var(--panel-radius)*0.35)] p-1.5 text-(--fg-tertiary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                     >
@@ -566,10 +583,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                     <div className="flex items-center gap-2">
                         <button
                             type="button"
-                            onClick={onClose}
+                            onClick={requestClose}
                             className="rounded-[calc(var(--panel-radius)*0.65)] px-4 py-2 text-sm font-medium text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) transition-colors"
                         >
-                            {t('common.cancel')}
+                            {hasChanges ? t('common.cancel') : t('common.close')}
                         </button>
                         <button
                             type="button"
@@ -583,6 +600,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                     </div>
                 </div>
             </div>
+
+            <ConfirmModal
+                isOpen={showDiscardConfirm}
+                title={t('settings.discardChanges.title')}
+                message={t('settings.discardChanges.message')}
+                confirmLabel={t('settings.discardChanges.confirm')}
+                cancelLabel={t('settings.discardChanges.keepEditing')}
+                confirmVariant="danger"
+                onConfirm={() => { setShowDiscardConfirm(false); onClose(); }}
+                onCancel={() => setShowDiscardConfirm(false)}
+            />
         </div>
     );
 };
@@ -813,6 +841,15 @@ const ConfigurationSettings: React.FC<ConfigurationSettingsProps> = ({
     );
 };
 
+interface LocalModelPromptStatus {
+    id: string;
+    name: string;
+    provider?: string;
+    has_local_prompt: boolean;
+    prompt_file: string | null;
+    builtin_kind: string;
+}
+
 interface LocalAiSettingsProps {
     settings: SettingsState['localAi'];
     onChange: (updates: Partial<SettingsState['localAi']>) => void;
@@ -833,6 +870,32 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
     const ollamaUrlId = useId();
     const ollamaCloudApiKeyId = useId();
     const openaiCompatUrlId = useId();
+
+    const [modelStatuses, setModelStatuses] = useState<LocalModelPromptStatus[]>([]);
+    const [isLoadingModels, setIsLoadingModels] = useState(false);
+
+    const loadModelStatuses = useCallback(async () => {
+        setIsLoadingModels(true);
+        try {
+            const statuses = await invoke<LocalModelPromptStatus[]>('list_local_models_with_prompt_status');
+            setModelStatuses(statuses);
+        } catch (e) {
+            console.error('[Settings] Failed to load local model prompt status:', e);
+        } finally {
+            setIsLoadingModels(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        void loadModelStatuses();
+    }, [loadModelStatuses]);
+
+    const toggleModelVisibility = (id: string, visible: boolean) => {
+        const next = visible
+            ? settings.hiddenModels.filter((m) => m !== id)
+            : [...settings.hiddenModels, id];
+        onChange({ hiddenModels: next });
+    };
 
     const handleTestOllamaConnection = async () => {
         setIsTestingOllama(true);
@@ -857,6 +920,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
             if (onRefreshModels) {
                 await onRefreshModels();
             }
+            await loadModelStatuses();
         } catch (e) {
             console.error('[Settings] Failed to refresh Ollama models:', e);
         } finally {
@@ -887,6 +951,7 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
             if (onRefreshModels) {
                 await onRefreshModels();
             }
+            await loadModelStatuses();
         } catch (e) {
             console.error('[Settings] Failed to refresh OpenAI-compatible models:', e);
         } finally {
@@ -1052,6 +1117,68 @@ const LocalAiSettings: React.FC<LocalAiSettingsProps> = ({ settings, onChange, o
                         </span>
                     )}
                 </div>
+            </div>
+
+            {/* Models to display in the model selector */}
+            <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)+2px)] p-4 space-y-3 bg-[color-mix(in_srgb,var(--bg-panel)_88%,var(--bg-editor))] shadow-(--shadow-sm)">
+                <div className="flex items-center justify-between gap-3">
+                    <div>
+                        <div className="text-sm font-medium text-(--fg-primary)">{t('settings.localAiModels.title')}</div>
+                        <div className="text-xs text-(--fg-tertiary)">{t('settings.localAiModels.description')}</div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={loadModelStatuses}
+                        disabled={isLoadingModels}
+                        className="rounded-[calc(var(--panel-radius)*0.55)] px-3 py-1.5 text-xs font-medium border border-(--border-default) text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--bg-surface-hover) disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                    >
+                        {isLoadingModels ? t('settings.refreshing') : t('settings.localAiModels.refresh')}
+                    </button>
+                </div>
+
+                {modelStatuses.length === 0 ? (
+                    <p className="text-xs text-(--fg-tertiary)">
+                        {isLoadingModels ? t('settings.localAiModels.loading') : t('settings.localAiModels.empty')}
+                    </p>
+                ) : (
+                    <ul className="rounded-[calc(var(--panel-radius)*0.65)] border border-(--border-default) overflow-hidden divide-y divide-(--border-default)">
+                        {modelStatuses.map((model) => {
+                            const isVisible = !settings.hiddenModels.includes(model.id);
+                            const checkboxId = `model-visible-${model.id}`;
+                            return (
+                                <li key={model.id} className="flex items-center gap-3 px-3 py-2 bg-(--bg-surface)">
+                                    <input
+                                        type="checkbox"
+                                        id={checkboxId}
+                                        checked={isVisible}
+                                        onChange={(e) => toggleModelVisibility(model.id, e.target.checked)}
+                                        className="h-4 w-4 shrink-0 accent-(--accent-ai) cursor-pointer"
+                                    />
+                                    <label htmlFor={checkboxId} className="flex-1 min-w-0 cursor-pointer">
+                                        <span className="block truncate text-sm text-(--fg-primary)">{model.name}</span>
+                                    </label>
+                                    {model.has_local_prompt ? (
+                                        <span
+                                            className="inline-flex items-center gap-1 text-xs text-(--accent-mention) shrink-0 max-w-[45%]"
+                                            title={t('settings.localAiModels.customPromptTooltip', { file: model.prompt_file ?? '' })}
+                                        >
+                                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                                            <span className="truncate">{model.prompt_file}</span>
+                                        </span>
+                                    ) : (
+                                        <span
+                                            className="inline-flex items-center gap-1 text-xs text-(--fg-tertiary) shrink-0"
+                                            title={t('settings.localAiModels.builtinPromptTooltip')}
+                                        >
+                                            <Info className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                                            {t('settings.localAiModels.builtinPrompt')}
+                                        </span>
+                                    )}
+                                </li>
+                            );
+                        })}
+                    </ul>
+                )}
             </div>
         </div>
     );

@@ -62,3 +62,43 @@ pub fn refresh_local_openai_compat_models() -> Result<(), String> {
     crate::models::openai_compat::clear_cache();
     Ok(())
 }
+
+#[derive(serde::Serialize)]
+pub struct LocalModelPromptStatus {
+    pub id: String,
+    pub name: String,
+    pub provider: Option<String>,
+    /// True when a user-saved prompt file resolves for this model.
+    pub has_local_prompt: bool,
+    /// The matched prompt file name (e.g. "llama3:8b.md"), when `has_local_prompt`.
+    pub prompt_file: Option<String>,
+    /// Which bundled default applies when there is no local prompt: "local" | "cloud".
+    pub builtin_kind: String,
+}
+
+/// Lists the currently-available LOCAL models (Ollama + OpenAI-compatible) together
+/// with their user-prompt status, for the Settings -> Local AI models list.
+#[tauri::command]
+pub async fn list_local_models_with_prompt_status(
+    state: State<'_, AppState>,
+) -> Result<Vec<LocalModelPromptStatus>, String> {
+    let config = { state.config.lock().unwrap().clone() };
+    let models = crate::models::catalog::list_all_models(&config).await;
+    let result = models
+        .into_iter()
+        .filter(|m| matches!(m.provider.as_deref(), Some("ollama") | Some("openai-compat")))
+        .map(|m| {
+            let (has_local_prompt, prompt_file) = config::local_prompt_status_for_model(&m.id);
+            let builtin_kind = config::builtin_prompt_kind(&m.id).to_string();
+            LocalModelPromptStatus {
+                id: m.id,
+                name: m.name,
+                provider: m.provider,
+                has_local_prompt,
+                prompt_file,
+                builtin_kind,
+            }
+        })
+        .collect();
+    Ok(result)
+}

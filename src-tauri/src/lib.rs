@@ -244,6 +244,7 @@ pub fn run() {
             commands::settings_local_ai::refresh_local_ollama_models,
             commands::settings_local_ai::test_local_openai_compat_connection,
             commands::settings_local_ai::refresh_local_openai_compat_models,
+            commands::settings_local_ai::list_local_models_with_prompt_status,
             // Chat
             commands::chat::list_models,
             commands::chat::get_conversation,

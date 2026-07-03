@@ -358,6 +358,12 @@
     "saveChanges": "Save Changes",
     "unsavedChangesNotice": "You have unsaved changes",
     "allChangesSaved": "All changes saved",
+    "discardChanges": {
+      "title": "Discard changes?",
+      "message": "You have unsaved changes. If you close now, they'll be lost.",
+      "confirm": "Discard changes",
+      "keepEditing": "Keep editing"
+    },
     "connectionSuccessful": "Connection successful.",
     "navigation": {
       "configuration": "Configuration",
@@ -450,6 +456,16 @@
     "localAi": {
       "title": "Local AI",
       "description": "Configure local AI providers running on your machine or network."
+    },
+    "localAiModels": {
+      "title": "Models",
+      "description": "Choose which local models appear in the Command Center model selector. Unchecked models stay installed but are hidden from the picker.",
+      "refresh": "Reload",
+      "loading": "Loading models…",
+      "empty": "No local models found. Enable and connect a provider above, then reload.",
+      "builtinPrompt": "Built-in prompt",
+      "builtinPromptTooltip": "No saved prompt for this model — it will use the bundled default system prompt.",
+      "customPromptTooltip": "Uses your saved prompt: {{file}}"
     },
     "storage": {
       "title": "Storage Mode",

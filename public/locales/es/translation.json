@@ -354,6 +354,12 @@
     "saveChanges": "Guardar cambios",
     "unsavedChangesNotice": "Tienes cambios sin guardar",
     "allChangesSaved": "Todos los cambios están guardados",
+    "discardChanges": {
+      "title": "¿Descartar cambios?",
+      "message": "Tienes cambios sin guardar. Si cierras ahora, se perderán.",
+      "confirm": "Descartar cambios",
+      "keepEditing": "Seguir editando"
+    },
     "connectionSuccessful": "Conexión correcta.",
     "navigation": {
       "configuration": "Configuración",
@@ -446,6 +452,16 @@
     "localAi": {
       "title": "IA local",
       "description": "Configura proveedores de IA locales que se ejecuten en tu equipo o red."
+    },
+    "localAiModels": {
+      "title": "Modelos",
+      "description": "Elige qué modelos locales aparecen en el selector de modelos del Command Center. Los modelos sin marcar siguen instalados pero se ocultan del selector.",
+      "refresh": "Recargar",
+      "loading": "Cargando modelos…",
+      "empty": "No se encontraron modelos locales. Activa y conecta un proveedor arriba y vuelve a cargar.",
+      "builtinPrompt": "Prompt integrado",
+      "builtinPromptTooltip": "No hay prompt guardado para este modelo: usará el prompt de sistema integrado por defecto.",
+      "customPromptTooltip": "Usa tu prompt guardado: {{file}}"
     },
     "storage": {
       "title": "Modo de almacenamiento",

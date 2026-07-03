@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { BladeDispatcher } from '../services/blade';
@@ -1204,12 +1204,28 @@ export function useChatV2(options: UseChatV2Options = {}) {
         void init();
     }, [refreshModels]);
 
+    const [hiddenLocalModels, setHiddenLocalModels] = useState<string[]>([]);
+
+    const loadHiddenLocalModels = useCallback(async () => {
+        try {
+            const config = await invoke<{ hidden_local_models?: string[] }>('get_local_ai_settings');
+            setHiddenLocalModels(config.hidden_local_models ?? []);
+        } catch (error) {
+            console.error('[useChatV2] Failed to load hidden local models:', error);
+        }
+    }, []);
+
+    useEffect(() => {
+        void loadHiddenLocalModels();
+    }, [loadHiddenLocalModels]);
+
     useEffect(() => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
             return;
         }
 
         const unlistenPromise = listen('local-ai-settings-changed', () => {
+            void loadHiddenLocalModels();
             void refreshModels().catch((error) => {
                 console.error('[useChatV2] Failed to refresh models after local AI settings changed:', error);
             });
@@ -1218,7 +1234,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
         return () => {
             unlistenPromise.then((unlisten) => unlisten());
         };
-    }, [refreshModels]);
+    }, [refreshModels, loadHiddenLocalModels]);
 
     useEffect(() => {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
@@ -2414,13 +2430,32 @@ export function useChatV2(options: UseChatV2Options = {}) {
         dispatch({ type: 'todos/set', todos: value });
     }, []);
 
+    // Hide local models the user has unchecked in Settings -> Local AI (cloud models
+    // and the currently-selected model are always kept visible).
+    const visibleModels = useMemo(() => {
+        if (hiddenLocalModels.length === 0) {
+            return state.models;
+        }
+        const hidden = new Set(hiddenLocalModels);
+        return state.models.filter((model) => {
+            const isLocal = model.provider === 'ollama' || model.provider === 'openai-compat';
+            if (!isLocal) {
+                return true;
+            }
+            if (model.id === state.selectedModelId) {
+                return true;
+            }
+            return !hidden.has(model.id);
+        });
+    }, [state.models, hiddenLocalModels, state.selectedModelId]);
+
     return {
         messages: state.messages,
         loading: state.loading,
         error: state.error,
         sendMessage,
         stopGeneration,
-        models: state.models,
+        models: visibleModels,
         refreshModels,
         selectedModelId: state.selectedModelId,
         setSelectedModelId,

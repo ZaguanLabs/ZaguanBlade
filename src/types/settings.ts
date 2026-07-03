@@ -16,6 +16,7 @@ export interface LocalAiConfig {
     ollama_cloud_api_key: string;
     openai_compat_enabled: boolean;
     openai_compat_url: string;
+    hidden_local_models: string[];
 }
 
 export interface BackendSettings {

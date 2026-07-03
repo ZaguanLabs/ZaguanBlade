@@ -24,6 +24,8 @@ pub struct ApiConfig {
     #[serde(default = "default_openai_compat_url")]
     pub openai_compat_url: String,
     #[serde(default)]
+    pub hidden_local_models: Vec<String>,
+    #[serde(default)]
     pub theme: String,
     #[serde(default)]
     pub markdown_view: String,
@@ -73,6 +75,8 @@ pub struct LocalAiConfig {
     pub openai_compat_enabled: bool,
     #[serde(default = "default_openai_compat_url")]
     pub openai_compat_url: String,
+    #[serde(default)]
+    pub hidden_local_models: Vec<String>,
 }
 
 impl ApiConfig {
@@ -98,6 +102,7 @@ impl ApiConfig {
             ollama_cloud_api_key: self.ollama_cloud_api_key.clone(),
             openai_compat_enabled: self.openai_compat_enabled,
             openai_compat_url: self.openai_compat_url.clone(),
+            hidden_local_models: self.hidden_local_models.clone(),
         }
     }
 
@@ -121,6 +126,7 @@ impl ApiConfig {
         self.ollama_cloud_api_key = local.ollama_cloud_api_key.clone();
         self.openai_compat_enabled = local.openai_compat_enabled;
         self.openai_compat_url = normalize_openai_compat_url(&local.openai_compat_url);
+        self.hidden_local_models = local.hidden_local_models.clone();
     }
 }
 
@@ -132,16 +138,23 @@ pub fn default_ollama_url() -> String {
     "http://localhost:11434".to_string()
 }
 
-pub fn default_local_ai_system_prompt(model_name: &str) -> &'static str {
+pub fn builtin_prompt_kind(model_name: &str) -> &'static str {
     if model_name
         .trim()
         .trim_start_matches("ollama/")
         .to_ascii_lowercase()
         .ends_with(":cloud")
     {
-        OLLAMA_CLOUD_DEFAULT_SYSTEM_PROMPT
+        "cloud"
     } else {
-        LOCAL_AI_DEFAULT_SYSTEM_PROMPT
+        "local"
+    }
+}
+
+pub fn default_local_ai_system_prompt(model_name: &str) -> &'static str {
+    match builtin_prompt_kind(model_name) {
+        "cloud" => OLLAMA_CLOUD_DEFAULT_SYSTEM_PROMPT,
+        _ => LOCAL_AI_DEFAULT_SYSTEM_PROMPT,
     }
 }
 
@@ -643,6 +656,30 @@ pub fn read_prompt_for_model(model_name: &str) -> Result<Option<String>, String>
     fs::read_to_string(&path)
         .map(Some)
         .map_err(|e| format!("Failed to read prompt file {}: {}", path.display(), e))
+}
+
+/// Reports whether the user has a saved local prompt file that resolves for this
+/// model, plus the matched file name. Mirrors the resolution used at chat time by
+/// `read_prompt_for_model`, but does NOT fall back to the bundled default — a
+/// `false` result means the model will use the built-in prompt.
+pub fn local_prompt_status_for_model(model_name: &str) -> (bool, Option<String>) {
+    // Resolve with the same key chat time uses: `chat_manager` strips the provider
+    // prefix ("ollama/" / "openai-compat/") before loading the prompt, so pre-strip
+    // here too — otherwise this status could report a match that chat never uses.
+    let key = model_name
+        .strip_prefix("ollama/")
+        .or_else(|| model_name.strip_prefix("openai-compat/"))
+        .unwrap_or(model_name);
+    match resolve_prompt_path_for_model(&global_prompts_dir(), key) {
+        Ok(Some(path)) => {
+            let file = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string());
+            (true, file)
+        }
+        _ => (false, None),
+    }
 }
 
 pub fn load_api_config(path: &Path) -> ApiConfig {

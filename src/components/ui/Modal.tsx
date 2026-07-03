@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useId } from 'react';
+import React, { useEffect, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 
@@ -15,6 +15,7 @@ interface ConfirmModalProps {
     title: string;
     message: string | React.ReactNode;
     confirmLabel?: string;
+    cancelLabel?: string;
     confirmVariant?: 'primary' | 'danger';
     onConfirm: () => void;
     onCancel: () => void;
@@ -25,6 +26,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
     title,
     message,
     confirmLabel = 'Confirm',
+    cancelLabel,
     confirmVariant = 'primary',
     onConfirm,
     onCancel,
@@ -99,7 +101,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
                         onClick={onCancel}
                         className="px-3 py-1.5 text-xs font-medium text-(--fg-secondary) hover:text-(--fg-primary) hover:bg-(--row-hover) rounded-(--radius-control) transition-all duration-(--transition-fast)"
                     >
-                        Cancel
+                        {cancelLabel ?? t('common.cancel')}
                     </button>
                     <button
                         type="button"
