@@ -307,60 +307,59 @@ export const ScreenshotAnnotationModal: React.FC<{
     }, [getTextDraftPosition]);
 
     const commitTextDraft = useCallback(() => {
-        setTextDraft((current) => {
-            if (!current) {
-                return null;
-            }
-            const value = current.value.trim();
-            if (current.id) {
-                const existing = annotations.find((annotation): annotation is Extract<Annotation, { type: 'text' }> => annotation.id === current.id && annotation.type === 'text');
-                if (!existing) {
-                    return null;
-                }
-                if (!value) {
-                    dispatchAnnotations({
-                        type: 'commit',
-                        annotations: annotations.filter((annotation) => annotation.id !== current.id),
-                        previousAnnotations: annotations,
-                        selectedAnnotationId: null,
-                    });
-                    return null;
-                }
-                if (existing.text === value && existing.point.x === current.point.x && existing.point.y === current.point.y) {
-                    dispatchAnnotations({ type: 'select', id: existing.id });
-                    return null;
-                }
-                const updated: Annotation = {
-                    ...existing,
-                    point: current.point,
-                    text: value,
-                    color: current.color,
-                    fontSize: current.fontSize,
-                };
-                dispatchAnnotations({
-                    type: 'commit',
-                    annotations: annotations.map((annotation) => annotation.id === current.id ? updated : annotation),
-                    previousAnnotations: annotations,
-                    selectedAnnotationId: updated.id,
-                });
-                return null;
+        const current = textDraft;
+        if (!current) {
+            return;
+        }
+        setTextDraft(null);
+        const value = current.value.trim();
+        if (current.id) {
+            const existing = annotations.find((annotation): annotation is Extract<Annotation, { type: 'text' }> => annotation.id === current.id && annotation.type === 'text');
+            if (!existing) {
+                return;
             }
             if (!value) {
-                return null;
+                dispatchAnnotations({
+                    type: 'commit',
+                    annotations: annotations.filter((annotation) => annotation.id !== current.id),
+                    previousAnnotations: annotations,
+                    selectedAnnotationId: null,
+                });
+                return;
             }
-            const annotation: Annotation = {
-                id: crypto.randomUUID(),
-                type: 'text',
+            if (existing.text === value && existing.point.x === current.point.x && existing.point.y === current.point.y) {
+                dispatchAnnotations({ type: 'select', id: existing.id });
+                return;
+            }
+            const updated: Annotation = {
+                ...existing,
                 point: current.point,
                 text: value,
                 color: current.color,
                 fontSize: current.fontSize,
             };
-            dispatchAnnotations({ type: 'push', annotation });
-            setTool('select');
-            return null;
-        });
-    }, [annotations]);
+            dispatchAnnotations({
+                type: 'commit',
+                annotations: annotations.map((annotation) => annotation.id === current.id ? updated : annotation),
+                previousAnnotations: annotations,
+                selectedAnnotationId: updated.id,
+            });
+            return;
+        }
+        if (!value) {
+            return;
+        }
+        const annotation: Annotation = {
+            id: crypto.randomUUID(),
+            type: 'text',
+            point: current.point,
+            text: value,
+            color: current.color,
+            fontSize: current.fontSize,
+        };
+        dispatchAnnotations({ type: 'push', annotation });
+        setTool('select');
+    }, [annotations, textDraft]);
 
     const deleteSelected = useCallback(() => {
         dispatchAnnotations({ type: 'deleteSelected' });
@@ -510,6 +509,22 @@ export const ScreenshotAnnotationModal: React.FC<{
             if (isTyping) {
                 return;
             }
+            if (event.key === 'Escape' && (drawing || draftRef.current || moveDraft || resizeDraft)) {
+                event.preventDefault();
+                if (resizeDraft) {
+                    dispatchAnnotations({ type: 'preview', annotations: resizeDraft.previous });
+                    setResizeDraft(null);
+                } else if (moveDraft) {
+                    dispatchAnnotations({ type: 'preview', annotations: moveDraft.previous });
+                    setMoveDraft(null);
+                } else {
+                    setDrawing(false);
+                    setDraft(null);
+                    draftRef.current = null;
+                    render(null, annotations, selectedAnnotationId);
+                }
+                return;
+            }
             if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
                 event.preventDefault();
                 if (event.shiftKey) {
@@ -524,7 +539,7 @@ export const ScreenshotAnnotationModal: React.FC<{
                 event.preventDefault();
                 dispatchAnnotations({ type: 'selectLast' });
                 setTool('select');
-            } else if (event.key === 'Tab' && annotations.length > 0) {
+            } else if (event.key === 'Tab' && annotations.length > 0 && target === canvasRef.current) {
                 event.preventDefault();
                 cycleSelection(event.shiftKey ? -1 : 1);
             } else if (selectedAnnotationId && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
@@ -569,7 +584,7 @@ export const ScreenshotAnnotationModal: React.FC<{
         };
         document.addEventListener('keydown', handleKeyDown);
         return () => document.removeEventListener('keydown', handleKeyDown);
-    }, [annotations, beginTextEdit, commitTextDraft, cycleSelection, deleteSelected, finish, nudgeSelected, onCancel, redo, selectedAnnotation, selectedAnnotationId, textDraft, undo]);
+    }, [annotations, beginTextEdit, commitTextDraft, cycleSelection, deleteSelected, drawing, finish, moveDraft, nudgeSelected, onCancel, redo, render, resizeDraft, selectedAnnotation, selectedAnnotationId, textDraft, undo]);
 
     const handlePointerDown = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
         if (!imageReady) {
@@ -820,6 +835,7 @@ export const ScreenshotAnnotationModal: React.FC<{
                 <div ref={canvasWrapRef} className="relative flex min-h-0 flex-1 items-center justify-center overflow-auto bg-(--bg-app) p-4">
                     <canvas
                         ref={canvasRef}
+                        tabIndex={0}
                         aria-label={t('screenshot.editor.canvasLabel')}
                         onPointerDown={handlePointerDown}
                         onPointerMove={handlePointerMove}
