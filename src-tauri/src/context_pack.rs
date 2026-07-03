@@ -659,6 +659,10 @@ fn collect_fallback_path_matches_for_queries(
         .follow_links(false)
         .max_depth(8)
         .into_iter()
+        .filter_entry(|entry| {
+            let relative = relative_path(workspace_root, entry.path());
+            !should_skip_path(&relative)
+        })
         .filter_map(Result::ok)
     {
         if !entry.file_type().is_file() {
@@ -666,7 +670,7 @@ fn collect_fallback_path_matches_for_queries(
         }
         let path = entry.path();
         let rel = relative_path(workspace_root, path);
-        if should_skip_path(&rel) || is_test_path(&rel) || is_doc_path(&rel) {
+        if is_test_path(&rel) || is_doc_path(&rel) {
             continue;
         }
         let lower = rel.to_ascii_lowercase();
@@ -1362,6 +1366,32 @@ fn collect_related_tests(
     primary: &[ContextFileResult],
     limit: usize,
 ) -> Vec<ContextFileResult> {
+    if primary.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+
+    // Walk the workspace once (pruning skipped directories at descent time)
+    // instead of one full walk per primary file.
+    let mut test_paths = Vec::new();
+    for entry in walkdir::WalkDir::new(workspace_root)
+        .follow_links(false)
+        .max_depth(8)
+        .into_iter()
+        .filter_entry(|entry| {
+            let relative = relative_path(workspace_root, entry.path());
+            !should_skip_path(&relative)
+        })
+        .filter_map(Result::ok)
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let rel = relative_path(workspace_root, entry.path());
+        if is_test_path(&rel) {
+            test_paths.push(rel);
+        }
+    }
+
     let mut seen = HashSet::new();
     let mut tests = Vec::new();
 
@@ -1373,24 +1403,16 @@ fn collect_related_tests(
         let source_dir = source_path.parent().unwrap_or_else(|| Path::new(""));
         let stem_lower = stem.to_ascii_lowercase();
 
-        for entry in walkdir::WalkDir::new(workspace_root)
-            .follow_links(false)
-            .max_depth(8)
-            .into_iter()
-            .filter_map(Result::ok)
-        {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let rel = relative_path(workspace_root, entry.path());
-            if should_skip_path(&rel) || !is_test_path(&rel) || !seen.insert(rel.clone()) {
+        for rel in &test_paths {
+            if seen.contains(rel) {
                 continue;
             }
             let rel_lower = rel.to_ascii_lowercase();
-            let same_dir = Path::new(&rel).parent() == Some(source_dir);
+            let same_dir = Path::new(rel).parent() == Some(source_dir);
             if rel_lower.contains(&stem_lower) || same_dir {
+                seen.insert(rel.clone());
                 tests.push(ContextFileResult {
-                    path: rel,
+                    path: rel.clone(),
                     score: if rel_lower.contains(&stem_lower) {
                         78
                     } else {
@@ -1515,13 +1537,17 @@ fn collect_related_docs_by_path(
         .follow_links(false)
         .max_depth(6)
         .into_iter()
+        .filter_entry(|entry| {
+            let relative = relative_path(workspace_root, entry.path());
+            !should_skip_path(&relative)
+        })
         .filter_map(Result::ok)
     {
         if !entry.file_type().is_file() {
             continue;
         }
         let rel = relative_path(workspace_root, entry.path());
-        if should_skip_path(&rel) || !is_doc_path(&rel) {
+        if !is_doc_path(&rel) {
             continue;
         }
         let lower = rel.to_ascii_lowercase();
