@@ -1,8 +1,6 @@
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::DefaultHasher;
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::uncommitted_changes::UncommittedChange;
@@ -71,9 +69,9 @@ fn get_state_dir() -> Option<PathBuf> {
 
 /// Generate a unique filename for a project based on its path
 fn project_state_filename(project_path: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    project_path.hash(&mut hasher);
-    let hash = hasher.finish();
+    // M6 CL1 — version-stable across toolchains (was SipHash `DefaultHasher`), so a
+    // compiler upgrade no longer orphans a project's saved UI state.
+    let hash = crate::stable_hash::stable_hash(project_path.as_bytes());
 
     // Use last component of path + hash for human readability
     let name = Path::new(project_path)

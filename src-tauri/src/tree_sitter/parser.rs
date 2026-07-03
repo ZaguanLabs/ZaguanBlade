@@ -471,6 +471,13 @@ impl Language {
             return Some(language);
         }
 
+        // M6.2 — dotenv variants `.env.local`, `.env.production`, … (exact `.env` is
+        // in FILENAME_TABLE above) are the same key/value files → Toml. A dot after
+        // `env` is required, so `.envrc` and similar do NOT match.
+        if file_name.starts_with(".env.") {
+            return Some(Language::Toml);
+        }
+
         let file_name_lower = file_name.to_lowercase();
         if file_name_lower == "dockerfile" || file_name_lower.starts_with("dockerfile.") {
             return Some(Language::Dockerfile);
@@ -823,6 +830,15 @@ mod tests {
         assert_eq!(Language::from_path("Cargo.toml"), Some(Language::Toml));
         assert_eq!(Language::from_path("pyproject.toml"), Some(Language::Toml));
         assert_eq!(Language::from_path("app.php"), Some(Language::Php));
+        // M6.2 — dotenv exact + variants map to Toml; `.envrc` (no dot after env)
+        // must not.
+        assert_eq!(Language::from_path(".env"), Some(Language::Toml));
+        assert_eq!(Language::from_path(".env.local"), Some(Language::Toml));
+        assert_eq!(
+            Language::from_path("config/.env.production"),
+            Some(Language::Toml)
+        );
+        assert_ne!(Language::from_path(".envrc"), Some(Language::Toml));
         assert_eq!(Language::from_path("Main.java"), Some(Language::Java));
         assert_eq!(
             Language::from_path("UserService.cs"),

@@ -698,6 +698,14 @@ impl SymbolStore {
                 confidence REAL NOT NULL,
                 indexed_at INTEGER NOT NULL
             );
+
+            -- M6.1 — key/value cache for the reconcile no-change fast path. Holds the
+            -- fingerprint + last fully-healthy health/graph snapshot as JSON. Cleared
+            -- whenever generated index data is cleared (see clear_generated_index_data).
+            CREATE TABLE IF NOT EXISTS index_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             "#,
         )?;
 
@@ -1108,10 +1116,10 @@ impl SymbolStore {
 
         {
             let mut delete_relationships =
-                tx.prepare("DELETE FROM symbol_relationships WHERE source_file_path = ?1")?;
+                tx.prepare_cached("DELETE FROM symbol_relationships WHERE source_file_path = ?1")?;
             let mut delete_anchors =
-                tx.prepare("DELETE FROM semantic_anchors WHERE file_path = ?1")?;
-            let mut delete_symbols = tx.prepare("DELETE FROM symbols WHERE file_path = ?1")?;
+                tx.prepare_cached("DELETE FROM semantic_anchors WHERE file_path = ?1")?;
+            let mut delete_symbols = tx.prepare_cached("DELETE FROM symbols WHERE file_path = ?1")?;
 
             for file in files {
                 delete_relationships.execute(params![&file.file_path])?;
@@ -1121,7 +1129,7 @@ impl SymbolStore {
         }
 
         {
-            let mut insert_symbol = tx.prepare(
+            let mut insert_symbol = tx.prepare_cached(
                 r#"
                 INSERT OR REPLACE INTO symbols
                 (id, name, qualified_name, symbol_type, file_path, start_line, start_char, end_line, end_char,
@@ -1155,7 +1163,7 @@ impl SymbolStore {
         }
 
         {
-            let mut insert_anchor = tx.prepare(
+            let mut insert_anchor = tx.prepare_cached(
                 r#"
                 INSERT OR REPLACE INTO semantic_anchors
                 (id, file_path, kind, value, line, character, preview, confidence, indexed_at)
@@ -1181,7 +1189,7 @@ impl SymbolStore {
         }
 
         {
-            let mut insert_relationship = tx.prepare(
+            let mut insert_relationship = tx.prepare_cached(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
                 (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, resolution_strategy, confidence, metadata_json)
@@ -1207,7 +1215,7 @@ impl SymbolStore {
         }
 
         {
-            let mut insert_indexed_file = tx.prepare(
+            let mut insert_indexed_file = tx.prepare_cached(
                 r#"
                 INSERT OR REPLACE INTO indexed_files
                 (file_path, file_hash, indexed_at, symbol_count, file_size, line_count, modified_at, extractor_version)
@@ -1246,14 +1254,14 @@ impl SymbolStore {
 
         {
             let mut delete_relationships =
-                tx.prepare("DELETE FROM symbol_relationships WHERE source_file_path = ?1")?;
+                tx.prepare_cached("DELETE FROM symbol_relationships WHERE source_file_path = ?1")?;
             for file in files {
                 delete_relationships.execute(params![&file.file_path])?;
             }
         }
 
         {
-            let mut insert_relationship = tx.prepare(
+            let mut insert_relationship = tx.prepare_cached(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
                 (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, resolution_strategy, confidence, metadata_json)
@@ -1390,7 +1398,7 @@ impl SymbolStore {
         let tx = conn.transaction()?;
         let mut count = 0usize;
         {
-            let mut update = tx.prepare(
+            let mut update = tx.prepare_cached(
                 r#"
                 UPDATE symbol_relationships
                 SET target_symbol_id = ?1,
@@ -1897,6 +1905,10 @@ impl SymbolStore {
         for statement in GENERATED_INDEX_CLEAR_STATEMENTS {
             conn.execute(statement, [])?;
         }
+        // M6.1 — the reconcile fast-path checkpoint summarizes the index we just
+        // cleared; drop it so the next reopen re-verifies from scratch instead of
+        // trusting a stale "Fresh" snapshot.
+        conn.execute("DELETE FROM index_meta", [])?;
         Ok(())
     }
 
@@ -1980,6 +1992,47 @@ impl SymbolStore {
                 row.get(0)
             })?;
         Ok(count as usize)
+    }
+
+    /// M6.1 — number of rows in `indexed_files`. A cheap COUNT the reconcile
+    /// fast path uses to detect out-of-band index mutations that leave disk
+    /// mtimes untouched.
+    pub fn indexed_file_count(&self) -> Result<usize, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM indexed_files", [], |row| row.get(0))?;
+        Ok(count as usize)
+    }
+
+    /// M6.1 — read a value from the `index_meta` key/value cache.
+    pub fn get_index_meta(&self, key: &str) -> Result<Option<String>, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        let value = conn
+            .query_row(
+                "SELECT value FROM index_meta WHERE key = ?1",
+                params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(value)
+    }
+
+    /// M6.1 — upsert a value into the `index_meta` key/value cache.
+    pub fn set_index_meta(&self, key: &str, value: &str) -> Result<(), SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO index_meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// M6.1 — delete a value from the `index_meta` key/value cache.
+    pub fn delete_index_meta(&self, key: &str) -> Result<(), SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM index_meta WHERE key = ?1", params![key])?;
+        Ok(())
     }
 
     /// Record file as indexed

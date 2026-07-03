@@ -65,6 +65,11 @@ tree-sitter-cpp = "0.23.4"
 # it), lowering steady-state peak RSS during large indexes (e.g. the kernel).
 mimalloc = "0.1.52"
 
+# M6 CL1 — xxh3: a version-stable content hash for persisted fingerprints
+# (indexed_files.file_hash, the reconcile checkpoint, the project-state filename).
+# Unlike std's SipHash DefaultHasher, xxh3 output is fixed across Rust toolchains.
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
 base64 = "0.22.1"
 xcap = "0.9.4"
 image = "0.25"

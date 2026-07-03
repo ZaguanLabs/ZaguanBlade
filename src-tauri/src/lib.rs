@@ -50,6 +50,7 @@ pub mod post_edit_validation;
 pub mod project;
 pub mod project_settings;
 pub mod project_state;
+pub mod stable_hash;
 pub mod protocol;
 pub mod protocol_dispatcher;
 pub mod providers;
