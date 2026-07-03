@@ -3899,7 +3899,9 @@ impl LanguageService {
                 );
             } else if path.is_file() {
                 report.discovered_files += 1;
-                if is_supported_index_file(&relative) {
+                if is_supported_index_file(&relative)
+                    || extensionless_shebang_is_supported(&path, &relative)
+                {
                     files.push(relative);
                 } else {
                     *report
@@ -6974,6 +6976,32 @@ fn is_supported_index_file(file_path: &str) -> bool {
         return !is_known_non_config_resource_path(&file_path.replace('\\', "/").to_lowercase());
     }
     is_anchor_only_index_file(file_path)
+}
+
+/// M6.2 — leading bytes read to sniff a shebang line.
+const SHEBANG_SNIFF_HEAD_BYTES: usize = 256;
+
+/// M6.2 — an extensionless file is a supported script when its first line is a `#!`
+/// shebang naming a known interpreter. Only extensionless, path-unclassifiable files
+/// reach here (the caller checks `is_supported_index_file` first), so at most the
+/// first 256 bytes of those files are read.
+fn extensionless_shebang_is_supported(path: &Path, relative: &str) -> bool {
+    if Path::new(relative).extension().is_some() {
+        return false;
+    }
+    let Some(head) = read_file_leading_bytes(path, SHEBANG_SNIFF_HEAD_BYTES) else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&head);
+    Language::detect_by_shebang(&text).is_some()
+}
+
+fn read_file_leading_bytes(path: &Path, max_bytes: usize) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    let mut buffer = Vec::new();
+    file.take(max_bytes as u64).read_to_end(&mut buffer).ok()?;
+    Some(buffer)
 }
 
 fn is_anchor_only_index_file(file_path: &str) -> bool {
@@ -14840,6 +14868,37 @@ export function loadPosts() {
         assert!(
             symbols.iter().any(|s| s.name == "API_KEY"),
             "expected env keys as symbols, got {symbols:?}"
+        );
+    }
+
+    #[test]
+    fn discovery_includes_extensionless_shebang_scripts() {
+        let (service, temp_dir) = create_test_service();
+        fs::create_dir_all(temp_dir.path().join("bin")).unwrap();
+        fs::write(
+            temp_dir.path().join("bin/deploy"),
+            "#!/usr/bin/env python3\nprint('hi')\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("bin/notes"),
+            "just some plain text, no shebang\n",
+        )
+        .unwrap();
+        fs::write(temp_dir.path().join("bin/unknown"), "#!/bin/false\n").unwrap();
+
+        let discovered = service.supported_language_files(".");
+        assert!(
+            discovered.iter().any(|p| p == "bin/deploy"),
+            "{discovered:?}"
+        );
+        assert!(
+            !discovered.iter().any(|p| p == "bin/notes"),
+            "no-shebang extensionless files stay excluded: {discovered:?}"
+        );
+        assert!(
+            !discovered.iter().any(|p| p == "bin/unknown"),
+            "unknown-interpreter shebangs stay excluded: {discovered:?}"
         );
     }
 

@@ -23,6 +23,9 @@ pub struct FsDirEntry {
 pub trait Fs {
     fn read_dir(&self, path: &Path) -> io::Result<Vec<FsDirEntry>>;
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
+    /// M6.2 — read up to `max_bytes` from the start of a file, for shebang sniffing
+    /// of extensionless scripts during discovery.
+    fn read_file_head(&self, path: &Path, max_bytes: usize) -> io::Result<Vec<u8>>;
 }
 
 pub struct RealFs;
@@ -52,6 +55,14 @@ impl Fs for RealFs {
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         std::fs::canonicalize(path)
     }
+
+    fn read_file_head(&self, path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
+        use std::io::Read;
+        let file = std::fs::File::open(path)?;
+        let mut buffer = Vec::new();
+        file.take(max_bytes as u64).read_to_end(&mut buffer)?;
+        Ok(buffer)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +74,7 @@ enum TestFsNodeKind {
 #[derive(Clone, Default)]
 pub struct TestFs {
     nodes: Arc<RwLock<BTreeMap<PathBuf, TestFsNodeKind>>>,
+    contents: Arc<RwLock<BTreeMap<PathBuf, Vec<u8>>>>,
 }
 
 impl TestFs {
@@ -78,6 +90,16 @@ impl TestFs {
 
     pub fn add_file(&self, path: impl AsRef<Path>) {
         self.insert_node(path.as_ref(), TestFsNodeKind::File);
+    }
+
+    pub fn add_file_with_content(&self, path: impl AsRef<Path>, content: impl AsRef<[u8]>) {
+        let path = path.as_ref();
+        self.insert_node(path, TestFsNodeKind::File);
+        let normalized = normalize_path(path);
+        self.contents
+            .write()
+            .unwrap()
+            .insert(normalized, content.as_ref().to_vec());
     }
 
     fn insert_node(&self, path: &Path, kind: TestFsNodeKind) {
@@ -137,6 +159,20 @@ impl Fs for TestFs {
 
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         Ok(normalize_path(path))
+    }
+
+    fn read_file_head(&self, path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
+        let normalized = normalize_path(path);
+        if let Some(bytes) = self.contents.read().unwrap().get(&normalized) {
+            return Ok(bytes.iter().take(max_bytes).copied().collect());
+        }
+        match self.nodes.read().unwrap().get(&normalized) {
+            Some(TestFsNodeKind::File) => Ok(Vec::new()),
+            _ => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("file not found: {}", normalized.display()),
+            )),
+        }
     }
 }
 
@@ -338,7 +374,9 @@ impl WorktreeSnapshot {
             let hidden = relative_path
                 .split('/')
                 .any(|component| component.starts_with('.'));
-            let supported_language = !is_dir && is_supported_index_path(&relative_path);
+            let supported_language = !is_dir
+                && (is_supported_index_path(&relative_path)
+                    || extensionless_shebang_is_supported(fs, &entry.path, &relative_path));
             let index = entries.len();
             entries.push(WorktreeEntry {
                 path: relative_path.clone(),
@@ -444,6 +482,24 @@ fn is_supported_index_path(path: &str) -> bool {
 fn is_dotenv_path(path: &str) -> bool {
     let file_name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     file_name == ".env" || file_name.starts_with(".env.")
+}
+
+/// M6.2 — leading bytes read to sniff a shebang line.
+const SHEBANG_SNIFF_HEAD_BYTES: usize = 256;
+
+/// M6.2 — an extensionless file is a supported script when its first line is a `#!`
+/// shebang naming a known interpreter. Only extensionless, path-unclassifiable files
+/// reach here (the caller checks `is_supported_index_path` first), so at most the
+/// first 256 bytes of those files are read.
+fn extensionless_shebang_is_supported<F: Fs>(fs: &F, absolute: &Path, relative: &str) -> bool {
+    if Path::new(relative).extension().is_some() {
+        return false;
+    }
+    let Ok(head) = fs.read_file_head(absolute, SHEBANG_SNIFF_HEAD_BYTES) else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&head);
+    Language::detect_by_shebang(&text).is_some()
 }
 
 fn is_translation_resource_path(path: &str) -> bool {
@@ -636,6 +692,31 @@ mod tests {
         assert!(
             !files.iter().any(|path| path == ".secret.toml"),
             "non-dotenv hidden files stay excluded: {files:?}"
+        );
+    }
+
+    #[test]
+    fn extensionless_shebang_scripts_are_discovered() {
+        let root = PathBuf::from("/workspace");
+        let fs = TestFs::new(&root);
+        fs.add_dir(root.join("bin"));
+        fs.add_file_with_content(
+            root.join("bin/deploy"),
+            "#!/usr/bin/env python3\nprint('hi')\n",
+        );
+        fs.add_file_with_content(root.join("bin/notes"), "just some plain text, no shebang\n");
+        fs.add_file_with_content(root.join("bin/unknown"), "#!/bin/false\n");
+
+        let snapshot = WorktreeSnapshot::build_with_fs(&root, &fs).unwrap();
+        let files = snapshot.supported_language_files(".");
+        assert!(files.iter().any(|path| path == "bin/deploy"), "{files:?}");
+        assert!(
+            !files.iter().any(|path| path == "bin/notes"),
+            "no-shebang extensionless files stay excluded: {files:?}"
+        );
+        assert!(
+            !files.iter().any(|path| path == "bin/unknown"),
+            "unknown-interpreter shebangs stay excluded: {files:?}"
         );
     }
 
