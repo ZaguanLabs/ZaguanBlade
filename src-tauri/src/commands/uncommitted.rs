@@ -361,12 +361,23 @@ mod tests {
 
     #[test]
     fn index_refresh_path_skips_unsupported_files() {
+        // A genuinely unsupported file (no language) yields None.
+        assert_eq!(
+            workspace_relative_supported_index_path(
+                Some(Path::new("/workspace/project")),
+                Path::new("/workspace/project/logo.png")
+            ),
+            None
+        );
+        // A supported file resolves to its workspace-relative path. package.json is a
+        // first-class JSON file now (M1.3), so it is supported — it used to be the
+        // "unsupported" example here.
         assert_eq!(
             workspace_relative_supported_index_path(
                 Some(Path::new("/workspace/project")),
                 Path::new("/workspace/project/package.json")
             ),
-            None
+            Some("package.json".to_string())
         );
     }
 }

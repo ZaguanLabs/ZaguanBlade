@@ -14982,7 +14982,7 @@ export function loadPosts() {
     }
 
     #[test]
-    fn self_healing_search_reindexes_literal_matching_stale_file() {
+    fn global_search_refreshes_a_stale_file_so_its_renamed_symbol_is_found() {
         let (service, temp_dir) = create_test_service();
 
         fs::write(
@@ -14997,17 +14997,31 @@ export function loadPosts() {
         )
         .unwrap();
 
+        // A global search (file_path = None) refreshes stale indexed files BEFORE
+        // matching (search_symbols_filtered_with_patterns -> refresh_stale_indexed_files),
+        // so the renamed symbol is found directly. The literal-repair healing path is
+        // a fallback for query text that is not a symbol name — exercised by
+        // `self_healing_search_returns_literal_fallback_matches`.
         let outcome = service
             .search_symbols_filtered_self_healing("GitCommitMessage", None, None, 10)
             .unwrap();
 
-        assert!(outcome.healing.triggered);
-        assert!(outcome.healing.reran_after_reindex);
-        assert_eq!(outcome.healing.reindexed_files, vec!["search.ts"]);
-        assert!(outcome
-            .results
-            .iter()
-            .any(|result| result.symbol.name == "GitCommitMessage"));
+        assert!(
+            outcome
+                .results
+                .iter()
+                .any(|result| result.symbol.name == "GitCommitMessage"),
+            "renamed symbol must be found after its file changed: {:?}",
+            outcome.results
+        );
+        assert!(
+            !outcome
+                .results
+                .iter()
+                .any(|result| result.symbol.name == "oldSymbol"),
+            "the stale symbol must be gone after the refresh: {:?}",
+            outcome.results
+        );
     }
 
     #[test]
@@ -17627,15 +17641,13 @@ func helper() {}
     fn test_non_indexed_documents_still_do_not_enter_symbol_index() {
         let (service, temp_dir) = create_test_service();
 
-        fs::write(
-            temp_dir.path().join("package.json"),
-            "{ \"name\": \"demo\" }",
-        )
-        .unwrap();
+        // A genuinely unsupported document type (no language). JSON used to be the
+        // example here, but it is a first-class supported language now (M1.3).
+        fs::write(temp_dir.path().join("logo.png"), "not really an image").unwrap();
 
         let error = service
-            .index_file("package.json")
-            .expect_err("json files should not be symbol-indexed yet");
+            .index_file("logo.png")
+            .expect_err("unsupported documents must not be symbol-indexed");
 
         assert!(matches!(error, LanguageError::NotSupported(_)));
     }
