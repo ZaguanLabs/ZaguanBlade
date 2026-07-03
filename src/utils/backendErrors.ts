@@ -43,6 +43,12 @@ export function formatBackendMessage(message: string): string {
         });
     }
 
+    if (trimmed === 'No model selected') {
+        return i18n.t('git.noModelSelected', {
+            defaultValue: 'Select a model in the Command Center before generating a commit message.',
+        });
+    }
+
     if (trimmed.startsWith('Model not found:')) {
         const model = trimmed.slice('Model not found:'.length).trim();
         return i18n.t('errors.modelNotFound', {

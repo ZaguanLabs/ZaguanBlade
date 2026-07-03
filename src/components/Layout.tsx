@@ -1350,7 +1350,15 @@ const AppLayoutInner: React.FC = () => {
                                 onCommit={commitGit}
                                 onPush={pushGit}
                                 onDiff={diffGit}
-                                onGenerateCommitMessage={() => generateGitCommitMessage(selectedModelId)}
+                                onGenerateCommitMessage={async () => {
+                                    const hasValidModel = chat.models.some(
+                                        (m) => m.id === selectedModelId || m.api_id === selectedModelId
+                                    );
+                                    if (!hasValidModel) {
+                                        throw new Error('No model selected');
+                                    }
+                                    return generateGitCommitMessage(selectedModelId);
+                                }}
                                 onCommitPreflight={commitPreflightGit}
                             />
                         </Suspense>

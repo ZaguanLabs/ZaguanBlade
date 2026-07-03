@@ -1360,6 +1360,10 @@ pub async fn git_generate_commit_message_ai(
     state: State<'_, AppState>,
     model_id: String,
 ) -> Result<String, String> {
+    if model_id.trim().is_empty() {
+        return Err("No model selected".to_string());
+    }
+
     let Some(root) = workspace_root(&state) else {
         return Err("No workspace open".to_string());
     };

@@ -707,6 +707,7 @@
     "detachedHeadWarning": "HEAD is detached. Commits may be lost if you switch branches.",
     "resolveConflictsBeforeCommit": "Resolve merge conflicts before committing.",
     "commitMessageRequired": "Commit message is required.",
+    "noModelSelected": "Select a model in the Command Center before generating a commit message.",
     "generateCommitMessage": "Generate commit message with AI",
     "generate": "Generate",
     "generating": "Generating",

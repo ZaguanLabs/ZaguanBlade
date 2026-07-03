@@ -703,6 +703,7 @@
     "detachedHeadWarning": "HEAD está separado. Los commits pueden perderse si cambias de rama.",
     "resolveConflictsBeforeCommit": "Resuelve los conflictos de merge antes de hacer commit.",
     "commitMessageRequired": "El mensaje de commit es obligatorio.",
+    "noModelSelected": "Selecciona un modelo en el Command Center antes de generar un mensaje de commit.",
     "generateCommitMessage": "Generar mensaje de commit con IA",
     "generate": "Generar",
     "generating": "Generando",
