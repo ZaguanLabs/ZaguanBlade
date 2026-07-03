@@ -192,6 +192,10 @@ pub struct IndexReconciliationReport {
     pub files_removed: usize,
     pub duration_ms: u64,
     pub graph_quality: IndexGraphQualityReport,
+    /// M6.1 — true when this reconcile short-circuited via the no-change fast path
+    /// (the worktree proved unchanged since the last fully-healthy reconcile, so no
+    /// discovery/freshness/audit work ran). False for a full reconcile.
+    pub fast_path: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -242,6 +246,18 @@ impl IndexGraphQualityReport {
         }
     }
 }
+
+/// M6.1 — persisted reconcile fast-path checkpoint. Written at the end of a fully
+/// `Fresh` reconcile and reused on the next reconcile when the worktree provably has
+/// not changed. Stored as JSON in the `index_meta` table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReconcileCheckpoint {
+    fingerprint: String,
+    health: IndexHealthSnapshot,
+    graph_quality: IndexGraphQualityReport,
+}
+
+const RECONCILE_CHECKPOINT_KEY: &str = "reconcile_checkpoint_v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SymbolLiteralMatch {
@@ -1270,13 +1286,37 @@ impl LanguageService {
         F: FnMut(&IndexHealthSnapshot),
     {
         let started = std::time::Instant::now();
+
+        // M6.1 — discover the supported-file set ONCE, up front. It feeds the
+        // no-change fast path below and, on a miss, the full reconcile — replacing the
+        // second tree walk that used to happen here.
+        let supported_files = self.supported_language_files(".");
+
+        // M6.1 — no-change fast path. Skipped when `allow_full_rebuild` is false, which
+        // only happens on the forced graph-integrity rebuild recursion (the index was
+        // just cleared, so there is real work to do and no checkpoint to trust).
+        let (fast_report, mut reconcile_fingerprint) = if allow_full_rebuild {
+            self.try_no_change_reconcile(&supported_files, started)
+        } else {
+            (None, self.compute_reconcile_fingerprint(&supported_files))
+        };
+        if let Some(report) = fast_report {
+            self.set_index_health(report.health.clone());
+            progress(&report.health);
+            return Ok(report);
+        }
+        // Guarantee a fingerprint for end-of-reconcile storage even when no checkpoint
+        // existed (cold start) — computed once here, from the pre-reconcile disk state.
+        if reconcile_fingerprint.is_none() {
+            reconcile_fingerprint = self.compute_reconcile_fingerprint(&supported_files);
+        }
+
         let mut health = self.audit_index_health()?;
         health.status = IndexHealthStatus::Checking;
         health.message = "Checking symbol index".to_string();
         self.set_index_health(health.clone());
         progress(&health);
 
-        let supported_files = self.supported_language_files(".");
         let supported_set = supported_files
             .iter()
             .map(String::as_str)
@@ -1662,13 +1702,151 @@ impl LanguageService {
         self.set_index_health(final_health.clone());
         progress(&final_health);
 
+        // M6.1 — persist (or invalidate) the no-change checkpoint. Store ONLY when the
+        // index ended fully Fresh; any partial/stale/graph-broken end clears the prior
+        // checkpoint so the next reopen re-verifies instead of trusting a stale
+        // "Fresh". A vanished-file fingerprint (None) also clears it.
+        if final_health.status == IndexHealthStatus::Fresh && !has_hard_graph_issues {
+            match reconcile_fingerprint {
+                Some(fingerprint) => self.store_reconcile_checkpoint(&ReconcileCheckpoint {
+                    fingerprint,
+                    health: final_health.clone(),
+                    graph_quality: graph_quality.clone(),
+                }),
+                None => self.clear_reconcile_checkpoint(),
+            }
+        } else {
+            self.clear_reconcile_checkpoint();
+        }
+
         Ok(IndexReconciliationReport {
             health: final_health,
             files_indexed,
             files_removed,
             duration_ms: started.elapsed().as_millis() as u64,
             graph_quality,
+            fast_path: false,
         })
+    }
+
+    /// M6.1 — cheap proof-of-no-change fingerprint over the supported-file set: a
+    /// hash of every file's (path, size, mtime, extractor_version) — exactly the
+    /// signals `indexed_file_needs_refresh` trusts to call a file fresh WITHOUT
+    /// reading its contents. Returns None if any file cannot be stat'd (e.g. it
+    /// vanished mid-walk), which forces the full reconcile.
+    fn compute_reconcile_fingerprint(&self, supported_files: &[String]) -> Option<String> {
+        let mut entries: Vec<(&str, u64, i64, Option<u32>)> =
+            Vec::with_capacity(supported_files.len());
+        for file_path in supported_files {
+            let resolved = self.resolve_path(file_path);
+            let metadata = file_index_metadata(&resolved).ok()?;
+            entries.push((
+                file_path.as_str(),
+                metadata.file_size,
+                metadata.modified_at,
+                Self::extractor_version_for_index_file(file_path),
+            ));
+        }
+        // `supported_language_files` order is not guaranteed → sort for determinism.
+        entries.sort();
+        let mut canonical = String::with_capacity(entries.len() * 56);
+        canonical.push_str(&entries.len().to_string());
+        for (path, size, mtime, extractor_version) in &entries {
+            canonical.push('\n');
+            canonical.push_str(path);
+            canonical.push('\u{1f}');
+            canonical.push_str(&size.to_string());
+            canonical.push('\u{1f}');
+            canonical.push_str(&mtime.to_string());
+            canonical.push('\u{1f}');
+            match extractor_version {
+                Some(version) => canonical.push_str(&version.to_string()),
+                None => canonical.push('-'),
+            }
+        }
+        Some(compute_hash(&canonical))
+    }
+
+    /// M6.1 — attempt the no-change fast path. Returns `(Some(report), fingerprint)`
+    /// when the worktree provably has not changed since the last fully-healthy
+    /// reconcile (reusing that snapshot verbatim); otherwise `(None, fingerprint)` to
+    /// fall through to the full reconcile. The returned fingerprint, when present, is
+    /// the freshly-computed one so the caller can reuse it for end-of-reconcile
+    /// storage without walking the tree twice. Fail-safe: every uncertainty (no
+    /// checkpoint, a prior snapshot that was not fully Fresh, a mutated index-file
+    /// count, or an un-stattable file) yields a miss.
+    fn try_no_change_reconcile(
+        &self,
+        supported_files: &[String],
+        started: std::time::Instant,
+    ) -> (Option<IndexReconciliationReport>, Option<String>) {
+        let Some(checkpoint) = self.load_reconcile_checkpoint() else {
+            return (None, None);
+        };
+        let prior = &checkpoint.health;
+        let prior_is_fully_fresh = matches!(prior.status, IndexHealthStatus::Fresh)
+            && prior.stale_files == 0
+            && prior.missing_files == 0
+            && prior.orphaned_files == 0
+            && prior.queued_files == 0;
+        if !prior_is_fully_fresh {
+            return (None, None);
+        }
+        // The index must still hold exactly the files the healthy snapshot recorded. A
+        // cheap COUNT catches any out-of-band index mutation (e.g. a file removed from
+        // the index) that a disk-only fingerprint would miss.
+        match self.symbol_store.indexed_file_count() {
+            Ok(count) if count == prior.indexed_files => {}
+            _ => return (None, None),
+        }
+        let Some(fingerprint) = self.compute_reconcile_fingerprint(supported_files) else {
+            return (None, None);
+        };
+        if fingerprint != checkpoint.fingerprint {
+            // Changed — full path, but hand the fresh fingerprint back for storage.
+            return (None, Some(fingerprint));
+        }
+
+        // Provably unchanged → reuse the last fully-healthy snapshot verbatim.
+        let mut health = checkpoint.health;
+        health.active_workers = 0;
+        health.current_file = None;
+        health.queued_files = 0;
+        health.last_incremental_update_ms = Some(started.elapsed().as_millis() as u64);
+        let report = IndexReconciliationReport {
+            health,
+            files_indexed: 0,
+            files_removed: 0,
+            duration_ms: started.elapsed().as_millis() as u64,
+            graph_quality: checkpoint.graph_quality,
+            fast_path: true,
+        };
+        (Some(report), Some(fingerprint))
+    }
+
+    /// M6.1 — load the persisted reconcile checkpoint (best-effort; any read or
+    /// deserialization failure yields None → full reconcile).
+    fn load_reconcile_checkpoint(&self) -> Option<ReconcileCheckpoint> {
+        let raw = self
+            .symbol_store
+            .get_index_meta(RECONCILE_CHECKPOINT_KEY)
+            .ok()??;
+        serde_json::from_str(&raw).ok()
+    }
+
+    /// M6.1 — persist the reconcile checkpoint (best-effort; a write failure just
+    /// means the next reconcile does full work).
+    fn store_reconcile_checkpoint(&self, checkpoint: &ReconcileCheckpoint) {
+        if let Ok(raw) = serde_json::to_string(checkpoint) {
+            let _ = self
+                .symbol_store
+                .set_index_meta(RECONCILE_CHECKPOINT_KEY, &raw);
+        }
+    }
+
+    /// M6.1 — invalidate the reconcile checkpoint.
+    fn clear_reconcile_checkpoint(&self) {
+        let _ = self.symbol_store.delete_index_meta(RECONCILE_CHECKPOINT_KEY);
     }
 
     pub fn get_file_content(&self, file_path: &str) -> Result<String, LanguageError> {
@@ -15015,6 +15193,108 @@ metadata:
             .iter()
             .any(|result| result.symbol.name == "GitCommitMessage"));
         assert!(service.get_file_symbols_raw("old.ts").unwrap().is_empty());
+    }
+
+    #[test]
+    fn reconcile_stores_a_no_change_checkpoint_when_fully_fresh() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(temp_dir.path().join("a.ts"), "export function alpha() {}").unwrap();
+        fs::write(temp_dir.path().join("b.ts"), "export function beta() {}").unwrap();
+
+        let report = service.reconcile_index().unwrap();
+        assert_eq!(report.health.status, IndexHealthStatus::Fresh);
+        assert!(!report.fast_path, "the first reconcile must do full work");
+
+        // A fully-fresh reconcile persists a checkpoint whose fingerprint matches the
+        // current worktree state.
+        let checkpoint = service
+            .load_reconcile_checkpoint()
+            .expect("checkpoint stored after a fresh reconcile");
+        let current = service
+            .compute_reconcile_fingerprint(&service.supported_language_files("."))
+            .expect("fingerprint computable");
+        assert_eq!(checkpoint.fingerprint, current);
+        assert_eq!(checkpoint.health.status, IndexHealthStatus::Fresh);
+    }
+
+    #[test]
+    fn reconcile_takes_the_fast_path_when_nothing_changed() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(temp_dir.path().join("a.ts"), "export function alpha() {}").unwrap();
+
+        let first = service.reconcile_index().unwrap();
+        assert!(!first.fast_path);
+        assert_eq!(first.health.status, IndexHealthStatus::Fresh);
+
+        let second = service.reconcile_index().unwrap();
+        assert!(
+            second.fast_path,
+            "an unchanged worktree must short-circuit via the fast path"
+        );
+        assert_eq!(second.files_indexed, 0);
+        assert_eq!(second.files_removed, 0);
+        assert_eq!(second.health.status, IndexHealthStatus::Fresh);
+        assert_eq!(second.health.symbol_count, first.health.symbol_count);
+    }
+
+    #[test]
+    fn reconcile_skips_the_fast_path_after_a_file_changes() {
+        let (service, temp_dir) = create_test_service();
+        let file = temp_dir.path().join("a.ts");
+        fs::write(&file, "export function alpha() {}").unwrap();
+
+        let first = service.reconcile_index().unwrap();
+        assert!(!first.fast_path);
+        let fingerprint_before = service
+            .compute_reconcile_fingerprint(&service.supported_language_files("."))
+            .unwrap();
+
+        // Change the file's content (and therefore its size and mtime).
+        fs::write(
+            &file,
+            "export function alpha() {}\nexport function gamma() {}",
+        )
+        .unwrap();
+
+        let fingerprint_after = service
+            .compute_reconcile_fingerprint(&service.supported_language_files("."))
+            .unwrap();
+        assert_ne!(
+            fingerprint_before, fingerprint_after,
+            "a content change must change the fingerprint"
+        );
+
+        let third = service.reconcile_index().unwrap();
+        assert!(
+            !third.fast_path,
+            "a changed worktree must NOT take the fast path"
+        );
+        assert!(third.files_indexed >= 1, "the changed file must be re-indexed");
+        assert_eq!(third.health.status, IndexHealthStatus::Fresh);
+    }
+
+    #[test]
+    fn reconcile_fast_path_is_invalidated_when_the_index_is_cleared() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(temp_dir.path().join("a.ts"), "export function alpha() {}").unwrap();
+
+        service.reconcile_index().unwrap();
+        assert!(service.load_reconcile_checkpoint().is_some());
+
+        // Clearing generated index data must drop the checkpoint so the next reconcile
+        // rebuilds instead of trusting a stale "Fresh".
+        service.symbol_store.clear_generated_index_data().unwrap();
+        assert!(
+            service.load_reconcile_checkpoint().is_none(),
+            "clearing the index must invalidate the fast-path checkpoint"
+        );
+
+        let after_clear = service.reconcile_index().unwrap();
+        assert!(
+            !after_clear.fast_path,
+            "the reconcile after a clear must do full work"
+        );
+        assert!(after_clear.files_indexed >= 1);
     }
 
     #[test]
