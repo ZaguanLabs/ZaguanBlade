@@ -210,12 +210,9 @@ fn compute_line_starts(content: &str) -> Vec<usize> {
 }
 
 fn compute_hash(content: &str) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
-    format!("{:x}", hasher.finish())
+    // M6 CL1 — must match service.rs::compute_hash (both feed the persisted
+    // file_hash). Version-stable across toolchains (was SipHash `DefaultHasher`).
+    crate::stable_hash::stable_hash_hex(content.as_bytes())
 }
 
 #[cfg(test)]

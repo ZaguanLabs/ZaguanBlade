@@ -7720,12 +7720,8 @@ impl<'a> SymbolIdentityResolver<'a> {
 }
 
 fn compute_hash(content: &str) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
-    format!("{:x}", hasher.finish())
+    // M6 CL1 — version-stable across toolchains (was SipHash `DefaultHasher`).
+    crate::stable_hash::stable_hash_hex(content.as_bytes())
 }
 
 fn source_line_count(content: &str) -> usize {
