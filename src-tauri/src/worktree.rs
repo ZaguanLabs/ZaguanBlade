@@ -425,7 +425,9 @@ impl WorktreeSnapshot {
             .filter(|entry| {
                 !entry.is_dir
                     && entry.supported_language
-                    && !entry.hidden
+                    // M6.2 — dotenv files are hidden (dotfiles) but must still be
+                    // indexed; every other hidden path stays excluded.
+                    && (!entry.hidden || is_dotenv_path(&entry.path))
                     && path_in_scope(&entry.path, &scope)
             })
             .map(|entry| entry.path.clone())
@@ -435,6 +437,13 @@ impl WorktreeSnapshot {
 
 fn is_supported_index_path(path: &str) -> bool {
     Language::capability_for_path(path).is_some() || is_translation_resource_path(path)
+}
+
+/// M6.2 — a `.env` / `.env.*` file (by basename). These are hidden dotfiles but are
+/// indexed as key/value config, so discovery includes them despite the hidden flag.
+fn is_dotenv_path(path: &str) -> bool {
+    let file_name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    file_name == ".env" || file_name.starts_with(".env.")
 }
 
 fn is_translation_resource_path(path: &str) -> bool {
@@ -606,6 +615,28 @@ mod tests {
         assert_eq!(language_files.len(), 2);
         assert!(language_files.iter().any(|path| path == "src/main.rs"));
         assert!(language_files.iter().any(|path| path == "src/mod.ts"));
+    }
+
+    #[test]
+    fn dotenv_files_are_discovered_despite_being_hidden() {
+        let root = PathBuf::from("/workspace");
+        let fs = TestFs::new(&root);
+        fs.add_dir(root.join("src"));
+        fs.add_file(root.join("src/main.rs"));
+        fs.add_file(root.join(".env"));
+        fs.add_file(root.join(".env.local"));
+        // A non-dotenv hidden file (still a supported extension) stays excluded.
+        fs.add_file(root.join(".secret.toml"));
+
+        let snapshot = WorktreeSnapshot::build_with_fs(&root, &fs).unwrap();
+        let files = snapshot.supported_language_files(".");
+        assert!(files.iter().any(|path| path == ".env"), "{files:?}");
+        assert!(files.iter().any(|path| path == ".env.local"), "{files:?}");
+        assert!(files.iter().any(|path| path == "src/main.rs"));
+        assert!(
+            !files.iter().any(|path| path == ".secret.toml"),
+            "non-dotenv hidden files stay excluded: {files:?}"
+        );
     }
 
     #[test]

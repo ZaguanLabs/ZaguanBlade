@@ -3856,7 +3856,12 @@ impl LanguageService {
         for entry in entries.flatten() {
             let path = entry.path();
             let file_name = entry.file_name().to_string_lossy().to_string();
-            if file_name.starts_with('.')
+            // M6.2 — dotenv files (`.env`, `.env.local`, …) start with `.` but are
+            // valid key/value config we index; let them through while still ignoring
+            // every other dotfile/dot-dir.
+            let is_dotenv_file =
+                path.is_file() && (file_name == ".env" || file_name.starts_with(".env."));
+            if (file_name.starts_with('.') && !is_dotenv_file)
                 || matches!(
                     file_name.as_str(),
                     "node_modules" | "target" | "dist" | "build" | "vendor"
@@ -12625,9 +12630,13 @@ class B {
     #[test]
     fn test_dot_files_allow_non_indexed_live_sync() {
         assert!(should_allow_non_indexed_live_sync(".gitignore"));
-        assert!(should_allow_non_indexed_live_sync("config/.env.local"));
+        assert!(should_allow_non_indexed_live_sync("config/.prettierrc"));
         assert!(should_allow_non_indexed_live_sync("nested/.dockerignore"));
         assert!(!should_allow_non_indexed_live_sync("src/main.rs"));
+        // M6.2 — dotenv files are now INDEXED (Toml), so they take the normal indexed
+        // sync path rather than the non-indexed dotfile path.
+        assert!(!should_allow_non_indexed_live_sync("config/.env.local"));
+        assert!(!should_allow_non_indexed_live_sync(".env"));
     }
 
     #[test]
@@ -14789,6 +14798,49 @@ export function loadPosts() {
         assert_eq!(health.missing_files, 1);
         assert_eq!(health.stale_files, 1);
         assert_eq!(health.queued_files, 2);
+    }
+
+    #[test]
+    fn discovery_includes_dotenv_files() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(
+            temp_dir.path().join(".env"),
+            "API_KEY=secret\nPORT=8080\n",
+        )
+        .unwrap();
+        fs::write(temp_dir.path().join(".env.local"), "LOCAL_ONLY=1\n").unwrap();
+        fs::write(temp_dir.path().join("app.ts"), "export function app() {}").unwrap();
+        // A non-dotenv dotfile must still be ignored.
+        fs::write(temp_dir.path().join(".gitconfig"), "[user]\n").unwrap();
+
+        let discovered = service.supported_language_files(".");
+        assert!(discovered.iter().any(|p| p == ".env"), "{discovered:?}");
+        assert!(
+            discovered.iter().any(|p| p == ".env.local"),
+            "{discovered:?}"
+        );
+        assert!(discovered.iter().any(|p| p == "app.ts"));
+        assert!(
+            !discovered.iter().any(|p| p == ".gitconfig"),
+            "non-dotenv dotfiles stay ignored: {discovered:?}"
+        );
+    }
+
+    #[test]
+    fn dotenv_file_indexes_key_symbols_end_to_end() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(
+            temp_dir.path().join(".env"),
+            "API_KEY=secret\nDATABASE_URL=postgres://localhost\n",
+        )
+        .unwrap();
+
+        service.index_file(".env").unwrap();
+        let symbols = service.get_file_symbols_raw(".env").unwrap();
+        assert!(
+            symbols.iter().any(|s| s.name == "API_KEY"),
+            "expected env keys as symbols, got {symbols:?}"
+        );
     }
 
     #[test]
