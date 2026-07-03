@@ -1116,10 +1116,10 @@ impl SymbolStore {
 
         {
             let mut delete_relationships =
-                tx.prepare("DELETE FROM symbol_relationships WHERE source_file_path = ?1")?;
+                tx.prepare_cached("DELETE FROM symbol_relationships WHERE source_file_path = ?1")?;
             let mut delete_anchors =
-                tx.prepare("DELETE FROM semantic_anchors WHERE file_path = ?1")?;
-            let mut delete_symbols = tx.prepare("DELETE FROM symbols WHERE file_path = ?1")?;
+                tx.prepare_cached("DELETE FROM semantic_anchors WHERE file_path = ?1")?;
+            let mut delete_symbols = tx.prepare_cached("DELETE FROM symbols WHERE file_path = ?1")?;
 
             for file in files {
                 delete_relationships.execute(params![&file.file_path])?;
@@ -1129,7 +1129,7 @@ impl SymbolStore {
         }
 
         {
-            let mut insert_symbol = tx.prepare(
+            let mut insert_symbol = tx.prepare_cached(
                 r#"
                 INSERT OR REPLACE INTO symbols
                 (id, name, qualified_name, symbol_type, file_path, start_line, start_char, end_line, end_char,
@@ -1163,7 +1163,7 @@ impl SymbolStore {
         }
 
         {
-            let mut insert_anchor = tx.prepare(
+            let mut insert_anchor = tx.prepare_cached(
                 r#"
                 INSERT OR REPLACE INTO semantic_anchors
                 (id, file_path, kind, value, line, character, preview, confidence, indexed_at)
@@ -1189,7 +1189,7 @@ impl SymbolStore {
         }
 
         {
-            let mut insert_relationship = tx.prepare(
+            let mut insert_relationship = tx.prepare_cached(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
                 (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, resolution_strategy, confidence, metadata_json)
@@ -1215,7 +1215,7 @@ impl SymbolStore {
         }
 
         {
-            let mut insert_indexed_file = tx.prepare(
+            let mut insert_indexed_file = tx.prepare_cached(
                 r#"
                 INSERT OR REPLACE INTO indexed_files
                 (file_path, file_hash, indexed_at, symbol_count, file_size, line_count, modified_at, extractor_version)
@@ -1254,14 +1254,14 @@ impl SymbolStore {
 
         {
             let mut delete_relationships =
-                tx.prepare("DELETE FROM symbol_relationships WHERE source_file_path = ?1")?;
+                tx.prepare_cached("DELETE FROM symbol_relationships WHERE source_file_path = ?1")?;
             for file in files {
                 delete_relationships.execute(params![&file.file_path])?;
             }
         }
 
         {
-            let mut insert_relationship = tx.prepare(
+            let mut insert_relationship = tx.prepare_cached(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
                 (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, resolution_strategy, confidence, metadata_json)
@@ -1398,7 +1398,7 @@ impl SymbolStore {
         let tx = conn.transaction()?;
         let mut count = 0usize;
         {
-            let mut update = tx.prepare(
+            let mut update = tx.prepare_cached(
                 r#"
                 UPDATE symbol_relationships
                 SET target_symbol_id = ?1,
