@@ -1,19 +1,7 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
 import type { ComposerSuggestion } from './MentionSuggestions';
 import type { WorkspacePathMatch } from './usePathSuggestions';
-
-// Native textarea undo is broken for controlled inputs under webkit2gtk (React
-// rewrites `.value`, which clears the browser's undo stack), so the composer
-// keeps its own history. Changes within the group window coalesce into one undo
-// step so Ctrl+Z reverts a typing burst, not one character at a time.
-const UNDO_GROUP_MS = 400;
-const UNDO_MAX_ENTRIES = 100;
-
-interface UndoEntry {
-    value: string;
-    start: number;
-    end: number;
-}
+import { ComposerUndoModel } from './composerUndo';
 
 export interface ComposerTextareaHandle {
     focus: () => void;
@@ -74,18 +62,29 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
 }, ref) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const lastScrollHeightRef = useRef<number>(0);
-    const undoStackRef = useRef<UndoEntry[]>([]);
-    const redoStackRef = useRef<UndoEntry[]>([]);
+    // Native textarea undo is broken for controlled inputs (React rewrites
+    // `.value`, clearing the browser's undo stack — facebook/react #17494), so
+    // the composer keeps its own history with Monaco-style word-at-most
+    // grouping. All rules live in ComposerUndoModel (see composerUndo.ts).
+    const undoModelRef = useRef<ComposerUndoModel | null>(null);
+    if (undoModelRef.current === null) {
+        undoModelRef.current = new ComposerUndoModel();
+    }
+    const undoModel = undoModelRef.current;
     const prevTextRef = useRef<string>(text);
-    // Selection as of just BEFORE the current mutation (captured on keydown /
-    // select), so an undo restores the cursor to where the change happened.
+    // Selection just BEFORE the current mutation (captured on keydown/paste,
+    // which fire before the DOM change) — becomes the undo entry's cursor.
     const lastSelectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
-    const lastSnapshotAtRef = useRef<number>(0);
+    // Delete direction of the pending keystroke (Backspace vs Delete both
+    // leave the cursor at the change start, so the diff can't tell them apart).
+    const deleteDirectionRef = useRef<'backward' | 'forward' | null>(null);
+    const isComposingRef = useRef(false);
     const applyingHistoryRef = useRef(false);
     const pendingSelectionRef = useRef<{ start: number; end: number } | null>(null);
 
-    // Observes ALL text changes — typing and programmatic (prefill, mention
-    // insert, history navigation, clear-on-send) — so every path is undoable.
+    // Handles cursor restoration after undo/redo, and records PROGRAMMATIC
+    // text changes (prefill, mention insert, history navigation, clear-on-send
+    // — anything that did not come through onChange) as isolated undo steps.
     useEffect(() => {
         const textarea = textareaRef.current;
         if (pendingSelectionRef.current && textarea) {
@@ -102,64 +101,50 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
             prevTextRef.current = text;
             return;
         }
-        const now = Date.now();
-        if (now - lastSnapshotAtRef.current > UNDO_GROUP_MS || undoStackRef.current.length === 0) {
-            const prev = prevTextRef.current;
-            undoStackRef.current.push({
-                value: prev,
-                start: Math.min(lastSelectionRef.current.start, prev.length),
-                end: Math.min(lastSelectionRef.current.end, prev.length),
-            });
-            if (undoStackRef.current.length > UNDO_MAX_ENTRIES) {
-                undoStackRef.current.shift();
-            }
-        }
-        lastSnapshotAtRef.current = now;
-        redoStackRef.current = [];
+        undoModel.recordProgrammaticChange(prevTextRef.current, text, lastSelectionRef.current);
         prevTextRef.current = text;
-    }, [text]);
+    }, [text, undoModel]);
 
-    const applyHistoryEntry = useCallback((entry: UndoEntry, pushOnto: UndoEntry[]) => {
-        const textarea = textareaRef.current;
+    const applyHistoryEntry = useCallback((entry: { value: string; start: number; end: number }) => {
         if (entry.value === prevTextRef.current) {
-            // Value identical (a coalesced burst netted out to no change):
-            // setText would not re-render, so apply only the cursor and leave
-            // the applying/pending flags untouched to avoid dangling state.
+            // Identical value: setText would not re-render, so apply only the
+            // cursor and leave the applying/pending flags untouched.
+            const textarea = textareaRef.current;
             if (textarea) {
                 const max = textarea.value.length;
                 textarea.setSelectionRange(Math.min(entry.start, max), Math.min(entry.end, max));
             }
-            lastSnapshotAtRef.current = 0;
             return;
         }
-        pushOnto.push({
-            value: prevTextRef.current,
-            start: textarea?.selectionStart ?? prevTextRef.current.length,
-            end: textarea?.selectionEnd ?? prevTextRef.current.length,
-        });
         applyingHistoryRef.current = true;
         pendingSelectionRef.current = { start: entry.start, end: entry.end };
-        // A change right after undo/redo must start a fresh group, not coalesce.
-        lastSnapshotAtRef.current = 0;
         setText(entry.value);
         onTriggerChange(null);
     }, [onTriggerChange, setText]);
 
+    const currentSnapshot = useCallback(() => {
+        const textarea = textareaRef.current;
+        const value = prevTextRef.current;
+        return {
+            value,
+            start: Math.min(textarea?.selectionStart ?? value.length, value.length),
+            end: Math.min(textarea?.selectionEnd ?? value.length, value.length),
+        };
+    }, []);
+
     const undo = useCallback(() => {
-        const entry = undoStackRef.current.pop();
-        if (entry === undefined) {
-            return;
+        const entry = undoModel.undo(currentSnapshot());
+        if (entry) {
+            applyHistoryEntry(entry);
         }
-        applyHistoryEntry(entry, redoStackRef.current);
-    }, [applyHistoryEntry]);
+    }, [applyHistoryEntry, currentSnapshot, undoModel]);
 
     const redo = useCallback(() => {
-        const entry = redoStackRef.current.pop();
-        if (entry === undefined) {
-            return;
+        const entry = undoModel.redo(currentSnapshot());
+        if (entry) {
+            applyHistoryEntry(entry);
         }
-        applyHistoryEntry(entry, undoStackRef.current);
-    }, [applyHistoryEntry]);
+    }, [applyHistoryEntry, currentSnapshot, undoModel]);
 
     const resize = useCallback(() => {
         const textarea = textareaRef.current;
@@ -248,9 +233,30 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
             value={text}
             onChange={(event) => {
                 const nextText = event.currentTarget.value;
+                undoModel.recordChange(
+                    prevTextRef.current,
+                    nextText,
+                    lastSelectionRef.current,
+                    deleteDirectionRef.current,
+                    isComposingRef.current,
+                );
+                prevTextRef.current = nextText;
                 setText(nextText);
                 const trigger = detectPathTrigger(nextText, event.currentTarget.selectionStart);
                 onTriggerChange(trigger?.query ?? null);
+            }}
+            onCompositionStart={() => {
+                isComposingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+                isComposingRef.current = false;
+                // The committed composition is one atomic undo step; following
+                // input starts a fresh group.
+                undoModel.closeGroup();
+            }}
+            onBlur={() => {
+                // Focus loss ends the current undo group (Lexical terminator).
+                undoModel.closeGroup();
             }}
             onPaste={handlePaste}
             onKeyDown={(event) => {
@@ -260,6 +266,11 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
                     start: event.currentTarget.selectionStart,
                     end: event.currentTarget.selectionEnd,
                 };
+                deleteDirectionRef.current = event.key === 'Backspace'
+                    ? 'backward'
+                    : event.key === 'Delete'
+                        ? 'forward'
+                        : null;
                 const combo = event.ctrlKey || event.metaKey;
                 if (combo && !event.altKey && event.key.toLowerCase() === 'z') {
                     // Always claim the shortcut: webkit's native undo fights the
