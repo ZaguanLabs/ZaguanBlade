@@ -548,6 +548,7 @@ mod tests {
         SemanticPatchWrite,
         ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
     };
+    use super::normalize_session_input;
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
     use crate::tree_sitter::{Position, Range, Symbol, SymbolType};
@@ -555,6 +556,21 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
     use tempfile::tempdir;
+
+    #[test]
+    fn session_input_normalizes_ctrl_c_spellings() {
+        // Literal-text spellings become the real ETX byte (observed: deepseek
+        // sent backslash-x-0-3 as 4 chars, and the PTY got no interrupt).
+        assert_eq!(normalize_session_input("\\x03"), "\u{0003}");
+        assert_eq!(normalize_session_input("\\u0003"), "\u{0003}");
+        assert_eq!(normalize_session_input("^C"), "\u{0003}");
+        // The real byte passes through untouched.
+        assert_eq!(normalize_session_input("\u{0003}"), "\u{0003}");
+        // Ordinary input is never rewritten, even when it CONTAINS a spelling.
+        assert_eq!(normalize_session_input("echo ^Cfoo\n"), "echo ^Cfoo\n");
+        assert_eq!(normalize_session_input("hello\n"), "hello\n");
+        assert_eq!(normalize_session_input(""), "");
+    }
 
     fn test_symbol(
         id: &str,
@@ -1861,6 +1877,17 @@ pub fn execute_tool(workspace_root: &Path, tool_name: &str, raw_args: &str) -> T
     execute_tool_with_editor::<tauri::Wry>(workspace_root, tool_name, raw_args, None, None)
 }
 
+/// Models spell Ctrl-C several ways, and JSON has no `\x` escape — so `"\x03"`
+/// and sometimes a literal backslash-u-0003 arrive as TEXT (observed with deepseek-v4-pro,
+/// which sent backslash-x-0-3 and the PTY received four harmless characters).
+/// Normalize the common interrupt spellings to the real ETX byte so Ctrl-C fires.
+fn normalize_session_input(input: &str) -> &str {
+    match input {
+        "\\x03" | "\\u0003" | "^C" => "\u{0003}",
+        other => other,
+    }
+}
+
 /// Poll / write-stdin / kill a background command started by
 /// `run_command(background:true)`. Non-gated inline tool: the underlying command
 /// was already approved when it started. Reuses the `TerminalManager` background
@@ -1882,7 +1909,7 @@ fn command_session_tool<R: tauri::Runtime>(
         Some(s) if !s.trim().is_empty() => s.to_string(),
         _ => return ToolResult::err("command_session requires a non-empty 'session_id'".to_string()),
     };
-    let input = args.get("input").and_then(|v| v.as_str()).unwrap_or("");
+    let input = normalize_session_input(args.get("input").and_then(|v| v.as_str()).unwrap_or(""));
     let kill = args.get("kill").and_then(|v| v.as_bool()).unwrap_or(false);
     let wait_ms = args
         .get("wait_ms")
