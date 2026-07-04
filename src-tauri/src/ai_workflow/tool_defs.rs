@@ -571,7 +571,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "run_command",
             "function": {
                 "name": "run_command",
-                "description": "Execute command (requires approval). Prefer structured form with program+args. Use command only when shell behavior is required.",
+                "description": "Execute command (requires approval). Prefer structured form with program+args. Use command only when shell behavior is required. For long-running jobs (dev servers, watchers, builds) set background:true so control returns to you after wait_ms with a session_id you can drive via command_session.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -584,9 +584,31 @@ pub fn get_tool_definitions() -> Vec<Value> {
                             "description": "Arguments for program in structured non-shell mode"
                         },
                         "shell": { "type": "boolean", "description": "Force shell execution. Defaults to false when program is used, true for legacy command" },
-                        "cwd": { "type": "string", "description": "Working directory" }
+                        "cwd": { "type": "string", "description": "Working directory" },
+                        "background": { "type": "boolean", "description": "Run detached: if the command is still running after wait_ms, return a session_id instead of blocking. Poll/write/kill it with command_session. Default false." },
+                        "wait_ms": { "type": "number", "description": "How long (ms) to wait for the command to finish before backgrounding it. Default 10000, clamped 250..30000. Only used when background is true." }
                     },
                     "required": [],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "name": "command_session",
+            "function": {
+                "name": "command_session",
+                "description": "Interact with a background command started by run_command(background:true). Poll for new output (default), write to its stdin, send Ctrl-C, or force-kill it. No approval needed — the command was approved when it started.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": { "type": "string", "description": "The session_id returned by a backgrounded run_command." },
+                        "input": { "type": "string", "description": "Bytes to write to the process stdin. Empty (default) = poll without writing. Use \"\\u0003\" to send Ctrl-C (interrupt)." },
+                        "kill": { "type": "boolean", "description": "Force-kill the process, then return its final output. Default false." },
+                        "wait_ms": { "type": "number", "description": "How long (ms) to wait for new output before returning. Default 3000, clamped 250..30000." }
+                    },
+                    "required": ["session_id"],
                     "additionalProperties": false
                 }
             }

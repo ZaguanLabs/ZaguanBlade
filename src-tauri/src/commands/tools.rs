@@ -55,7 +55,7 @@ fn cleanup_newlines_regex() -> &'static Regex {
 
 /// Strip ANSI escape codes and BLADE command scaffolding from terminal output
 /// for clean display in chat and AI context.
-fn strip_ansi_codes(input: &str) -> String {
+pub(crate) fn strip_ansi_codes(input: &str) -> String {
     // 1. Strip ANSI escape sequences
     let result = ansi_regex().replace_all(input, "").to_string();
 

@@ -1861,6 +1861,110 @@ pub fn execute_tool(workspace_root: &Path, tool_name: &str, raw_args: &str) -> T
     execute_tool_with_editor::<tauri::Wry>(workspace_root, tool_name, raw_args, None, None)
 }
 
+/// Poll / write-stdin / kill a background command started by
+/// `run_command(background:true)`. Non-gated inline tool: the underlying command
+/// was already approved when it started. Reuses the `TerminalManager` background
+/// registry and its write/kill primitives; blocks at most `wait_ms` (clamped to
+/// stay under the 45s inline-tool ceiling).
+fn command_session_tool<R: tauri::Runtime>(
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
+    use crate::terminal::{BgStatus, TerminalManager, BG_POLL_MAX_WAIT_MS};
+    use tauri::Manager;
+
+    let handle = match app_handle {
+        Some(h) => h,
+        None => return ToolResult::err("command_session is unavailable in this context".to_string()),
+    };
+
+    let session_id = match args.get("session_id").and_then(|v| v.as_str()) {
+        Some(s) if !s.trim().is_empty() => s.to_string(),
+        _ => return ToolResult::err("command_session requires a non-empty 'session_id'".to_string()),
+    };
+    let input = args.get("input").and_then(|v| v.as_str()).unwrap_or("");
+    let kill = args.get("kill").and_then(|v| v.as_bool()).unwrap_or(false);
+    let wait_ms = args
+        .get("wait_ms")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(3000)
+        .clamp(250, BG_POLL_MAX_WAIT_MS);
+
+    let tm = handle.state::<TerminalManager>();
+
+    // Existence check WITHOUT draining output.
+    let (mut status, started_secs) = match tm.bg_peek(&session_id) {
+        Some(v) => v,
+        None => {
+            return ToolResult::err(format!(
+                "Unknown session id \"{session_id}\". No background command is registered under that id."
+            ))
+        }
+    };
+
+    // Apply the requested action before polling for its effect.
+    if kill {
+        if let Err(e) = tm.bg_kill(&session_id) {
+            return ToolResult::err(format!("Failed to kill session \"{session_id}\": {e}"));
+        }
+    } else if !input.is_empty() {
+        match tm.bg_write(&session_id, input) {
+            Ok(()) => {
+                // Give the process a moment to react before we start reading.
+                std::thread::sleep(Duration::from_millis(150));
+            }
+            Err(e) => {
+                // A write failure usually just means the process already exited and
+                // its stdin is gone (e.g. a Ctrl-C that ended it). Fall through to
+                // poll and report the exit + final tail rather than a confusing
+                // error; only surface the error if the process is genuinely alive.
+                if matches!(tm.bg_peek(&session_id), Some((BgStatus::Running, _))) {
+                    return ToolResult::err(format!(
+                        "Failed to write to session \"{session_id}\": {e}"
+                    ));
+                }
+            }
+        }
+    }
+
+    // Poll until we have new output, the process exits, or we hit the deadline.
+    let deadline = Instant::now() + Duration::from_millis(wait_ms);
+    let mut collected = String::new();
+    loop {
+        match tm.bg_poll(&session_id) {
+            Some((delta, new_status)) => {
+                if !delta.is_empty() {
+                    collected.push_str(&delta);
+                }
+                status = new_status;
+            }
+            None => break, // vanished mid-poll
+        }
+        let done = matches!(status, BgStatus::Exited(_));
+        if !collected.is_empty() || done || Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let mut body = format!("Wall time: {started_secs} seconds\n");
+    match status {
+        BgStatus::Running => {
+            body.push_str(&format!("Process running with session ID {session_id}\n"));
+        }
+        BgStatus::Exited(code) => {
+            body.push_str(&format!("Process exited with code {code}\n"));
+        }
+    }
+    body.push_str("Output:\n");
+    if collected.is_empty() {
+        body.push_str("(no new output)\n");
+    } else {
+        body.push_str(&crate::commands::tools::strip_ansi_codes(&collected));
+    }
+    ToolResult::ok(body)
+}
+
 pub fn execute_tool_with_editor<R: tauri::Runtime>(
     workspace_root: &Path,
     tool_name: &str,
@@ -1940,6 +2044,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "read_many_files" => read_many_files(workspace_root, &args),
         "batch" => batch(workspace_root, &args, editor_state),
         "codebase_investigator" => codebase_investigator(workspace_root, &args, app_handle),
+        "command_session" => command_session_tool(&args, app_handle),
 
         // New file system tools
         "find_files" => find_files(workspace_root, &args),

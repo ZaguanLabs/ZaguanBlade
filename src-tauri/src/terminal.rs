@@ -62,12 +62,129 @@ pub struct PendingTerminalWrite {
     hidden: bool,
 }
 
+/// Upper bound on retained background-command output (Codex parity: 1 MiB).
+/// Keeps a live long-runner from growing an unbounded buffer and OOMing the app.
+const BG_OUTPUT_MAX_BYTES: usize = 1024 * 1024;
+/// Clamp for how long a `command_session` poll may block (must stay under the
+/// 45s inline-tool execution ceiling — see tool_execution/executor.rs).
+pub const BG_POLL_MAX_WAIT_MS: u64 = 30_000;
+
+/// Byte-capped output buffer for a background command.
+///
+/// Appended by the reader thread and drained by `command_session` polls. When
+/// the retained text exceeds the cap, the OLDEST bytes are dropped (tail-biased)
+/// and counted in `dropped` so absolute read offsets stay correct — a reader's
+/// cursor is an absolute byte position into the full (pre-truncation) stream.
+/// (A head+tail variant that preserves early banners is a Phase 2 refinement.)
+#[derive(Debug)]
+pub struct BgOutputBuffer {
+    text: String,
+    /// Total bytes ever appended (monotonic; == absolute end offset).
+    total: usize,
+    /// Bytes dropped from the front == absolute offset of `text[0]`.
+    dropped: usize,
+    /// Cap on retained bytes. `usize::MAX` == unbounded (blocking commands, which
+    /// must return their full output exactly as before this feature existed).
+    max_bytes: usize,
+}
+
+impl Default for BgOutputBuffer {
+    fn default() -> Self {
+        Self::new(BG_OUTPUT_MAX_BYTES)
+    }
+}
+
+impl BgOutputBuffer {
+    fn new(max_bytes: usize) -> Self {
+        Self {
+            text: String::new(),
+            total: 0,
+            dropped: 0,
+            max_bytes,
+        }
+    }
+
+    fn append(&mut self, chunk: &str) {
+        self.text.push_str(chunk);
+        self.total += chunk.len();
+        if self.text.len() > self.max_bytes {
+            let overflow = self.text.len() - self.max_bytes;
+            // Drop whole chars from the front so we never split a UTF-8 boundary.
+            let mut cut = overflow;
+            while cut < self.text.len() && !self.text.is_char_boundary(cut) {
+                cut += 1;
+            }
+            self.text.drain(..cut);
+            self.dropped += cut;
+        }
+    }
+
+    /// Full retained text (for the terminal exit events). At most the cap; if
+    /// any bytes were dropped, a notice is prepended so truncation is never silent.
+    fn snapshot(&self) -> String {
+        if self.dropped > 0 {
+            let mut out = format!(
+                "[… {} bytes of earlier output truncated …]\n",
+                self.dropped
+            );
+            out.push_str(&self.text);
+            out
+        } else {
+            self.text.clone()
+        }
+    }
+
+    /// Absolute count of all bytes ever appended (== end offset of the stream).
+    fn total_appended(&self) -> usize {
+        self.total
+    }
+
+    /// Return output produced since absolute offset `cursor`, and the new cursor.
+    /// If `cursor` points into already-dropped bytes, returns everything retained
+    /// with a truncation notice and advances the cursor past the gap.
+    fn read_from(&self, cursor: usize) -> (String, usize) {
+        if cursor >= self.total {
+            return (String::new(), self.total);
+        }
+        if cursor < self.dropped {
+            let omitted = self.dropped - cursor;
+            let mut out = format!("[… {omitted} bytes of earlier output truncated …]\n");
+            out.push_str(&self.text);
+            return (out, self.total);
+        }
+        let start = cursor - self.dropped;
+        (self.text[start..].to_string(), self.total)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum BgStatus {
+    Running,
+    Exited(i32),
+}
+
+/// A backgrounded command the model can re-attach to by `session_id`.
+/// The `buffer` Arc is shared with the still-running reader thread, so polls see
+/// live output; the entry is retained after exit so a final poll gets the tail
+/// and the real exit code.
+pub struct BgJob {
+    pub terminal_id: String,
+    pub pid: Option<u32>,
+    pub buffer: Arc<Mutex<BgOutputBuffer>>,
+    /// Absolute byte offset already delivered to the model.
+    pub consumed: usize,
+    pub status: BgStatus,
+    pub started_at: Instant,
+}
+
 pub struct TerminalManager {
     // Map of Terminal ID -> PtyState
     pub ptys: Arc<Mutex<HashMap<String, PtyState>>>,
     pub pending_writes: Arc<Mutex<HashMap<String, Vec<PendingTerminalWrite>>>>,
     pub external_killers: Arc<Mutex<HashMap<String, Box<dyn ChildKiller + Send + Sync>>>>,
     pub external_writers: Arc<Mutex<HashMap<String, Box<dyn Write + Send>>>>,
+    /// Background AI-command sessions, keyed by `session_id` (== terminal_id).
+    pub bg_jobs: Arc<Mutex<HashMap<String, BgJob>>>,
 }
 
 impl TerminalManager {
@@ -77,7 +194,66 @@ impl TerminalManager {
             pending_writes: Arc::new(Mutex::new(HashMap::new())),
             external_killers: Arc::new(Mutex::new(HashMap::new())),
             external_writers: Arc::new(Mutex::new(HashMap::new())),
+            bg_jobs: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Drain new output for a background session and its current status.
+    /// Advances the stored cursor. Returns `None` if the session is unknown.
+    pub fn bg_poll(&self, session_id: &str) -> Option<(String, BgStatus)> {
+        let (buffer, consumed, status) = {
+            let jobs = self.bg_jobs.lock().ok()?;
+            let job = jobs.get(session_id)?;
+            (job.buffer.clone(), job.consumed, job.status.clone())
+        };
+        // Read without holding the registry lock.
+        let (delta, new_consumed) = match buffer.lock() {
+            Ok(buf) => buf.read_from(consumed),
+            Err(_) => (String::new(), consumed),
+        };
+        if new_consumed != consumed {
+            if let Ok(mut jobs) = self.bg_jobs.lock() {
+                if let Some(job) = jobs.get_mut(session_id) {
+                    job.consumed = new_consumed;
+                }
+            }
+        }
+        Some((delta, status))
+    }
+
+    /// Write bytes to a background session's stdin (PTY). `"\u{0003}"` = Ctrl-C.
+    pub fn bg_write(&self, session_id: &str, input: &str) -> Result<(), String> {
+        let mut writers = self
+            .external_writers
+            .lock()
+            .map_err(|e| e.to_string())?;
+        let writer = writers
+            .get_mut(session_id)
+            .ok_or_else(|| format!("session '{session_id}' is no longer writable (process ended?)"))?;
+        writer
+            .write_all(input.as_bytes())
+            .map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())
+    }
+
+    /// Force-kill a background session's process.
+    pub fn bg_kill(&self, session_id: &str) -> Result<(), String> {
+        let mut killers = self
+            .external_killers
+            .lock()
+            .map_err(|e| e.to_string())?;
+        match killers.get_mut(session_id) {
+            Some(killer) => killer.kill().map_err(|e| e.to_string()),
+            None => Ok(()), // already exited; nothing to kill
+        }
+    }
+
+    /// Peek a background session's status and elapsed wall-time (seconds) WITHOUT
+    /// draining its output. Returns `None` if the session is unknown.
+    pub fn bg_peek(&self, session_id: &str) -> Option<(BgStatus, u64)> {
+        let jobs = self.bg_jobs.lock().ok()?;
+        let job = jobs.get(session_id)?;
+        Some((job.status.clone(), job.started_at.elapsed().as_secs()))
     }
 }
 
@@ -1285,6 +1461,7 @@ pub async fn execute_terminal_command(
     let external_killers = terminal_manager.external_killers.clone();
     let external_writers = terminal_manager.external_writers.clone();
     let pending_writes = terminal_manager.pending_writes.clone();
+    let bg_jobs = terminal_manager.bg_jobs.clone();
 
     tokio::task::spawn_blocking(move || {
         let pty_system = NativePtySystem::default();
@@ -1331,7 +1508,15 @@ pub async fn execute_terminal_command(
         }
 
         thread::spawn(move || {
-            let output_buffer = Arc::new(Mutex::new(String::new()));
+            // Blocking commands return their full output (unbounded, as before this
+            // feature). Only background-eligible commands get the memory cap, since
+            // they may stream indefinitely.
+            let buffer_cap = if blocking {
+                usize::MAX
+            } else {
+                BG_OUTPUT_MAX_BYTES
+            };
+            let output_buffer = Arc::new(Mutex::new(BgOutputBuffer::new(buffer_cap)));
             let reader_output = output_buffer.clone();
             let reader_app = app_handle.clone();
             let reader_terminal_id = terminal_id.clone();
@@ -1342,7 +1527,7 @@ pub async fn execute_terminal_command(
                         Ok(n) if n > 0 => {
                             let output = String::from_utf8_lossy(&buffer[..n]).to_string();
                             if let Ok(mut collected) = reader_output.lock() {
-                                collected.push_str(&output);
+                                collected.append(&output);
                             }
                             emit_terminal_output(&reader_app, &reader_terminal_id, output);
                         }
@@ -1384,18 +1569,44 @@ pub async fn execute_terminal_command(
             };
 
             if detached {
-                let pid = child
-                    .process_id()
+                let pid_num = child.process_id();
+                let pid = pid_num
                     .map(|pid| pid.to_string())
                     .unwrap_or_else(|| "unknown".to_string());
-                let mut output = output_buffer
-                    .lock()
-                    .map(|buffer| buffer.clone())
-                    .unwrap_or_default();
+                // Snapshot text AND the offset it ends at under one lock, so the
+                // first command_session poll resumes exactly where this snapshot
+                // stops — no duplicated and no dropped bytes across the handoff.
+                let (mut output, consumed_at_detach) = match output_buffer.lock() {
+                    Ok(buffer) => (buffer.snapshot(), buffer.total_appended()),
+                    Err(_) => (String::new(), 0),
+                };
                 if !output.ends_with('\n') && !output.is_empty() {
                     output.push('\n');
                 }
+                // Keep this EXACT line — the frontend detects detach by substring
+                // `[run_command] detached pid=` (Terminal.tsx, useCommandExecution.ts).
                 output.push_str(&format!("[run_command] detached pid={pid}\n"));
+                // Give the model the handle + how to drive it.
+                output.push_str(&format!(
+                    "[background] Command is still running. session_id=\"{terminal_id}\". \
+                     Poll for new output, write to stdin, or stop it with \
+                     command_session(session_id=\"{terminal_id}\").\n"
+                ));
+
+                // Register the background job so command_session can re-attach.
+                if let Ok(mut jobs) = bg_jobs.lock() {
+                    jobs.insert(
+                        terminal_id.clone(),
+                        BgJob {
+                            terminal_id: terminal_id.clone(),
+                            pid: pid_num,
+                            buffer: output_buffer.clone(),
+                            consumed: consumed_at_detach,
+                            status: BgStatus::Running,
+                            started_at: Instant::now(),
+                        },
+                    );
+                }
 
                 let _ = app_handle.emit(
                     "blade-cmd-exited",
@@ -1422,6 +1633,13 @@ pub async fn execute_terminal_command(
                 if let Ok(mut killers) = external_killers.lock() {
                     killers.remove(&terminal_id);
                 }
+                // Mark the session finished but RETAIN it so a final poll can read
+                // the tail + the real exit code.
+                if let Ok(mut jobs) = bg_jobs.lock() {
+                    if let Some(job) = jobs.get_mut(&terminal_id) {
+                        job.status = BgStatus::Exited(real_exit_code);
+                    }
+                }
                 emit_terminal_exit(&app_handle, terminal_id.clone(), real_exit_code);
                 blade_event_scheduler::queue_refresh_explorer(&app_handle);
                 return;
@@ -1430,7 +1648,7 @@ pub async fn execute_terminal_command(
             let _ = reader_handle.join();
             let output = output_buffer
                 .lock()
-                .map(|buffer| buffer.clone())
+                .map(|buffer| buffer.snapshot())
                 .unwrap_or_default();
 
             let _ = app_handle.emit(
@@ -1473,5 +1691,80 @@ pub fn cancel_command_execution(call_id: String, state: tauri::State<'_, crate::
         true
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod bg_buffer_tests {
+    use super::{BgOutputBuffer, BG_OUTPUT_MAX_BYTES};
+
+    #[test]
+    fn read_from_returns_only_new_bytes() {
+        let mut buf = BgOutputBuffer::default();
+        buf.append("hello");
+        let (delta, cursor) = buf.read_from(0);
+        assert_eq!(delta, "hello");
+        assert_eq!(cursor, 5);
+
+        // Re-reading at the cursor yields nothing.
+        assert_eq!(buf.read_from(cursor), (String::new(), 5));
+
+        buf.append(" world");
+        let (delta2, cursor2) = buf.read_from(cursor);
+        assert_eq!(delta2, " world");
+        assert_eq!(cursor2, 11);
+    }
+
+    #[test]
+    fn read_past_end_is_empty() {
+        let mut buf = BgOutputBuffer::default();
+        buf.append("abc");
+        assert_eq!(buf.read_from(99), (String::new(), 3));
+    }
+
+    #[test]
+    fn overflow_drops_oldest_and_keeps_offsets_correct() {
+        let mut buf = BgOutputBuffer::default();
+        let big = "x".repeat(BG_OUTPUT_MAX_BYTES + 4096);
+        buf.append(&big);
+        // Never retains more than the cap.
+        assert!(buf.text.len() <= BG_OUTPUT_MAX_BYTES);
+        // Total is the full stream length; some bytes were dropped from the front.
+        assert_eq!(buf.total_appended(), big.len());
+        assert!(buf.dropped > 0);
+
+        // A cursor inside the dropped region gets a truncation notice + the tail,
+        // and is advanced to the true end.
+        let (delta, cursor) = buf.read_from(0);
+        assert!(delta.starts_with("[… "));
+        assert!(delta.contains("truncated"));
+        assert_eq!(cursor, big.len());
+
+        // A fresh append is then readable as a clean delta from the new cursor.
+        buf.append("tail");
+        let (delta2, cursor2) = buf.read_from(cursor);
+        assert_eq!(delta2, "tail");
+        assert_eq!(cursor2, big.len() + 4);
+    }
+
+    #[test]
+    fn unbounded_buffer_never_drops() {
+        // Blocking commands use an unbounded buffer and must keep their full output.
+        let mut buf = BgOutputBuffer::new(usize::MAX);
+        let big = "y".repeat(BG_OUTPUT_MAX_BYTES + 8192);
+        buf.append(&big);
+        assert_eq!(buf.dropped, 0);
+        assert_eq!(buf.text.len(), big.len());
+        // snapshot() returns everything with no truncation notice.
+        assert_eq!(buf.snapshot(), big);
+    }
+
+    #[test]
+    fn snapshot_notes_truncation_when_capped() {
+        let mut buf = BgOutputBuffer::default();
+        buf.append(&"z".repeat(BG_OUTPUT_MAX_BYTES + 4096));
+        let snap = buf.snapshot();
+        assert!(snap.starts_with("[… "));
+        assert!(snap.contains("truncated"));
     }
 }

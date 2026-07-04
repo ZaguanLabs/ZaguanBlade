@@ -607,6 +607,14 @@ impl BladeWsClient {
                 "context_pack_request".to_string(),
                 serde_json::Value::Bool(true),
             );
+            // Declares support for backgrounding `run_command` (the `background` /
+            // `wait_ms` params) and the `command_session` poll/write/kill tool.
+            // zcoderd must gate advertising those to the model on this keyword, so
+            // older clients without the handler never receive a command_session call.
+            capabilities.insert(
+                "background_commands".to_string(),
+                serde_json::Value::Bool(true),
+            );
 
             let auth_msg = WsBaseMessage {
                 id: "auth-1".to_string(),

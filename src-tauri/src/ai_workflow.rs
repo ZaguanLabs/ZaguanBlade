@@ -1184,7 +1184,7 @@ fn parse_run_command_args(raw_args: &str) -> Result<ParsedRunCommandArgs, String
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let blocking = obj
+    let mut blocking = obj
         .get("blocking")
         .or_else(|| obj.get("Blocking"))
         .and_then(|v| match v {
@@ -1194,14 +1194,34 @@ fn parse_run_command_args(raw_args: &str) -> Result<ParsedRunCommandArgs, String
         })
         .unwrap_or(true);
 
+    // `background` is the model-facing alias (it's in the tool schema); it means
+    // "don't block" == `blocking:false`. An explicit `background:false` never
+    // forces blocking on, so it composes with the legacy `blocking` flag.
+    if obj
+        .get("background")
+        .or_else(|| obj.get("Background"))
+        .and_then(|v| match v {
+            Value::Bool(b) => Some(*b),
+            Value::String(s) => s.parse::<bool>().ok(),
+            _ => None,
+        })
+        .unwrap_or(false)
+    {
+        blocking = false;
+    }
+
     let wait_ms_before_async = obj
-        .get("wait_ms_before_async")
+        .get("wait_ms")
+        .or_else(|| obj.get("wait_ms_before_async"))
         .or_else(|| obj.get("WaitMsBeforeAsync"))
         .and_then(|v| match v {
             Value::Number(n) => n.as_u64(),
             Value::String(s) => s.parse::<u64>().ok(),
             _ => None,
-        });
+        })
+        .map(|ms| ms.clamp(250, 30_000))
+        // Documented default when backgrounding without an explicit wait.
+        .or(if blocking { None } else { Some(10_000) });
 
     Ok(ParsedRunCommandArgs {
         command,
