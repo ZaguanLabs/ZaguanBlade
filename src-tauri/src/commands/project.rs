@@ -65,6 +65,14 @@ pub async fn graceful_shutdown_with_state(
     crate::commands::chat::graceful_close_active_chat_session(state.inner()).await;
     state.ws_connection.disconnect().await;
 
+    // Kill any lingering background AI commands so they don't outlive the app.
+    {
+        use tauri::Manager;
+        app_handle
+            .state::<crate::terminal::TerminalManager>()
+            .terminate_all_bg_jobs();
+    }
+
     app_handle.exit(0);
     Ok(())
 }

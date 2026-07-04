@@ -68,6 +68,9 @@ const BG_OUTPUT_MAX_BYTES: usize = 1024 * 1024;
 /// Clamp for how long a `command_session` poll may block (must stay under the
 /// 45s inline-tool execution ceiling — see tool_execution/executor.rs).
 pub const BG_POLL_MAX_WAIT_MS: u64 = 30_000;
+/// Max concurrent background sessions retained before the oldest is evicted.
+/// Desktop-appropriate (Codex uses 64 server-side); bounds registry growth.
+const MAX_BG_JOBS: usize = 32;
 
 /// Byte-capped output buffer for a background command.
 ///
@@ -177,6 +180,21 @@ pub struct BgJob {
     pub started_at: Instant,
 }
 
+/// Choose which session to evict when the registry is at capacity. Prefers the
+/// oldest already-exited job (cheap — already dead); if all are running, the
+/// oldest by start time (which the caller then kills). Returns `None` if there
+/// is still room (`len < cap`).
+fn select_eviction_victim(jobs: &HashMap<String, BgJob>, cap: usize) -> Option<String> {
+    if jobs.len() < cap {
+        return None;
+    }
+    jobs.values()
+        .filter(|j| matches!(j.status, BgStatus::Exited(_)))
+        .min_by_key(|j| j.started_at)
+        .or_else(|| jobs.values().min_by_key(|j| j.started_at))
+        .map(|j| j.terminal_id.clone())
+}
+
 pub struct TerminalManager {
     // Map of Terminal ID -> PtyState
     pub ptys: Arc<Mutex<HashMap<String, PtyState>>>,
@@ -254,6 +272,30 @@ impl TerminalManager {
         let jobs = self.bg_jobs.lock().ok()?;
         let job = jobs.get(session_id)?;
         Some((job.status.clone(), job.started_at.elapsed().as_secs()))
+    }
+
+    /// Kill every still-running background session and clear the registry.
+    /// Called on graceful shutdown so detached processes don't linger.
+    pub fn terminate_all_bg_jobs(&self) {
+        let running_ids: Vec<String> = match self.bg_jobs.lock() {
+            Ok(mut jobs) => {
+                let ids = jobs
+                    .values()
+                    .filter(|j| matches!(j.status, BgStatus::Running))
+                    .map(|j| j.terminal_id.clone())
+                    .collect();
+                jobs.clear();
+                ids
+            }
+            Err(_) => return,
+        };
+        if let Ok(mut killers) = self.external_killers.lock() {
+            for id in running_ids {
+                if let Some(killer) = killers.get_mut(&id) {
+                    let _ = killer.kill();
+                }
+            }
+        }
     }
 }
 
@@ -1594,18 +1636,34 @@ pub async fn execute_terminal_command(
                 ));
 
                 // Register the background job so command_session can re-attach.
-                if let Ok(mut jobs) = bg_jobs.lock() {
-                    jobs.insert(
-                        terminal_id.clone(),
-                        BgJob {
-                            terminal_id: terminal_id.clone(),
-                            pid: pid_num,
-                            buffer: output_buffer.clone(),
-                            consumed: consumed_at_detach,
-                            status: BgStatus::Running,
-                            started_at: Instant::now(),
-                        },
-                    );
+                // Enforce the cap: if full, evict the oldest (prefer already-exited).
+                // If the evicted victim is still running, kill it — dropping the
+                // registry entry does NOT stop the process (its thread owns it), so
+                // skipping the kill would leak a running process with no handle.
+                let new_job = BgJob {
+                    terminal_id: terminal_id.clone(),
+                    pid: pid_num,
+                    buffer: output_buffer.clone(),
+                    consumed: consumed_at_detach,
+                    status: BgStatus::Running,
+                    started_at: Instant::now(),
+                };
+                let evicted_running = if let Ok(mut jobs) = bg_jobs.lock() {
+                    let evicted_running = select_eviction_victim(&jobs, MAX_BG_JOBS)
+                        .and_then(|vid| jobs.remove(&vid))
+                        .filter(|j| matches!(j.status, BgStatus::Running))
+                        .map(|j| j.terminal_id);
+                    jobs.insert(terminal_id.clone(), new_job);
+                    evicted_running
+                } else {
+                    None
+                };
+                if let Some(vid) = evicted_running {
+                    if let Ok(mut killers) = external_killers.lock() {
+                        if let Some(killer) = killers.get_mut(&vid) {
+                            let _ = killer.kill();
+                        }
+                    }
                 }
 
                 let _ = app_handle.emit(
@@ -1766,5 +1824,60 @@ mod bg_buffer_tests {
         let snap = buf.snapshot();
         assert!(snap.starts_with("[… "));
         assert!(snap.contains("truncated"));
+    }
+}
+
+#[cfg(test)]
+mod bg_eviction_tests {
+    use super::{select_eviction_victim, BgJob, BgOutputBuffer, BgStatus};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    fn job(id: &str, status: BgStatus, started_at: Instant) -> BgJob {
+        BgJob {
+            terminal_id: id.to_string(),
+            pid: None,
+            buffer: Arc::new(Mutex::new(BgOutputBuffer::default())),
+            consumed: 0,
+            status,
+            started_at,
+        }
+    }
+
+    #[test]
+    fn no_eviction_when_under_cap() {
+        let mut jobs = HashMap::new();
+        jobs.insert("a".to_string(), job("a", BgStatus::Running, Instant::now()));
+        assert_eq!(select_eviction_victim(&jobs, 4), None);
+    }
+
+    #[test]
+    fn prefers_oldest_exited_even_if_a_running_job_is_older() {
+        let t0 = Instant::now();
+        let mut jobs = HashMap::new();
+        // Oldest overall is running, but an exited job is the preferred victim.
+        jobs.insert("old_running".to_string(), job("old_running", BgStatus::Running, t0));
+        jobs.insert(
+            "exited".to_string(),
+            job("exited", BgStatus::Exited(0), t0 + Duration::from_secs(1)),
+        );
+        jobs.insert(
+            "new_running".to_string(),
+            job("new_running", BgStatus::Running, t0 + Duration::from_secs(2)),
+        );
+        assert_eq!(select_eviction_victim(&jobs, 3).as_deref(), Some("exited"));
+    }
+
+    #[test]
+    fn evicts_oldest_running_when_none_exited() {
+        let t0 = Instant::now();
+        let mut jobs = HashMap::new();
+        jobs.insert(
+            "newer".to_string(),
+            job("newer", BgStatus::Running, t0 + Duration::from_secs(1)),
+        );
+        jobs.insert("oldest".to_string(), job("oldest", BgStatus::Running, t0));
+        assert_eq!(select_eviction_victim(&jobs, 2).as_deref(), Some("oldest"));
     }
 }
