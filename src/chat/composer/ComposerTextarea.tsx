@@ -2,6 +2,19 @@ import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef 
 import type { ComposerSuggestion } from './MentionSuggestions';
 import type { WorkspacePathMatch } from './usePathSuggestions';
 
+// Native textarea undo is broken for controlled inputs under webkit2gtk (React
+// rewrites `.value`, which clears the browser's undo stack), so the composer
+// keeps its own history. Changes within the group window coalesce into one undo
+// step so Ctrl+Z reverts a typing burst, not one character at a time.
+const UNDO_GROUP_MS = 400;
+const UNDO_MAX_ENTRIES = 100;
+
+interface UndoEntry {
+    value: string;
+    start: number;
+    end: number;
+}
+
 export interface ComposerTextareaHandle {
     focus: () => void;
     resize: () => void;
@@ -61,6 +74,92 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
 }, ref) => {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const lastScrollHeightRef = useRef<number>(0);
+    const undoStackRef = useRef<UndoEntry[]>([]);
+    const redoStackRef = useRef<UndoEntry[]>([]);
+    const prevTextRef = useRef<string>(text);
+    // Selection as of just BEFORE the current mutation (captured on keydown /
+    // select), so an undo restores the cursor to where the change happened.
+    const lastSelectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+    const lastSnapshotAtRef = useRef<number>(0);
+    const applyingHistoryRef = useRef(false);
+    const pendingSelectionRef = useRef<{ start: number; end: number } | null>(null);
+
+    // Observes ALL text changes — typing and programmatic (prefill, mention
+    // insert, history navigation, clear-on-send) — so every path is undoable.
+    useEffect(() => {
+        const textarea = textareaRef.current;
+        if (pendingSelectionRef.current && textarea) {
+            const { start, end } = pendingSelectionRef.current;
+            pendingSelectionRef.current = null;
+            const max = textarea.value.length;
+            textarea.setSelectionRange(Math.min(start, max), Math.min(end, max));
+        }
+        if (text === prevTextRef.current) {
+            return;
+        }
+        if (applyingHistoryRef.current) {
+            applyingHistoryRef.current = false;
+            prevTextRef.current = text;
+            return;
+        }
+        const now = Date.now();
+        if (now - lastSnapshotAtRef.current > UNDO_GROUP_MS || undoStackRef.current.length === 0) {
+            const prev = prevTextRef.current;
+            undoStackRef.current.push({
+                value: prev,
+                start: Math.min(lastSelectionRef.current.start, prev.length),
+                end: Math.min(lastSelectionRef.current.end, prev.length),
+            });
+            if (undoStackRef.current.length > UNDO_MAX_ENTRIES) {
+                undoStackRef.current.shift();
+            }
+        }
+        lastSnapshotAtRef.current = now;
+        redoStackRef.current = [];
+        prevTextRef.current = text;
+    }, [text]);
+
+    const applyHistoryEntry = useCallback((entry: UndoEntry, pushOnto: UndoEntry[]) => {
+        const textarea = textareaRef.current;
+        if (entry.value === prevTextRef.current) {
+            // Value identical (a coalesced burst netted out to no change):
+            // setText would not re-render, so apply only the cursor and leave
+            // the applying/pending flags untouched to avoid dangling state.
+            if (textarea) {
+                const max = textarea.value.length;
+                textarea.setSelectionRange(Math.min(entry.start, max), Math.min(entry.end, max));
+            }
+            lastSnapshotAtRef.current = 0;
+            return;
+        }
+        pushOnto.push({
+            value: prevTextRef.current,
+            start: textarea?.selectionStart ?? prevTextRef.current.length,
+            end: textarea?.selectionEnd ?? prevTextRef.current.length,
+        });
+        applyingHistoryRef.current = true;
+        pendingSelectionRef.current = { start: entry.start, end: entry.end };
+        // A change right after undo/redo must start a fresh group, not coalesce.
+        lastSnapshotAtRef.current = 0;
+        setText(entry.value);
+        onTriggerChange(null);
+    }, [onTriggerChange, setText]);
+
+    const undo = useCallback(() => {
+        const entry = undoStackRef.current.pop();
+        if (entry === undefined) {
+            return;
+        }
+        applyHistoryEntry(entry, redoStackRef.current);
+    }, [applyHistoryEntry]);
+
+    const redo = useCallback(() => {
+        const entry = redoStackRef.current.pop();
+        if (entry === undefined) {
+            return;
+        }
+        applyHistoryEntry(entry, undoStackRef.current);
+    }, [applyHistoryEntry]);
 
     const resize = useCallback(() => {
         const textarea = textareaRef.current;
@@ -89,6 +188,12 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
     }, [resize, text]);
 
     const handlePaste = useCallback(async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        // Paste fires before the mutation — capture the pre-change selection so
+        // an undo of this paste restores the cursor to the paste point.
+        lastSelectionRef.current = {
+            start: event.currentTarget.selectionStart,
+            end: event.currentTarget.selectionEnd,
+        };
         const filesFromItems = Array.from(event.clipboardData.items)
             .filter((item) => item.kind === 'file')
             .map((item) => item.getAsFile())
@@ -149,6 +254,29 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
             }}
             onPaste={handlePaste}
             onKeyDown={(event) => {
+                // Keydown fires before the mutation — remember the pre-change
+                // selection for the undo snapshot taken when `text` updates.
+                lastSelectionRef.current = {
+                    start: event.currentTarget.selectionStart,
+                    end: event.currentTarget.selectionEnd,
+                };
+                const combo = event.ctrlKey || event.metaKey;
+                if (combo && !event.altKey && event.key.toLowerCase() === 'z') {
+                    // Always claim the shortcut: webkit's native undo fights the
+                    // controlled value and must never run, even on an empty stack.
+                    event.preventDefault();
+                    if (event.shiftKey) {
+                        redo();
+                    } else {
+                        undo();
+                    }
+                    return;
+                }
+                if (combo && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'y') {
+                    event.preventDefault();
+                    redo();
+                    return;
+                }
                 if (showSuggestions && suggestions.length > 0) {
                     if (event.key === 'Enter' || event.key === 'Tab') {
                         event.preventDefault();
