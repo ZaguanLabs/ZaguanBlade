@@ -7,6 +7,7 @@ Authoritative code paths:
 - Model-facing schemas: `src-tauri/src/ai_workflow/tool_defs.rs`
 - Local executor: `src-tauri/src/tools.rs`
 - `run_command` approval and execution: `src-tauri/src/ai_workflow.rs`
+- Background command sessions: `src-tauri/src/terminal.rs` (registry), `src-tauri/src/tools.rs` (`command_session`)
 
 Model-facing schemas are not identical to every compatibility alias in the executor. Some tools remain executable for legacy or fallback compatibility even when they are not advertised to normal model turns.
 
@@ -575,7 +576,7 @@ Parameters:
 | `offset` | integer | No | default `0` |
 | `max_chars` | integer | No | default `4000`, cap `8000` |
 
-## Command Tool
+## Command Tools
 
 ### `run_command`
 
@@ -591,7 +592,8 @@ Parameters:
 | `shell` | boolean | No | aliases: `Shell`; defaults to `false` for `program`, `true` for `command` |
 | `cwd` | string | No | aliases: `Cwd`; must resolve inside the workspace |
 | `blocking` | boolean | No | aliases: `Blocking`; defaults to `true` |
-| `wait_ms_before_async` | integer | No | alias: `WaitMsBeforeAsync` |
+| `background` | boolean | No | alias: `Background`; model-facing alias for `blocking:false`; default `false` |
+| `wait_ms` | integer | No | aliases: `wait_ms_before_async`, `WaitMsBeforeAsync`; clamped `250..30000`; defaults to `10000` when backgrounding |
 
 Behavior:
 
@@ -599,3 +601,32 @@ Behavior:
 - Rejects `cwd` outside the workspace.
 - Captures stdout/stderr and exit status.
 - Blocks one known irrelevant scan pattern: Python-file hunts in Rust workspaces with no Python project signals.
+
+Background mode (`background: true`):
+
+- The command runs for up to `wait_ms`. If it finishes in time, the result is returned as usual; otherwise the tool returns the output produced so far plus a `session_id` the model can drive with `command_session`.
+- An explicit `background: false` never overrides a legacy `blocking: false` — both spellings map to the same detach path.
+- Background output is buffered up to 1 MiB per job (oldest output is dropped, with an explicit truncation note — never silent). Blocking commands remain unbounded.
+- A finished job is retained in the registry so a final poll still returns the output tail and the real exit code.
+- The registry is capped at 32 jobs. Registering beyond the cap evicts the oldest already-exited session, or the oldest running one if none have exited; an evicted still-running job is killed.
+- All background jobs are terminated on graceful app shutdown.
+- Remote (zcoderd) models only see `background`/`wait_ms` and `command_session` when the client declares the `background_commands` capability in the authenticate handshake, preventing version skew with older clients. Local models use ZB's own schemas and always have them.
+
+### `command_session`
+
+Interacts with a background command started by `run_command(background: true)`: poll for new output (default), write to its stdin, send Ctrl-C, or force-kill it. Non-gated inline tool — no approval is needed because the underlying command was approved when it started.
+
+Parameters:
+
+| Name | Type | Required | Notes |
+|------|------|----------|-------|
+| `session_id` | string | Yes | the `session_id` returned by a backgrounded `run_command` |
+| `input` | string | No | bytes written to the process stdin; empty (default) = poll only; the ETX byte (`U+0003`) sends Ctrl-C, and the literal spellings `\x03`, `\u0003`, and `^C` are normalized to it |
+| `kill` | boolean | No | force-kill the process, then return its final output; default `false` |
+| `wait_ms` | integer | No | how long to wait for new output before returning; default `3000`, clamped `250..30000` |
+
+Behavior:
+
+- Polls return only the output delta since the last poll, ANSI-stripped, with wall time and run/exit status. Returns early as soon as any new output arrives or the process exits.
+- A stdin write to a process that already exited is not an error: the tool falls through to a poll and reports the exit and final tail instead.
+- Unknown session IDs return an error (sessions may have been evicted or reaped — see the `run_command` background notes).
