@@ -70,6 +70,7 @@ pub mod tree_sitter;
 pub mod uncommitted_changes;
 pub mod utils;
 pub mod warmup;
+pub mod warmup_bundle;
 pub mod workflow_controller;
 pub mod workspace_manager;
 pub mod worktree;

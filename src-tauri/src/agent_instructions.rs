@@ -83,6 +83,20 @@ pub fn load_agent_instructions(
     }
 }
 
+/// Absolute canonical paths of the `AGENTS.md` files that apply to
+/// `candidate_paths`, root-first. Warmup context prefetch ships these
+/// per-file (path + raw content + hash), unlike [`load_agent_instructions`],
+/// which merges them into one prompt block with `@include` expansion.
+pub fn discover_agent_file_paths(
+    workspace_root: &Path,
+    candidate_paths: &[String],
+) -> Vec<PathBuf> {
+    let Some(canonical_root) = canonical_dir(workspace_root) else {
+        return Vec::new();
+    };
+    discover_agent_files(&canonical_root, candidate_paths)
+}
+
 fn discover_agent_files(workspace_root: &Path, candidate_paths: &[String]) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let mut seen = HashSet::new();

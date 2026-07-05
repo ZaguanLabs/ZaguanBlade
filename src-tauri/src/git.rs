@@ -352,7 +352,7 @@ fn normalize_remote_url(url: &str) -> String {
     }
 }
 
-fn collect_git_status_snapshot_cli(root: &str) -> Result<GitStatusSnapshot, String> {
+pub(crate) fn collect_git_status_snapshot_cli(root: &str) -> Result<GitStatusSnapshot, String> {
     let stdout = match git_status_output(root)? {
         Some(output) => output,
         None => return Ok(empty_snapshot()),
