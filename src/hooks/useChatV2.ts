@@ -30,7 +30,8 @@ function pickDefaultModel(models: ModelInfo[]): ModelInfo | null {
         return null;
     }
 
-    return models.find((model) => model.id === 'anthropic/claude-sonnet-4-5-20250929')
+    return models.find((model) => model.id === 'anthropic/claude-sonnet-5')
+        || models.find((model) => model.id === 'anthropic/claude-sonnet-4-5-20250929')
         || models.find((model) => model.id === 'openai/gpt-5.2')
         || models[0];
 }
