@@ -1,5 +1,6 @@
 import { useCallback, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 interface WarmupResponse {
     response_type: string;
@@ -75,6 +76,10 @@ function isLocalModel(modelId: string | null): boolean {
 
 function isGuidanceFile(path: string): boolean {
     return /(^|[/\\])AGENTS\.md$/i.test(path);
+}
+
+function normalizePath(path: string): string {
+    return path.replace(/\\/g, '/');
 }
 
 /**
@@ -241,6 +246,46 @@ export function useWarmup(
             scheduleEditorWarmup(isGuidanceFile(activeFilePath) ? 'guidance_change' : 'file_save');
         }
     }, [ready, editor, activeFilePath, activeFileDirty, scheduleEditorWarmup]);
+
+    // AI-applied edits (change-applied fires after files are written to disk)
+    // bypass the editor buffer entirely — no dirty->clean transition, so the
+    // effect above never sees them and the warmed bundle would go stale.
+    // Re-warm when the AI touched the active file or any AGENTS.md.
+    const hasEditorContext = Boolean(editor);
+    useEffect(() => {
+        if (!hasEditorContext) {
+            return;
+        }
+        if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
+            return;
+        }
+
+        const unlistenPromise = listen<{ change_id: string; file_path: string; file_paths?: string[] }>(
+            'change-applied',
+            (event) => {
+                if (!isReadyRef.current || !hasWarmedOnLaunchRef.current) {
+                    return;
+                }
+                const paths = event.payload.file_paths?.length
+                    ? event.payload.file_paths
+                    : [event.payload.file_path];
+                if (paths.some(isGuidanceFile)) {
+                    scheduleEditorWarmup('guidance_change');
+                    return;
+                }
+                const activeFile = lastActiveFileRef.current;
+                if (activeFile && paths.some(path => normalizePath(path) === normalizePath(activeFile))) {
+                    scheduleEditorWarmup('file_save');
+                }
+            },
+        );
+
+        return () => {
+            unlistenPromise
+                .then(unlisten => unlisten())
+                .catch(console.error);
+        };
+    }, [hasEditorContext, scheduleEditorWarmup]);
 
     // Check for session resume (after inactivity)
     const checkSessionResume = useCallback(async () => {
