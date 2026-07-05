@@ -480,6 +480,14 @@ fn supports_reasoning_tags(model_id: &str) -> bool {
         || is_gemma4_model(&model_lower)
 }
 
+/// Blade mints conversation session ids itself (zcoderd accepts any non-empty
+/// client-supplied id and only generates one as an empty-string fallback).
+/// Pre-minting lets warmup context prefetch and the chat share one session key,
+/// so zcoderd can attach the prewarmed bundle to the first real message.
+pub(crate) fn fresh_session_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
 impl ChatManager {
     pub fn new(max_turns: usize) -> Self {
         Self {
@@ -488,7 +496,7 @@ impl ChatManager {
             xml_buffer: String::new(),
             reasoning_parser: ReasoningParser::new(),
             agentic_loop: AgenticLoop::new(max_turns),
-            session_id: None,
+            session_id: Some(fresh_session_id()),
             planning_mode: None,
             runtime_mode: None,
             mode_source: None,

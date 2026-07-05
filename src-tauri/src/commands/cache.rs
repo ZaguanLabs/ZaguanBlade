@@ -10,6 +10,17 @@ pub async fn warmup_cache(
     editor_snapshot: Option<warmup_bundle::EditorWarmupSnapshot>,
     state: State<'_, AppState>,
 ) -> Result<warmup::WarmupResponse, String> {
+    // Warm under the CHAT session id (Blade-minted, and reused by the first
+    // chat message) so zcoderd can attach the prewarmed bundle to the real
+    // conversation. The frontend's synthetic workspace-hash id is only a
+    // fallback for the unlikely no-chat-manager-id case.
+    let session_id = state
+        .chat_manager
+        .lock()
+        .ok()
+        .and_then(|mgr| mgr.session_id.clone())
+        .unwrap_or(session_id);
+
     let trigger = match trigger.as_str() {
         "launch" => warmup::WarmupTrigger::Launch,
         "model_change" => warmup::WarmupTrigger::ModelChange,

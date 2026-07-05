@@ -287,6 +287,28 @@ export function useWarmup(
         };
     }, [hasEditorContext, scheduleEditorWarmup]);
 
+    // The backend minted or restored a chat session id (new / loaded / reset
+    // conversation). Re-warm immediately — not debounced — so zcoderd holds
+    // the context bundle under the new session key before the first message.
+    useEffect(() => {
+        if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
+            return;
+        }
+
+        const unlistenPromise = listen<string>('session-id-changed', () => {
+            if (!isReadyRef.current || !hasWarmedOnLaunchRef.current) {
+                return;
+            }
+            warmup('session_resume');
+        });
+
+        return () => {
+            unlistenPromise
+                .then(unlisten => unlisten())
+                .catch(console.error);
+        };
+    }, [warmup]);
+
     // Check for session resume (after inactivity)
     const checkSessionResume = useCallback(async () => {
         const now = Date.now();

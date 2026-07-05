@@ -44,6 +44,12 @@ pub mod event_names {
     /// Request explorer refresh
     pub const REFRESH_EXPLORER: &str = "refresh-explorer";
 
+    // === Chat Session ===
+
+    /// The chat session id was minted or restored (new/loaded/reset
+    /// conversation). Warmup context prefetch re-warms under the new key.
+    pub const SESSION_ID_CHANGED: &str = "session-id-changed";
+
     // === Documents ===
 
     /// Open ephemeral document (research results, etc)

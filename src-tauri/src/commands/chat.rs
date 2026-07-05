@@ -4,6 +4,16 @@ use crate::conversation_store;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const DISCONNECT_FLUSH_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Tell the frontend the chat session id was minted or restored, so warmup
+/// context prefetch can re-warm zcoderd under the new session key before the
+/// first message of the (new/loaded/reset) conversation.
+fn emit_session_id_changed(app: &AppHandle, session_id: &str) {
+    let _ = app.emit(
+        crate::events::event_names::SESSION_ID_CHANGED,
+        session_id.to_string(),
+    );
+}
 const SHUTDOWN_DISCONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(900);
 
 pub(crate) async fn graceful_close_active_chat_session(state: &AppState) {
@@ -69,6 +79,7 @@ pub fn truncate_conversation(
     len: usize,
     reset_session: Option<bool>,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<(), String> {
     let mut conversation = state
         .conversation
@@ -83,16 +94,21 @@ pub fn truncate_conversation(
     }
     conversation.truncate(len);
     if reset_session.unwrap_or(false) {
-        conversation.metadata.session_id = None;
+        // Reset means "start a fresh server session" — mint the id now so
+        // warmup and the next chat message share one session key.
+        let fresh = crate::chat_manager::fresh_session_id();
+        conversation.metadata.session_id = Some(fresh.clone());
         drop(conversation);
         let mut mgr = state
             .chat_manager
             .lock()
             .map_err(|e| format!("Failed to lock chat manager: {}", e))?;
-        mgr.session_id = None;
+        mgr.session_id = Some(fresh.clone());
         mgr.planning_mode = None;
         mgr.runtime_mode = None;
         mgr.mode_source = None;
+        drop(mgr);
+        emit_session_id_changed(&app, &fresh);
     }
     Ok(())
 }
@@ -119,8 +135,9 @@ pub async fn load_conversation(
     graceful_close_active_chat_session(state.inner()).await;
 
     let blocking_id = id.clone();
+    let app_for_task = app.clone();
     let stored = tokio::task::spawn_blocking(move || {
-        let state = app.state::<AppState>();
+        let state = app_for_task.state::<AppState>();
         state.with_conversation_store(|store| store.load_conversation(&blocking_id))
     })
     .await
@@ -129,20 +146,29 @@ pub async fn load_conversation(
     let mut conversation = state.conversation.lock().unwrap();
     *conversation = ConversationHistory::from_stored(stored.clone());
 
-    // Restore session ID to ChatManager so it can resume the session
-    {
+    // Restore session ID to ChatManager so it can resume the session.
+    // Pre-Blade-minting conversations may lack one — mint on the spot so the
+    // resumed conversation still shares a session key with warmup.
+    let session_id = {
         let mut mgr = state.chat_manager.lock().unwrap();
-        if let Some(session_id) = &stored.metadata.session_id {
-            mgr.session_id = Some(session_id.clone());
-            eprintln!("[CHAT] Restored session ID: {}", session_id);
-        } else {
-            mgr.session_id = None;
-            eprintln!("[CHAT] No session ID in loaded conversation");
-        }
+        let session_id = match &stored.metadata.session_id {
+            Some(session_id) => {
+                eprintln!("[CHAT] Restored session ID: {}", session_id);
+                session_id.clone()
+            }
+            None => {
+                let fresh = crate::chat_manager::fresh_session_id();
+                eprintln!("[CHAT] No session ID in loaded conversation; minted {}", fresh);
+                fresh
+            }
+        };
+        mgr.session_id = Some(session_id.clone());
         mgr.planning_mode = stored.metadata.planning_mode;
         mgr.runtime_mode = stored.metadata.runtime_mode.clone();
         mgr.mode_source = stored.metadata.mode_source.clone();
-    }
+        session_id
+    };
+    emit_session_id_changed(&app, &session_id);
 
     Ok(())
 }
@@ -171,8 +197,9 @@ pub async fn new_conversation(
     };
 
     let blocking_model_id = model_id.clone();
+    let app_for_task = app.clone();
     let metadata = tokio::task::spawn_blocking(move || {
-        let state = app.state::<AppState>();
+        let state = app_for_task.state::<AppState>();
         if let Some(stored) = stored_to_save {
             state.with_conversation_store(|store| store.save_conversation(&stored))?;
         }
@@ -181,14 +208,18 @@ pub async fn new_conversation(
     .await
     .map_err(|e| format!("new conversation task failed: {}", e))??;
 
-    // Clear session ID in ChatManager for the new conversation
+    // Mint the session id for the new conversation up front — warmup sends it
+    // to zcoderd before the first message, and the first chat message reuses
+    // it, so the prewarmed context bundle lands on this conversation.
+    let fresh = crate::chat_manager::fresh_session_id();
     {
         let mut mgr = state.chat_manager.lock().unwrap();
-        mgr.session_id = None;
+        mgr.session_id = Some(fresh.clone());
         mgr.planning_mode = None;
         mgr.runtime_mode = None;
         mgr.mode_source = None;
     }
+    emit_session_id_changed(&app, &fresh);
 
     let id = metadata.id.clone();
 
