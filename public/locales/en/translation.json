@@ -505,7 +505,11 @@
       "allowGitignored": "Allow .gitignored Files",
       "allowGitignoredDescription": "Include files matched by .gitignore in context",
       "gitignoredEnabledHelp": "Gitignored files (e.g., build outputs, secrets) will be accessible to the AI.",
-      "gitignoredDisabledHelp": "Gitignored files are hidden from the AI for security and relevance."
+      "gitignoredDisabledHelp": "Gitignored files are hidden from the AI for security and relevance.",
+      "warmupPrefetch": "Warmup Context Prefetch",
+      "warmupPrefetchDescription": "Send the active editor file and repo instructions during model warmup",
+      "warmupPrefetchEnabledHelp": "Supported providers can prewarm their prompt cache with your active file and AGENTS.md, reducing first-response latency and repeated prompt cost.",
+      "warmupPrefetchDisabledHelp": "Warmup only opens the provider connection. The AI reads editor state and files on demand instead."
     },
     "privacy": {
       "title": "Privacy",

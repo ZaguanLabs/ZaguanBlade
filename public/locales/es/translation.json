@@ -501,7 +501,11 @@
       "allowGitignored": "Permitir archivos .gitignored",
       "allowGitignoredDescription": "Incluir en el contexto los archivos que coincidan con .gitignore",
       "gitignoredEnabledHelp": "Los archivos ignorados por Git (p. ej., compilaciones, secretos) serán accesibles para la IA.",
-      "gitignoredDisabledHelp": "Los archivos ignorados por Git se ocultan a la IA por seguridad y relevancia."
+      "gitignoredDisabledHelp": "Los archivos ignorados por Git se ocultan a la IA por seguridad y relevancia.",
+      "warmupPrefetch": "Precarga de contexto en el calentamiento",
+      "warmupPrefetchDescription": "Enviar el archivo activo del editor y las instrucciones del repositorio durante el calentamiento del modelo",
+      "warmupPrefetchEnabledHelp": "Los proveedores compatibles pueden precalentar su caché de prompts con tu archivo activo y AGENTS.md, reduciendo la latencia de la primera respuesta y el coste de prompts repetidos.",
+      "warmupPrefetchDisabledHelp": "El calentamiento solo abre la conexión con el proveedor. La IA lee el estado del editor y los archivos bajo demanda."
     },
     "privacy": {
       "title": "Privacidad",

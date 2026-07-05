@@ -65,6 +65,7 @@ interface SettingsState {
     };
     allowGitIgnoredFiles?: boolean;  // Per-project setting
     autoApproveRunCommands?: boolean;
+    warmupContextPrefetch?: boolean;  // Per-project setting
 }
 
 const defaultSettings: SettingsState = {
@@ -110,6 +111,7 @@ const defaultSettings: SettingsState = {
     },
     allowGitIgnoredFiles: false,  // Default: respect .gitignore
     autoApproveRunCommands: false,
+    warmupContextPrefetch: true,  // Default: enabled (opt-out)
 };
 
 
@@ -197,6 +199,7 @@ function backendToFrontend(backend: BackendSettings): Omit<SettingsState, 'accou
         editor: {},
         allowGitIgnoredFiles: backend.allow_gitignored_files,
         autoApproveRunCommands: backend.auto_approve_run_commands,
+        warmupContextPrefetch: backend.warmup_context_prefetch ?? true,
     };
 }
 
@@ -223,6 +226,7 @@ function frontendToBackend(frontend: SettingsState): BackendSettings {
         editor: {},
         allow_gitignored_files: frontend.allowGitIgnoredFiles || false,
         auto_approve_run_commands: frontend.autoApproveRunCommands || false,
+        warmup_context_prefetch: frontend.warmupContextPrefetch ?? true,
     };
 }
 
@@ -546,6 +550,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                                         allowGitIgnoredFiles={settings.allowGitIgnoredFiles || false}
                                         onAllowGitIgnoredFilesChange={(value) => {
                                             setSettings(prev => ({ ...prev, allowGitIgnoredFiles: value }));
+                                            setHasChanges(true);
+                                        }}
+                                        warmupContextPrefetch={settings.warmupContextPrefetch ?? true}
+                                        onWarmupContextPrefetchChange={(value) => {
+                                            setSettings(prev => ({ ...prev, warmupContextPrefetch: value }));
                                             setHasChanges(true);
                                         }}
                                     />
@@ -1352,9 +1361,11 @@ interface ContextSettingsProps {
     onChange: (updates: Partial<SettingsState['context']>) => void;
     allowGitIgnoredFiles: boolean;
     onAllowGitIgnoredFilesChange: (value: boolean) => void;
+    warmupContextPrefetch: boolean;
+    onWarmupContextPrefetchChange: (value: boolean) => void;
 }
 
-const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, allowGitIgnoredFiles, onAllowGitIgnoredFilesChange }) => {
+const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, allowGitIgnoredFiles, onAllowGitIgnoredFilesChange, warmupContextPrefetch, onWarmupContextPrefetchChange }) => {
     const { t } = useTranslation();
     const maxTokensInputId = useId();
     const compressionModelLabelId = useId();
@@ -1463,6 +1474,27 @@ const ContextSettings: React.FC<ContextSettingsProps> = ({ settings, onChange, a
                     {allowGitIgnoredFiles
                         ? t('settings.context.gitignoredEnabledHelp')
                         : t('settings.context.gitignoredDisabledHelp')}
+                </p>
+            </div>
+
+            {/* Warmup Context Prefetch */}
+            <div className="border-t border-(--border-subtle) pt-4">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <div className="text-sm font-medium text-(--fg-primary)">{t('settings.context.warmupPrefetch')}</div>
+                        <div className="text-xs text-(--fg-tertiary)">
+                            {t('settings.context.warmupPrefetchDescription')}
+                        </div>
+                    </div>
+                    <Toggle
+                        checked={warmupContextPrefetch}
+                        onChange={onWarmupContextPrefetchChange}
+                    />
+                </div>
+                <p className="text-xs text-(--fg-tertiary) mt-2">
+                    {warmupContextPrefetch
+                        ? t('settings.context.warmupPrefetchEnabledHelp')
+                        : t('settings.context.warmupPrefetchDisabledHelp')}
                 </p>
             </div>
         </div>

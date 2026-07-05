@@ -118,7 +118,7 @@ impl Default for EditorSettings {
 }
 
 /// Per-project settings stored in .zblade/config/settings.json
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectSettings {
     #[serde(default)]
     pub storage: StorageSettings,
@@ -134,6 +134,27 @@ pub struct ProjectSettings {
     pub allow_gitignored_files: bool,
     #[serde(default = "default_false")]
     pub auto_approve_run_commands: bool,
+    /// Send the active editor file and repo instructions during model warmup
+    /// so supported providers can reduce first-response latency and repeated
+    /// prompt cost. Default: true (opt-out).
+    #[serde(default = "default_true")]
+    pub warmup_context_prefetch: bool,
+}
+
+// Manual impl because `warmup_context_prefetch` defaults to TRUE — a derived
+// Default would silently disable it whenever no settings file exists yet.
+impl Default for ProjectSettings {
+    fn default() -> Self {
+        Self {
+            storage: StorageSettings::default(),
+            context: ContextSettings::default(),
+            privacy: PrivacySettings::default(),
+            editor: EditorSettings::default(),
+            allow_gitignored_files: false,
+            auto_approve_run_commands: false,
+            warmup_context_prefetch: true,
+        }
+    }
 }
 
 fn default_true() -> bool {

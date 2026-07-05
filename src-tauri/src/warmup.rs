@@ -335,5 +335,61 @@ mod tests {
         assert_eq!(json["type"], "warmup");
         assert_eq!(json["trigger"], "model_change");
     }
+
+    /// End-to-end request shape: a real bundle built from a real workspace
+    /// must flatten into the top-level fields the zcoderd contract names.
+    #[test]
+    fn request_with_bundle_matches_contract_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "rules").unwrap();
+
+        let active = dir.path().join("main.rs").to_string_lossy().to_string();
+        let bundle = crate::warmup_bundle::build_bundle(
+            dir.path(),
+            crate::warmup_bundle::EditorWarmupSnapshot {
+                active_file: Some(active.clone()),
+                cursor: Some(crate::warmup_bundle::Position { line: 1, column: 1 }),
+                selection: None,
+                visible_range: None,
+                open_files: vec![crate::warmup_bundle::SnapshotOpenFile {
+                    path: active,
+                    is_modified: false,
+                    tab_order: 0,
+                }],
+                active_buffer_content: None,
+            },
+        )
+        .expect("bundle enabled by default");
+
+        let request = WarmupRequest {
+            request_type: "warmup".to_string(),
+            session_id: "sess_x".to_string(),
+            user_id: "user_x".to_string(),
+            model: "anthropic/claude-opus-4-8".to_string(),
+            trigger: WarmupTrigger::FileSave,
+            cache_strategy: None,
+            preferred_artifacts: None,
+            context: Some(bundle),
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&request).unwrap()).unwrap();
+
+        assert_eq!(json["type"], "warmup");
+        assert_eq!(json["trigger"], "file_save");
+        assert!(json["workspace"]["root"].is_string());
+        assert_eq!(json["workspace"]["allow_gitignored_files"], false);
+        assert!(json["editor_state"]["open_files"].is_array());
+        assert_eq!(json["active_file_snapshot"]["content"], "fn main() {}");
+        assert_eq!(json["active_file_snapshot"]["source"], "disk");
+        assert!(json["active_file_snapshot"]["hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
+        assert_eq!(json["repo_guidance"][0]["content"], "rules");
+        assert_eq!(json["limits"]["max_active_file_bytes"], 120000);
+        assert_eq!(json["limits"]["max_repo_guidance_bytes"], 64000);
+        assert_eq!(json["limits"]["max_open_files"], 20);
+    }
 }
 

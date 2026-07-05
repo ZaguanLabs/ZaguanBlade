@@ -176,11 +176,19 @@ pub struct WarmupLimits {
 // Assembly
 // ---------------------------------------------------------------------------
 
-/// Build the deterministic context bundle for one warmup send. Does blocking
-/// filesystem and git work — call from `spawn_blocking`.
-pub fn build_bundle(workspace_root: &Path, snapshot: EditorWarmupSnapshot) -> WarmupContextBundle {
+/// Build the deterministic context bundle for one warmup send, or `None` when
+/// the user disabled warmup context prefetch for this project (the warmup then
+/// degrades to the legacy context-free ping). Does blocking filesystem and git
+/// work — call from `spawn_blocking`.
+pub fn build_bundle(
+    workspace_root: &Path,
+    snapshot: EditorWarmupSnapshot,
+) -> Option<WarmupContextBundle> {
     let root = fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
     let settings = crate::project_settings::load_project_settings_or_default(&root);
+    if !settings.warmup_context_prefetch {
+        return None;
+    }
     let gitignore = crate::gitignore_filter::GitignoreFilter::new(&root);
 
     let active_path = snapshot
@@ -223,7 +231,7 @@ pub fn build_bundle(workspace_root: &Path, snapshot: EditorWarmupSnapshot) -> Wa
         .and_then(|path| path.strip_prefix(&root).ok())
         .map(|rel| rel.to_string_lossy().to_string());
 
-    WarmupContextBundle {
+    Some(WarmupContextBundle {
         workspace: WorkspaceInfo {
             root: root.to_string_lossy().to_string(),
             project_id: crate::project::get_existing_project_id(&root),
@@ -244,7 +252,7 @@ pub fn build_bundle(workspace_root: &Path, snapshot: EditorWarmupSnapshot) -> Wa
             max_repo_guidance_bytes: MAX_REPO_GUIDANCE_BYTES as u64,
             max_open_files: MAX_OPEN_FILES as u32,
         },
-    }
+    })
 }
 
 fn build_active_file_snapshot(
@@ -506,6 +514,11 @@ mod tests {
         fs::write(path, content).unwrap();
     }
 
+    /// `build_bundle` with the default-enabled prefetch setting unwrapped.
+    fn build(root: &Path, snapshot: EditorWarmupSnapshot) -> WarmupContextBundle {
+        build_bundle(root, snapshot).expect("prefetch is enabled by default")
+    }
+
     fn snapshot_for(root: &Path, file: &str) -> EditorWarmupSnapshot {
         EditorWarmupSnapshot {
             active_file: Some(root.join(file).to_string_lossy().to_string()),
@@ -522,13 +535,25 @@ mod tests {
     }
 
     #[test]
+    fn disabled_prefetch_setting_yields_no_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        write(&dir.path().join("a.rs"), "content");
+        write(
+            &dir.path().join(".zblade/config/settings.json"),
+            r#"{"warmup_context_prefetch": false}"#,
+        );
+
+        assert!(build_bundle(dir.path(), snapshot_for(dir.path(), "a.rs")).is_none());
+    }
+
+    #[test]
     fn identical_state_serializes_identically() {
         let dir = tempfile::tempdir().unwrap();
         write(&dir.path().join("src/main.rs"), "fn main() {}\n");
         write(&dir.path().join("AGENTS.md"), "rules\n");
 
-        let a = build_bundle(dir.path(), snapshot_for(dir.path(), "src/main.rs"));
-        let b = build_bundle(dir.path(), snapshot_for(dir.path(), "src/main.rs"));
+        let a = build(dir.path(), snapshot_for(dir.path(), "src/main.rs"));
+        let b = build(dir.path(), snapshot_for(dir.path(), "src/main.rs"));
 
         assert_eq!(
             serde_json::to_string(&a).unwrap(),
@@ -549,7 +574,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write(&dir.path().join("a.rs"), "disk content");
 
-        let bundle = build_bundle(dir.path(), snapshot_for(dir.path(), "a.rs"));
+        let bundle = build(dir.path(), snapshot_for(dir.path(), "a.rs"));
         let snap = bundle.active_file_snapshot.unwrap();
 
         assert_eq!(snap.content.as_deref(), Some("disk content"));
@@ -569,7 +594,7 @@ mod tests {
         snapshot.open_files[0].is_modified = true;
         snapshot.active_buffer_content = Some("new buffer content".to_string());
 
-        let bundle = build_bundle(dir.path(), snapshot);
+        let bundle = build(dir.path(), snapshot);
         let snap = bundle.active_file_snapshot.unwrap();
 
         assert_eq!(snap.content.as_deref(), Some("new buffer content"));
@@ -591,7 +616,7 @@ mod tests {
         let mut snapshot = snapshot_for(dir.path(), "a.rs");
         snapshot.open_files[0].is_modified = true; // dirty, but no buffer sent
 
-        let snap = build_bundle(dir.path(), snapshot)
+        let snap = build(dir.path(), snapshot)
             .active_file_snapshot
             .unwrap();
 
@@ -609,7 +634,7 @@ mod tests {
         let big = "é".repeat(MAX_ACTIVE_FILE_BYTES / 2 + 500);
         write(&dir.path().join("big.txt"), &big);
 
-        let snap = build_bundle(dir.path(), snapshot_for(dir.path(), "big.txt"))
+        let snap = build(dir.path(), snapshot_for(dir.path(), "big.txt"))
             .active_file_snapshot
             .unwrap();
 
@@ -627,7 +652,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         for name in ["id_rsa", ".env", ".env.local", "server.pem"] {
             write(&dir.path().join(name), "SECRET=value");
-            let snap = build_bundle(dir.path(), snapshot_for(dir.path(), name))
+            let snap = build(dir.path(), snapshot_for(dir.path(), name))
                 .active_file_snapshot
                 .unwrap();
             assert!(snap.content.is_none(), "content leaked for {name}");
@@ -642,7 +667,7 @@ mod tests {
         write(&dir.path().join(".gitignore"), "generated.rs\n");
         write(&dir.path().join("generated.rs"), "content");
 
-        let snap = build_bundle(dir.path(), snapshot_for(dir.path(), "generated.rs"))
+        let snap = build(dir.path(), snapshot_for(dir.path(), "generated.rs"))
             .active_file_snapshot
             .unwrap();
 
@@ -655,7 +680,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("blob.bin"), b"ab\x00cd").unwrap();
 
-        let snap = build_bundle(dir.path(), snapshot_for(dir.path(), "blob.bin"))
+        let snap = build(dir.path(), snapshot_for(dir.path(), "blob.bin"))
             .active_file_snapshot
             .unwrap();
 
@@ -673,7 +698,7 @@ mod tests {
         snapshot.active_file = Some(outside.path().join("out.rs").to_string_lossy().to_string());
         snapshot.open_files.clear();
 
-        let bundle = build_bundle(dir.path(), snapshot);
+        let bundle = build(dir.path(), snapshot);
         assert!(bundle.active_file_snapshot.is_none());
     }
 
@@ -684,7 +709,7 @@ mod tests {
         write(&dir.path().join("src/AGENTS.md"), "src rules");
         write(&dir.path().join("src/main.rs"), "fn main() {}");
 
-        let bundle = build_bundle(dir.path(), snapshot_for(dir.path(), "src/main.rs"));
+        let bundle = build(dir.path(), snapshot_for(dir.path(), "src/main.rs"));
 
         assert_eq!(bundle.repo_guidance.len(), 2);
         assert!(bundle.repo_guidance[0].path.ends_with("/AGENTS.md"));
@@ -707,7 +732,7 @@ mod tests {
         write(&dir.path().join("src/AGENTS.md"), "src rules");
         write(&dir.path().join("src/main.rs"), "fn main() {}");
 
-        let bundle = build_bundle(dir.path(), snapshot_for(dir.path(), "src/main.rs"));
+        let bundle = build(dir.path(), snapshot_for(dir.path(), "src/main.rs"));
 
         let first = &bundle.repo_guidance[0];
         assert!(first.truncated);
@@ -744,7 +769,7 @@ mod tests {
             active_buffer_content: None,
         };
 
-        let bundle = build_bundle(dir.path(), snapshot);
+        let bundle = build(dir.path(), snapshot);
         let files = &bundle.editor_state.open_files;
 
         assert_eq!(files.len(), MAX_OPEN_FILES);
@@ -767,7 +792,7 @@ mod tests {
             tab_order: 1,
         });
 
-        let bundle = build_bundle(dir.path(), snapshot);
+        let bundle = build(dir.path(), snapshot);
         let files = &bundle.editor_state.open_files;
 
         assert!(files[0].is_active && files[0].hash.is_some());

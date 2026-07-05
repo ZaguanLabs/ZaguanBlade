@@ -22,12 +22,14 @@ pub async fn warmup_cache(
     };
 
     // Bundle assembly reads files and shells out to git — keep it off the
-    // async runtime. A failed build degrades to a legacy context-free warmup.
+    // async runtime. A failed build, or warmup context prefetch disabled in
+    // project settings, degrades to a legacy context-free warmup.
     let context = match (editor_snapshot, state.workspace_root()) {
         (Some(snapshot), Some(root)) => {
             tokio::task::spawn_blocking(move || warmup_bundle::build_bundle(&root, snapshot))
                 .await
                 .ok()
+                .flatten()
         }
         _ => None,
     };
