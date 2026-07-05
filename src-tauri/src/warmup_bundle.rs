@@ -429,6 +429,67 @@ fn build_git_state(root: &Path) -> Option<GitState> {
 }
 
 // ---------------------------------------------------------------------------
+// Live-chat active-file identity
+// ---------------------------------------------------------------------------
+
+/// Identity of the active file for the live-chat workspace payload, derived
+/// with the SAME policy and byte-exact hashing as the warmup snapshot so
+/// zcoderd can compare the warmed snapshot against the live turn without
+/// forcing a re-read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveFileIdentity {
+    /// `sha256:<hex>` of the buffer (when dirty) or disk content. `None` when
+    /// the content was omitted (secret/gitignored/binary/unreadable/dirty
+    /// buffer we were not handed) or truncated — never a hash that disagrees
+    /// with what warmup shipped.
+    pub hash: Option<String>,
+    /// The active buffer is dirty (a buffer was handed to us).
+    pub is_modified: bool,
+}
+
+/// Compute the active file's identity for a live chat turn, or `None` when
+/// warmup context prefetch is disabled for this project (the caller then keeps
+/// the legacy hashless workspace entry) or the file resolves outside the
+/// workspace. Does blocking filesystem work — call from `spawn_blocking`.
+///
+/// The hash is produced by the very same [`build_active_file_snapshot`] the
+/// warmup bundle uses, so an unchanged file yields byte-identical hashes on
+/// both paths.
+pub fn active_file_identity(
+    workspace_root: &Path,
+    active_file: &str,
+    dirty_buffer: Option<&str>,
+) -> Option<ActiveFileIdentity> {
+    let root = fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
+    let settings = crate::project_settings::load_project_settings_or_default(&root);
+    if !settings.warmup_context_prefetch {
+        return None;
+    }
+    let active_path = resolve_in_workspace(&root, active_file)?;
+    let gitignore = crate::gitignore_filter::GitignoreFilter::new(&root);
+    let is_modified = dirty_buffer.is_some();
+
+    let snapshot = build_active_file_snapshot(
+        &active_path,
+        is_modified,
+        dirty_buffer,
+        &gitignore,
+        settings.allow_gitignored_files,
+    );
+
+    // Mirror the warmup open-file rule: only surface a hash that agrees with
+    // the untruncated snapshot content. A truncated excerpt hashes to
+    // something the full-file warmup snapshot never matched, so drop it.
+    let hash = if snapshot.truncated {
+        None
+    } else {
+        snapshot.hash
+    };
+
+    Some(ActiveFileIdentity { hash, is_modified })
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -797,6 +858,139 @@ mod tests {
 
         assert!(files[0].is_active && files[0].hash.is_some());
         assert!(files[1].is_modified && files[1].hash.is_none());
+    }
+
+    #[test]
+    fn active_file_identity_matches_warmup_snapshot_hash_for_clean_file() {
+        let dir = tempfile::tempdir().unwrap();
+        write(&dir.path().join("a.rs"), "disk content");
+
+        // The identity used by the live chat path...
+        let identity = active_file_identity(
+            dir.path(),
+            &dir.path().join("a.rs").to_string_lossy(),
+            None,
+        )
+        .unwrap();
+        // ...must equal the hash the warmup snapshot shipped for the same file.
+        let warm = build(dir.path(), snapshot_for(dir.path(), "a.rs"))
+            .active_file_snapshot
+            .unwrap();
+
+        assert_eq!(identity.hash, warm.hash);
+        assert_eq!(identity.hash.as_deref(), Some(sha256_hex(b"disk content").as_str()));
+        assert!(!identity.is_modified);
+    }
+
+    #[test]
+    fn active_file_identity_hashes_dirty_buffer() {
+        let dir = tempfile::tempdir().unwrap();
+        write(&dir.path().join("a.rs"), "old disk content");
+
+        let identity = active_file_identity(
+            dir.path(),
+            &dir.path().join("a.rs").to_string_lossy(),
+            Some("new buffer content"),
+        )
+        .unwrap();
+
+        assert!(identity.is_modified);
+        assert_eq!(
+            identity.hash.as_deref(),
+            Some(sha256_hex(b"new buffer content").as_str())
+        );
+
+        // Same source (buffer) the warmup snapshot would hash.
+        let mut warm_snapshot = snapshot_for(dir.path(), "a.rs");
+        warm_snapshot.open_files[0].is_modified = true;
+        warm_snapshot.active_buffer_content = Some("new buffer content".to_string());
+        let warm = build(dir.path(), warm_snapshot).active_file_snapshot.unwrap();
+        assert_eq!(identity.hash, warm.hash);
+    }
+
+    #[test]
+    fn active_file_identity_omits_hash_for_sensitive_and_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        write(&dir.path().join(".env"), "SECRET=value");
+        fs::write(dir.path().join("blob.bin"), b"ab\x00cd").unwrap();
+
+        for name in [".env", "blob.bin"] {
+            let identity = active_file_identity(
+                dir.path(),
+                &dir.path().join(name).to_string_lossy(),
+                None,
+            )
+            .unwrap();
+            assert!(identity.hash.is_none(), "hash leaked for {name}");
+        }
+    }
+
+    #[test]
+    fn active_file_identity_omits_hash_when_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let big = "a".repeat(MAX_ACTIVE_FILE_BYTES + 500);
+        write(&dir.path().join("big.txt"), &big);
+
+        let identity = active_file_identity(
+            dir.path(),
+            &dir.path().join("big.txt").to_string_lossy(),
+            None,
+        )
+        .unwrap();
+
+        // Truncated content would hash to something warmup's full-file snapshot
+        // never carried (its open-file entry also drops the hash), so no hash.
+        assert!(identity.hash.is_none());
+    }
+
+    #[test]
+    fn active_file_identity_none_when_dirty_but_no_buffer() {
+        let dir = tempfile::tempdir().unwrap();
+        write(&dir.path().join("a.rs"), "stale disk");
+
+        // is_modified=false (no buffer handed): clean disk hash. The dirty case
+        // without a buffer only arises if the frontend fails to ship it; then
+        // the buffer is None and we must not impersonate with disk content —
+        // callers pass the buffer whenever dirty, so None here means clean.
+        let identity = active_file_identity(
+            dir.path(),
+            &dir.path().join("a.rs").to_string_lossy(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(identity.hash.as_deref(), Some(sha256_hex(b"stale disk").as_str()));
+        assert!(!identity.is_modified);
+    }
+
+    #[test]
+    fn active_file_identity_none_for_file_outside_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        write(&outside.path().join("out.rs"), "outside");
+
+        let identity = active_file_identity(
+            dir.path(),
+            &outside.path().join("out.rs").to_string_lossy(),
+            None,
+        );
+        assert!(identity.is_none());
+    }
+
+    #[test]
+    fn active_file_identity_none_when_prefetch_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        write(&dir.path().join("a.rs"), "content");
+        write(
+            &dir.path().join(".zblade/config/settings.json"),
+            r#"{"warmup_context_prefetch": false}"#,
+        );
+
+        let identity = active_file_identity(
+            dir.path(),
+            &dir.path().join("a.rs").to_string_lossy(),
+            None,
+        );
+        assert!(identity.is_none());
     }
 
     #[test]

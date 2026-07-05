@@ -353,7 +353,18 @@ const AppLayoutInner: React.FC = () => {
         });
     }, [appWindow]);
 
-    const chat = disableChatHook ? useNoopChat() : useChatV2({ autoApproveRunCommands });
+    // Latest dirty active-file buffer content, read at chat-send time so each
+    // turn's workspace payload can be hashed from the same buffer warmup uses.
+    // Kept in a ref because useChatV2 runs before the editor buffer registry is
+    // set up below.
+    const activeBufferContentForChatRef = useRef<string | null>(null);
+    const getActiveBufferContentForChat = useCallback(
+        () => activeBufferContentForChatRef.current,
+        [],
+    );
+    const chat = disableChatHook
+        ? useNoopChat()
+        : useChatV2({ autoApproveRunCommands, getActiveBufferContent: getActiveBufferContentForChat });
     const [wasStoppedByUser, setWasStoppedByUser] = useState(false);
     const {
         changes: uncommittedChanges,
@@ -961,6 +972,11 @@ const AppLayoutInner: React.FC = () => {
     const terminalState = getTerminalState();
     const activeEditorContentState = activeTab?.type === 'file'
         ? getEditorContentSnapshotForMirror(editorBufferRegistryRef.current, activeTab)
+        : null;
+    // Publish the dirty buffer for the chat send path (see ref declaration
+    // above). Clean/unavailable → null so the backend hashes disk content.
+    activeBufferContentForChatRef.current = activeEditorContentState?.isDirty
+        ? (activeEditorContentState.draftContent ?? null)
         : null;
     const activeUncommittedChange = activeTab?.type === 'file' && activeTab.path
         ? findMatchingChange(activeTab.path, uncommittedChanges)

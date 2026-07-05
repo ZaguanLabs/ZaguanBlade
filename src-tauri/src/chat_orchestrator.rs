@@ -250,6 +250,7 @@ pub async fn handle_send_message<R: Runtime>(
     selection_start_line: Option<usize>,
     selection_end_line: Option<usize>,
     diagnostics: Option<Vec<WorkspaceDiagnostic>>,
+    active_buffer_content: Option<String>,
     mentions: Option<Vec<ChatMention>>,
     mode: Option<String>,
     window: tauri::Window<R>,
@@ -570,6 +571,38 @@ pub async fn handle_send_message<R: Runtime>(
             }),
         )
     };
+    // Compute the active file's identity (content hash + dirty flag) off the
+    // chat locks, reusing the warmup snapshot's exact bytes and policy so
+    // zcoderd can validate the warmed context against this live turn without a
+    // redundant read. `None` = warmup prefetch disabled or file outside the
+    // workspace (legacy hashless entry).
+    let active_file_identity = match (workspace_path.clone(), effective_active_file.clone()) {
+        (Some(root), Some(active)) => {
+            let buffer = active_buffer_content.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::warmup_bundle::active_file_identity(&root, &active, buffer.as_deref())
+            })
+            .await
+            .unwrap_or_else(|error| {
+                eprintln!("[CHAT] active-file identity task failed: {}", error);
+                None
+            })
+        }
+        _ => None,
+    };
+    if active_file_identity
+        .as_ref()
+        .is_some_and(|identity| identity.hash.is_none())
+    {
+        // Acceptance criterion: a missing hash for a known active file should be
+        // exceptional (dirty-without-buffer / truncated / secret / gitignored /
+        // binary). Log it; the workspace entry is sent without a hash.
+        eprintln!(
+            "[CHAT] active-file hash unavailable; workspace entry sent without hash (active_file={:?})",
+            effective_active_file
+        );
+    }
+
     {
         let mut mgr = state
             .chat_manager
@@ -625,6 +658,10 @@ pub async fn handle_send_message<R: Runtime>(
         let ws = workspace_path.as_ref();
 
         let composite_tools_enabled = state.feature_flags.composite_tools_enabled();
+
+        // Hand the off-lock identity to the manager for this fresh turn; it is
+        // consumed (taken) when the Zaguan workspace payload is built.
+        mgr.stage_active_file_identity(active_file_identity);
 
         mgr.start_stream(
             actual_message,

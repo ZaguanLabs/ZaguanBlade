@@ -468,6 +468,11 @@ pub struct ChatManager {
     composite_tools_enabled: bool,
     active_request_id: Option<String>,
     ws_conversation_messages: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// Active-file identity (hash + dirty flag) staged by the orchestrator for
+    /// the next fresh turn, so `start_zaguan_stream` can stamp the active
+    /// open-file entry with a hash that agrees with the warmup snapshot. Taken
+    /// (cleared) when consumed so it never leaks into a later turn.
+    staged_active_file_identity: Option<crate::warmup_bundle::ActiveFileIdentity>,
 }
 
 fn supports_reasoning_tags(model_id: &str) -> bool {
@@ -521,7 +526,17 @@ impl ChatManager {
             composite_tools_enabled: true,
             active_request_id: None,
             ws_conversation_messages: Arc::new(Mutex::new(Vec::new())),
+            staged_active_file_identity: None,
         }
+    }
+
+    /// Stage the active-file identity computed off-lock by the orchestrator for
+    /// the next `start_zaguan_stream`. Overwrites any previously staged value.
+    pub(crate) fn stage_active_file_identity(
+        &mut self,
+        identity: Option<crate::warmup_bundle::ActiveFileIdentity>,
+    ) {
+        self.staged_active_file_identity = identity;
     }
 
     pub(crate) fn composite_tools_enabled(&self) -> bool {
@@ -873,15 +888,34 @@ impl ChatManager {
         storage_mode: Option<String>,
         mode: Option<String>,
     ) -> Result<(), String> {
-        // Build workspace info for Blade Protocol
+        // Build workspace info for Blade Protocol. The active file's entry
+        // carries a hash matching the warmup snapshot (buffer-over-disk when
+        // dirty) so zcoderd can validate the warmed context against this turn
+        // without forcing a re-read. Identity is staged off-lock by the
+        // orchestrator; absent (None) means legacy hashless behavior.
+        let active_identity = self.staged_active_file_identity.take();
+        let (active_hash, active_modified) = match &active_identity {
+            Some(identity) => (
+                identity.hash.clone().unwrap_or_default(),
+                identity.is_modified,
+            ),
+            None => (String::new(), false),
+        };
         let open_file_infos = open_files
             .unwrap_or_default()
             .into_iter()
-            .map(|path| crate::blade_ws_client::OpenFileInfo {
-                path: path.clone(),
-                hash: String::new(),
-                is_active: active_file.as_ref() == Some(&path),
-                is_modified: false,
+            .map(|path| {
+                let is_active = active_file.as_ref() == Some(&path);
+                crate::blade_ws_client::OpenFileInfo {
+                    hash: if is_active {
+                        active_hash.clone()
+                    } else {
+                        String::new()
+                    },
+                    is_modified: is_active && active_modified,
+                    is_active,
+                    path,
+                }
             })
             .collect();
 

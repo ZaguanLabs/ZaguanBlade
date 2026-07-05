@@ -23,6 +23,14 @@ const COGNITIVE_INTERRUPT_CLEAR_DELAY_MS = 2500;
 
 interface UseChatV2Options {
     autoApproveRunCommands?: boolean;
+    /**
+     * Returns the active file's editor-buffer content when it has unsaved
+     * changes, or null when clean/unavailable. Sent with each chat turn so the
+     * backend can hash the active file from the same buffer warmup used
+     * (buffer-over-disk), letting zcoderd trust the warmed snapshot without a
+     * redundant read.
+     */
+    getActiveBufferContent?: () => string | null;
 }
 
 function pickDefaultModel(models: ModelInfo[]): ModelInfo | null {
@@ -541,6 +549,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
     const [state, dispatch] = useReducer(chatReducer, initialState);
 
     const getEditorSnapshotRef = useRef(getEditorSnapshot);
+    const getActiveBufferContentRef = useRef(options.getActiveBufferContent);
     const firstDispatchRef = useRef(true);
     const messagesRef = useRef<ChatMessage[]>([]);
     const messageByIdRef = useRef<Map<string, ChatMessage>>(new Map());
@@ -698,6 +707,10 @@ export function useChatV2(options: UseChatV2Options = {}) {
     }, [getEditorSnapshot]);
 
     useEffect(() => {
+        getActiveBufferContentRef.current = options.getActiveBufferContent;
+    }, [options.getActiveBufferContent]);
+
+    useEffect(() => {
         messagesRef.current = state.messages;
         const nextMessageById = new Map<string, ChatMessage>();
         const nextMessageIndexById = new Map<string, number>();
@@ -772,6 +785,12 @@ export function useChatV2(options: UseChatV2Options = {}) {
             : (safeActiveFile ? [safeActiveFile] : []);
         const normalizedOpenFiles = Array.from(new Set(openFromState.filter(Boolean)));
 
+        // Dirty active-file buffer (null when clean/unavailable). The backend
+        // hashes it for the workspace payload; it is never forwarded to zcoderd.
+        const activeBufferContent = safeActiveFile
+            ? (getActiveBufferContentRef.current?.() ?? null)
+            : null;
+
         return {
             active_file: safeActiveFile,
             open_files: normalizedOpenFiles,
@@ -780,6 +799,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
             selection_start: snapshot.selectionStartLine ?? null,
             selection_end: snapshot.selectionEndLine ?? null,
             diagnostics: getActiveDiagnostics(safeActiveFile, normalizedOpenFiles),
+            active_buffer_content: activeBufferContent,
         };
     }, []);
 

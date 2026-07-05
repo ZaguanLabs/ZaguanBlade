@@ -131,6 +131,11 @@ pub struct EditorContext {
     pub selection_end: Option<u32>,
     #[serde(default)]
     pub diagnostics: Vec<WorkspaceDiagnostic>,
+    /// Editor-buffer content of the active file, present only when it has
+    /// unsaved changes. Used server-side to hash the active file for the
+    /// workspace payload (buffer-over-disk); never re-serialized to zcoderd.
+    #[serde(default)]
+    pub active_buffer_content: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
