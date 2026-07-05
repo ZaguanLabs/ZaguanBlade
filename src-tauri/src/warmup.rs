@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::time::Instant;
 
-/// Warmup trigger types per Blade Protocol v2.1
+/// Warmup trigger types per Blade Protocol v2.1, extended with the editor
+/// triggers from the context-prefetch contract (2026-07-05).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WarmupTrigger {
@@ -10,6 +11,9 @@ pub enum WarmupTrigger {
     ModelChange,
     WorkspaceChange,
     SessionResume,
+    ActiveFileChange,
+    FileSave,
+    GuidanceChange,
 }
 
 /// Warmup request sent to zcoderd

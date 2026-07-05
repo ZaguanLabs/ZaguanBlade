@@ -15,6 +15,9 @@ pub async fn warmup_cache(
         "model_change" => warmup::WarmupTrigger::ModelChange,
         "workspace_change" => warmup::WarmupTrigger::WorkspaceChange,
         "session_resume" => warmup::WarmupTrigger::SessionResume,
+        "active_file_change" => warmup::WarmupTrigger::ActiveFileChange,
+        "file_save" => warmup::WarmupTrigger::FileSave,
+        "guidance_change" => warmup::WarmupTrigger::GuidanceChange,
         _ => warmup::WarmupTrigger::Launch,
     };
 

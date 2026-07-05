@@ -14,7 +14,7 @@ import { EditorProvider, useEditorActions } from '../contexts/EditorContext';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
 import { useChatV2 } from '../hooks/useChatV2';
 import { useProjectState, type ProjectState } from '../hooks/useProjectState';
-import { useWarmup } from '../hooks/useWarmup';
+import { useWarmup, type EditorWarmupSnapshot } from '../hooks/useWarmup';
 import { useGitStatus } from '../hooks/useGitStatus';
 import { useTabManager, type Tab } from '../hooks/useTabManager';
 import { useResizeHandlers } from '../hooks/useResizeHandlers';
@@ -438,7 +438,7 @@ const AppLayoutInner: React.FC = () => {
     } = tabManager;
 
     // Sync active tab and open file paths to EditorContext
-    const { setActiveFile, setOpenFiles } = useEditorActions();
+    const { setActiveFile, setOpenFiles, getEditorSnapshot } = useEditorActions();
     const activeFilePath = activeTab?.path ?? null;
     const openFilePathsJson = useMemo(
         () => JSON.stringify(
@@ -1043,12 +1043,49 @@ const AppLayoutInner: React.FC = () => {
             beforeShutdown: handleBeforeShutdown,
         });
 
-    // Cache warmup (Blade Protocol v2.1)
-    // Automatically warms cache on launch, model change, and workspace change
+    // Cache warmup (Blade Protocol v2.1 + context prefetch)
+    // Automatically warms cache on launch, model change, workspace change,
+    // active-file change, and save — carrying an editor/workspace context
+    // bundle so zcoderd can prewarm the provider prompt cache.
     // Wait for stateLoaded to prevent multiple warmups during initialization
+    const activeFileDirtyForWarmup = Boolean(activeEditorContentState?.isDirty);
+    const getWarmupEditorSnapshot = useCallback((): EditorWarmupSnapshot => {
+        const editorSnap = getEditorSnapshot();
+        const openFiles = tabs
+            .filter((tab) => tab.type === 'file' && tab.path)
+            .map((tab, index) => ({
+                path: tab.path!,
+                isModified: tabDirtyStates.get(tab.id) ?? false,
+                tabOrder: index,
+            }));
+        const contentState = activeTab?.type === 'file'
+            ? getEditorContentSnapshotForMirror(editorBufferRegistryRef.current, activeTab)
+            : null;
+        return {
+            activeFile: activeFilePath,
+            cursor: editorSnap.cursorLine != null && editorSnap.cursorColumn != null
+                ? { line: editorSnap.cursorLine, column: editorSnap.cursorColumn }
+                : null,
+            selection: editorSnap.selectionStartLine != null && editorSnap.selectionEndLine != null
+                ? {
+                    start: { line: editorSnap.selectionStartLine, column: 1 },
+                    end: { line: editorSnap.selectionEndLine, column: 1 },
+                }
+                : null,
+            visibleRange: null, // not tracked in frontend state yet
+            openFiles,
+            activeBufferContent: contentState?.isDirty
+                ? contentState.draftContent ?? null
+                : null,
+        };
+    }, [tabs, tabDirtyStates, activeTab, activeFilePath, getEditorSnapshot]);
     const { trackActivity } = disableWarmup
         ? { trackActivity: () => undefined }
-        : useWarmup(workspacePath, selectedModelId, stateLoaded);
+        : useWarmup(workspacePath, selectedModelId, stateLoaded, {
+            activeFilePath,
+            activeFileDirty: activeFileDirtyForWarmup,
+            getSnapshot: getWarmupEditorSnapshot,
+        });
 
     useEffect(() => {
         if (chat.loading) {
