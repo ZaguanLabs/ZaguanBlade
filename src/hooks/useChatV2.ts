@@ -1351,6 +1351,18 @@ export function useChatV2(options: UseChatV2Options = {}) {
                                 // Remove whitespace-only text blocks between reasoning blocks
                                 blocks = [...blocks.slice(0, lastReasoningIndex), { ...targetBlock, content: targetBlock.content + chunk }, ...blocks.slice(lastReasoningIndex + 1).filter((b) => !(b.type === 'text' && isWhitespaceOnly(b.content)))];
                             }
+                        } else if (lastReasoningIndex >= 0) {
+                            // There is an existing reasoning block but it's separated by real (non-whitespace)
+                            // text or activity blocks. Merge the new reasoning chunk into the existing
+                            // reasoning block instead of creating a second card. All intervening blocks
+                            // (text, tool calls, etc.) stay in place, so visual ordering is preserved.
+                            // This prevents the annoying split where a tiny trailing reasoning fragment
+                            // (e.g. a single word or ".") appears as a separate collapsed card after
+                            // the main response text.
+                            const targetBlock = blocks[lastReasoningIndex];
+                            if (targetBlock.type === 'reasoning') {
+                                blocks = [...blocks.slice(0, lastReasoningIndex), { ...targetBlock, content: targetBlock.content + chunk }, ...blocks.slice(lastReasoningIndex + 1)];
+                            }
                         } else {
                             blocks = [...blocks, { type: 'reasoning', content: chunk, id: crypto.randomUUID() }];
                         }
