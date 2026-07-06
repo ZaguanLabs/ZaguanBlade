@@ -11,6 +11,7 @@ import {
     type DerivedChatMessageRow,
 } from '../../utils/chatTimeline';
 import { FloatingJumpToBottomButton } from './FloatingJumpToBottomButton';
+import { FloatingCommandApprovalPill } from './FloatingCommandApprovalPill';
 import { useChatTimelineRows } from './useChatTimelineRows';
 import { isNearChatBottom, shouldDetachChatAutoScrollOnWheel } from '../../utils/chatScroll';
 import { useSmoothWheelScroll } from '../../hooks/useSmoothWheelScroll';
@@ -125,6 +126,20 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         }
         return messageRows.slice(firstLiveMessageRowIndex);
     }, [firstLiveMessageRowIndex, messageRows]);
+    const pendingRunCommandId = useMemo(() => {
+        for (const row of messageRows) {
+            if (row.pendingActions) {
+                const runCommand = row.pendingActions.find(
+                    (action: StructuredAction) => action.actionKind === 'command' || action.is_generic_tool === false
+                );
+                if (runCommand) {
+                    return runCommand.id;
+                }
+            }
+        }
+        return null;
+    }, [messageRows]);
+    const hasPendingRunCommand = pendingRunCommandId !== null;
     const virtualizedRowHeights = useMemo(
         () => virtualizedMessageRows.map((row) => estimateChatRowHeight(row, { viewportWidthPx: viewportMetrics.width })),
         [viewportMetrics.width, virtualizedMessageRows],
@@ -243,6 +258,20 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             setStableScrollMode('following');
         }
     }, [setStableScrollMode]);
+
+    const scrollToPendingCommand = useCallback(() => {
+        const element = scrollRef.current;
+        if (!element || !pendingRunCommandId) {
+            return;
+        }
+
+        const target = element.querySelector(`[data-tool-call-id="${CSS.escape(pendingRunCommandId)}"]`);
+        if (target) {
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            // After scrolling, re-attach follow mode so future messages scroll naturally
+            setStableScrollMode('following');
+        }
+    }, [pendingRunCommandId, setStableScrollMode]);
 
     const handleScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
         scrollTopRef.current = event.currentTarget.scrollTop;
@@ -555,6 +584,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                     <div ref={bottomRef} className="h-4" />
                 </div>
             </div>
+            <FloatingCommandApprovalPill visible={scrollMode === 'detached' && hasPendingRunCommand} onClick={scrollToPendingCommand} />
             <FloatingJumpToBottomButton visible={scrollMode === 'detached'} onClick={() => scrollToBottom()} />
         </div>
     );

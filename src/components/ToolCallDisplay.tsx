@@ -673,6 +673,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
 
     return (
         <div
+            data-tool-call-id={toolCall.id}
             className={`border-l-2 pl-2.5 transition-opacity duration-1000 ease-out ${isVisuallyComplete ? 'opacity-45' : 'opacity-100'}`}
             style={{ borderLeftColor: getStatusTone() }}
         >
