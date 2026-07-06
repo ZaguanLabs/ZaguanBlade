@@ -659,7 +659,8 @@
       "replaceFileContent": "Sustituyendo contenido",
       "writeToFile": "Escribiendo en archivo",
       "listResources": "Listando recursos",
-      "readResource": "Leyendo recurso"
+      "readResource": "Leyendo recurso",
+      "semanticAnchorSearch": "Buscando anclas semánticas"
     }
   },
   "search": {

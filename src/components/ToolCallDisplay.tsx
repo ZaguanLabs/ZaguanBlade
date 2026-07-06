@@ -440,7 +440,8 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
             'replace_file_content': { key: 'toolCall.tools.replaceFileContent', fallback: 'Replacing Content' },
             'write_to_file': { key: 'toolCall.tools.writeToFile', fallback: 'Writing to File' },
             'list_resources': { key: 'toolCall.tools.listResources', fallback: 'Listing Resources' },
-            'read_resource': { key: 'toolCall.tools.readResource', fallback: 'Reading Resource' }
+            'read_resource': { key: 'toolCall.tools.readResource', fallback: 'Reading Resource' },
+            'semantic_anchor_search': { key: 'toolCall.tools.semanticAnchorSearch', fallback: 'Searching Semantic Anchors' }
         };
         const mapped = nameMap[name];
         if (!mapped) return name;

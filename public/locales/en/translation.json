@@ -663,7 +663,8 @@
       "replaceFileContent": "Replacing Content",
       "writeToFile": "Writing to File",
       "listResources": "Listing Resources",
-      "readResource": "Reading Resource"
+      "readResource": "Reading Resource",
+      "semanticAnchorSearch": "Searching Semantic Anchors"
     }
   },
   "search": {
