@@ -141,6 +141,14 @@
     },
     "jumpToLatest": "Jump to latest",
     "implement": "Implement",
+    "cloudError": {
+      "title": "Cloud request failed",
+      "credits": "Your Zaguán Cloud credits are exhausted.",
+      "account": "Your Zaguán Cloud subscription or API key needs attention.",
+      "buyCredits": "Buy credits",
+      "manageAccount": "Manage account",
+      "useLocalAi": "Use Local AI"
+    },
     "mode": {
       "codeLabel": "Code",
       "codeDescription": "Implement and execute",

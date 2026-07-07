@@ -141,6 +141,14 @@
     },
     "jumpToLatest": "Ir al último",
     "implement": "Implementar",
+    "cloudError": {
+      "title": "La solicitud en la nube falló",
+      "credits": "Tus créditos de Zaguán Cloud se han agotado.",
+      "account": "Tu suscripción o clave de API de Zaguán Cloud necesita atención.",
+      "buyCredits": "Comprar créditos",
+      "manageAccount": "Gestionar cuenta",
+      "useLocalAi": "Usar IA local"
+    },
     "mode": {
       "codeLabel": "Código",
       "codeDescription": "Implementar y ejecutar",
