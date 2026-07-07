@@ -119,11 +119,7 @@ impl ApiConfig {
     pub fn apply_remote_config(&mut self, remote: &RemoteAiConfig) {
         self.blade_url = remote.blade_url.clone();
         self.api_key = remote.api_key.clone();
-        self.user_id = if remote.user_id.trim().is_empty() {
-            legacy_user_id_from_api_key(&remote.api_key).unwrap_or_default()
-        } else {
-            remote.user_id.clone()
-        };
+        self.user_id = remote.user_id.clone();
         self.user_email = remote.user_email.clone();
         self.tier = remote.tier.clone();
         self.theme = remote.theme.clone();
@@ -744,39 +740,9 @@ pub fn save_local_ai_config(path: &Path, local: &LocalAiConfig) -> Result<(), St
     save_api_config(path, &cfg)
 }
 
-/// Return a persisted canonical user ID, or a legacy derived ID for manually
-/// pasted API keys. New SSO connections write the canonical server user ID.
+/// Return the persisted server-provided user ID, if any.
 pub fn get_or_create_user_id(config_path: &Path) -> String {
-    let mut config = load_api_config(config_path);
-
-    if !config.user_id.trim().is_empty() {
-        return config.user_id;
-    }
-
-    if let Some(derived_id) = legacy_user_id_from_api_key(&config.api_key) {
-        if config.user_id != derived_id {
-            config.user_id = derived_id.clone();
-            if let Err(e) = save_api_config(config_path, &config) {
-                eprintln!("[CONFIG] Failed to save legacy user_id: {}", e);
-            }
-        }
-        return derived_id;
-    }
-
-    String::new()
-}
-
-fn legacy_user_id_from_api_key(api_key: &str) -> Option<String> {
-    let start_idx = api_key
-        .find("ps_live_")
-        .or_else(|| api_key.find("ps_test_"))?;
-    let prefix_len = 8; // length of "ps_live_" or "ps_test_"
-    let hash_start = start_idx + prefix_len;
-    if api_key.len() < hash_start + 8 {
-        return None;
-    }
-
-    Some(format!("user_{}", &api_key[hash_start..hash_start + 8]))
+    load_api_config(config_path).user_id
 }
 
 #[cfg(unix)]
@@ -840,19 +806,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_user_id_derives_from_zaguan_api_key() {
-        assert_eq!(
-            legacy_user_id_from_api_key("ps_live_ABCDEFGH12345678").as_deref(),
-            Some("user_ABCDEFGH")
-        );
-        assert_eq!(
-            legacy_user_id_from_api_key("ps_test_12345678ABCDEFGH").as_deref(),
-            Some("user_12345678")
-        );
-    }
-
-    #[test]
-    fn remote_config_uses_canonical_user_id_before_legacy_derivation() {
+    fn remote_config_stores_server_user_id() {
         let mut cfg = ApiConfig::default();
         cfg.apply_remote_config(&RemoteAiConfig {
             api_key: "ps_live_ABCDEFGH12345678".to_string(),
@@ -864,14 +818,30 @@ mod tests {
     }
 
     #[test]
-    fn remote_config_derives_legacy_user_id_for_manual_key_without_identity() {
+    fn remote_config_preserves_empty_user_id_for_manual_key_without_identity() {
         let mut cfg = ApiConfig::default();
         cfg.apply_remote_config(&RemoteAiConfig {
             api_key: "ps_live_ABCDEFGH12345678".to_string(),
             ..RemoteAiConfig::default()
         });
 
-        assert_eq!(cfg.user_id, "user_ABCDEFGH");
+        assert_eq!(cfg.user_id, "");
+    }
+
+    #[test]
+    fn get_or_create_user_id_does_not_derive_from_api_key() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("api.json");
+        save_api_config(
+            &path,
+            &ApiConfig {
+                api_key: "ps_live_ABCDEFGH12345678".to_string(),
+                ..ApiConfig::default()
+            },
+        )
+        .expect("save config");
+
+        assert_eq!(get_or_create_user_id(&path), "");
     }
 
     #[test]

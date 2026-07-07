@@ -22,7 +22,6 @@ pub struct WarmupRequest {
     #[serde(rename = "type")]
     pub request_type: String,
     pub session_id: String,
-    pub user_id: String,
     pub model: String,
     pub trigger: WarmupTrigger,
     /// DEPRECATED: superseded by the context bundle — provider cache strategy
@@ -70,7 +69,6 @@ const BUNDLE_DEDUPE_WINDOW_SECS: u64 = 60;
 pub struct WarmupClient {
     base_url: RwLock<String>,
     api_key: RwLock<String>,
-    user_id: RwLock<String>,
     http_client: reqwest::Client,
     last_warmup: Mutex<Option<Instant>>,
     /// (key, sent-at) of the last bundle-carrying warmup, for dedupe.
@@ -78,7 +76,7 @@ pub struct WarmupClient {
 }
 
 impl WarmupClient {
-    pub fn new(base_url: String, api_key: String, user_id: String) -> Self {
+    pub fn new(base_url: String, api_key: String, _user_id: String) -> Self {
         // Warmup requests should complete quickly (< 30s)
         // Use a timeout to prevent hanging
         let http_client = reqwest::Client::builder()
@@ -89,22 +87,18 @@ impl WarmupClient {
         Self {
             base_url: RwLock::new(base_url),
             api_key: RwLock::new(api_key),
-            user_id: RwLock::new(user_id),
             http_client,
             last_warmup: Mutex::new(None),
             last_bundle: Mutex::new(None),
         }
     }
 
-    pub fn update_credentials(&self, base_url: String, api_key: String, user_id: String) {
+    pub fn update_credentials(&self, base_url: String, api_key: String, _user_id: String) {
         if let Ok(mut current_base_url) = self.base_url.write() {
             *current_base_url = base_url;
         }
         if let Ok(mut current_api_key) = self.api_key.write() {
             *current_api_key = api_key;
-        }
-        if let Ok(mut current_user_id) = self.user_id.write() {
-            *current_user_id = user_id;
         }
     }
 
@@ -164,16 +158,10 @@ impl WarmupClient {
             .read()
             .map_err(|e| format!("Failed to read warmup API key: {}", e))?
             .clone();
-        let user_id = self
-            .user_id
-            .read()
-            .map_err(|e| format!("Failed to read warmup user ID: {}", e))?
-            .clone();
 
         let request = WarmupRequest {
             request_type: "warmup".to_string(),
             session_id: session_id.to_string(),
-            user_id,
             model: model.to_string(),
             trigger,
             cache_strategy,
@@ -349,16 +337,17 @@ mod tests {
         let request = WarmupRequest {
             request_type: "warmup".to_string(),
             session_id: "sess_x".to_string(),
-            user_id: "user_x".to_string(),
             model: "anthropic/claude-opus-4-8".to_string(),
             trigger: WarmupTrigger::ModelChange,
             cache_strategy: None,
             preferred_artifacts: None,
             context: None,
         };
-        let json: serde_json::Value = serde_json::from_str(&serde_json::to_string(&request).unwrap()).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&request).unwrap()).unwrap();
         // No bundle: none of the flattened keys may appear.
         assert!(json.get("workspace").is_none());
+        assert!(json.get("user_id").is_none());
         assert_eq!(json["type"], "warmup");
         assert_eq!(json["trigger"], "model_change");
     }
@@ -392,7 +381,6 @@ mod tests {
         let request = WarmupRequest {
             request_type: "warmup".to_string(),
             session_id: "sess_x".to_string(),
-            user_id: "user_x".to_string(),
             model: "anthropic/claude-opus-4-8".to_string(),
             trigger: WarmupTrigger::FileSave,
             cache_strategy: None,
@@ -403,6 +391,7 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&request).unwrap()).unwrap();
 
         assert_eq!(json["type"], "warmup");
+        assert!(json.get("user_id").is_none());
         assert_eq!(json["trigger"], "file_save");
         assert!(json["workspace"]["root"].is_string());
         assert_eq!(json["workspace"]["allow_gitignored_files"], false);
