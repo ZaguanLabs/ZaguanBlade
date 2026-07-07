@@ -9,6 +9,7 @@ import { EditorPanel, type EditorContentState } from './EditorPanel';
 import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
 import { AppBar } from './AppBar';
 import { AlertTriangle, GitBranch, Settings, Clock, Loader2 } from 'lucide-react';
+import { SettingsModal } from './SettingsModal';
 import { useStartupBootstrap } from '../contexts/StartupBootstrapContext';
 import { EditorProvider, useEditorActions } from '../contexts/EditorContext';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
@@ -48,7 +49,6 @@ const ChatPanelV3 = React.lazy(() => import('../chat/rendering/ChatPanel').then(
 const GitPanel = React.lazy(() => import('./GitPanel').then(module => ({ default: module.GitPanel })));
 const FileHistoryPanel = React.lazy(() => import('./FileHistoryPanel').then(module => ({ default: module.FileHistoryPanel })));
 const DocumentViewer = React.lazy(() => import('./DocumentViewer').then(module => ({ default: module.DocumentViewer })));
-const SettingsModal = React.lazy(() => import('./SettingsModal').then(module => ({ default: module.SettingsModal })));
 const StorageSetupModal = React.lazy(() => import('./StorageSetupModal').then(module => ({ default: module.StorageSetupModal })));
 const ProtocolExplorer = React.lazy(() => import('./dev/ProtocolExplorer').then(module => ({ default: module.ProtocolExplorer })));
 
@@ -793,6 +793,11 @@ const AppLayoutInner: React.FC = () => {
         setIsSettingsOpen(true);
     }, []);
 
+    const openDefaultSettings = useCallback(() => {
+        setInitialSettingsSection(undefined);
+        setIsSettingsOpen(true);
+    }, []);
+
     // Listen for telegram_command events
     useEffect(() => {
         const unlistenPromise = listen<string>('telegram_command', (event) => {
@@ -1360,7 +1365,17 @@ const AppLayoutInner: React.FC = () => {
                     </button>
                     <button
                         type="button"
-                        onClick={() => setIsSettingsOpen(true)}
+                        onMouseDown={(event) => {
+                            if (event.button !== 0) return;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            openDefaultSettings();
+                        }}
+                        onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            openDefaultSettings();
+                        }}
                         title={t('activityBar.settings')}
                         aria-label={t('activityBar.settings')}
                         className="relative mt-auto appearance-none border-0 bg-transparent p-2 rounded-[calc(var(--panel-radius)*0.45)] text-(--fg-nav) hover:text-(--fg-primary) hover:bg-(--bg-surface) transition-all duration-(--transition-fast) cursor-pointer"
@@ -1805,17 +1820,15 @@ const AppLayoutInner: React.FC = () => {
             )}
 
             {/* Settings Modal */}
-            <Suspense fallback={null}>
-                {isSettingsOpen && (
-                    <SettingsModal
-                        isOpen={isSettingsOpen}
-                        onClose={() => setIsSettingsOpen(false)}
-                        initialSection={initialSettingsSection}
-                        workspacePath={workspacePath}
-                        onRefreshModels={refreshModels}
-                    />
-                )}
-            </Suspense>
+            {isSettingsOpen && (
+                <SettingsModal
+                    isOpen={isSettingsOpen}
+                    onClose={() => setIsSettingsOpen(false)}
+                    initialSection={initialSettingsSection}
+                    workspacePath={workspacePath}
+                    onRefreshModels={refreshModels}
+                />
+            )}
 
             {/* First-time Storage Setup Modal (RFC-002) */}
             {workspacePath && (
