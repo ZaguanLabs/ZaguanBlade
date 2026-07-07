@@ -59,7 +59,7 @@ const SECRET_PREFIXES: &[&str] = &[
     "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", // GitHub
     "glpat-",       // GitLab
     "xoxb-", "xoxp-", "xoxa-", "xoxr-", "xoxs-", // Slack
-    "sk_live_", "sk_test_", "pk_live_", "rk_live_", "sk-", // Stripe / OpenAI-style
+    "sk_live_", "sk_test_", "ps_live_", "ps_test_", "pk_live_", "rk_live_", "sk-", // Stripe / OpenAI-style
     "shpat_", "shpss_", // Shopify
     "eyJ",          // JWT (base64 of `{"`)
     "-----BEGIN",   // PEM block header
@@ -207,6 +207,8 @@ mod tests {
         for secret in [
             "AKIAIOSFODNN7EXAMPLE",
             "ghp_16CharsOfTokenABCDEFGHIJKLMNOP",
+            "ps_live_EXAMPLE_synthetic_zaguan_key",
+            "ps_test_EXAMPLE_synthetic_zaguan_key",
             "xoxb-2401-slack-token-value",
             "sk_live_EXAMPLE_synthetic_test_key",
             "AIzaSyD-ExampleGoogleApiKey1234567",

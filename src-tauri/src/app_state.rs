@@ -51,6 +51,7 @@ pub struct AppState {
     pub workflow: Mutex<AiWorkflow>,
 
     pub pending_approval: Mutex<Option<tokio::sync::oneshot::Sender<bool>>>,
+    pub sso_cancel: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     pub pending_batch: Mutex<Option<crate::ai_workflow::PendingToolBatch>>,
     pub selected_model_index: Mutex<usize>,
     pub ephemeral_docs: ephemeral_documents::EphemeralDocumentStore,
@@ -127,6 +128,11 @@ impl AppState {
 
         // Get or create user_id
         let user_id = config::get_or_create_user_id(&config_path);
+        let user_id_state = if user_id.trim().is_empty() {
+            None
+        } else {
+            Some(user_id.clone())
+        };
 
         // Initialize warmup client with config values
         let warmup_client = warmup::WarmupClient::new(
@@ -149,6 +155,7 @@ impl AppState {
             config: Mutex::new(config),
             workflow: Mutex::new(AiWorkflow::new()),
             pending_approval: Mutex::new(None),
+            sso_cancel: Mutex::new(None),
             pending_batch: Mutex::new(None),
             selected_model_index: Mutex::new(initial_model_index),
             ephemeral_docs: ephemeral_documents::EphemeralDocumentStore::new(),
@@ -156,7 +163,7 @@ impl AppState {
             open_files: Mutex::new(Vec::new()),
             cursor_line: Mutex::new(None),
             cursor_column: Mutex::new(None),
-            user_id: Mutex::new(Some(user_id)),
+            user_id: Mutex::new(user_id_state),
             selection_start_line: Mutex::new(None),
             selection_end_line: Mutex::new(None),
             approved_command_roots: Mutex::new(std::collections::HashSet::new()),

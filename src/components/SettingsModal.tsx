@@ -2,7 +2,7 @@
 import React, { useId, useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
-import { emit } from '@tauri-apps/api/event';
+import { emit, listen } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
 import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, ChevronDown, Info, Loader2, Code, Key, CheckCircle2, Palette, Check, Smartphone, Eye, EyeOff } from 'lucide-react';
 import type { BackendSettings, LocalAiConfig, RemoteAiConfig } from '../types/settings';
@@ -53,6 +53,8 @@ interface SettingsState {
         bladeUrl: string;
         apiKey: string;
         userId: string;
+        email: string;
+        tier: string;
     };
     localAi: {
         ollamaEnabled: boolean;
@@ -99,6 +101,8 @@ const defaultSettings: SettingsState = {
         bladeUrl: '',
         apiKey: '',
         userId: '',
+        email: '',
+        tier: '',
     },
     localAi: {
         ollamaEnabled: false,
@@ -133,6 +137,8 @@ function backendRemoteToFrontend(backend: RemoteAiConfig): Pick<SettingsState, '
             bladeUrl: '', // Always empty, internal only
             apiKey: backend.api_key,
             userId: backend.user_id,
+            email: backend.user_email,
+            tier: backend.tier,
         },
     };
 }
@@ -156,6 +162,8 @@ function frontendRemoteToBackend(frontend: SettingsState): RemoteAiConfig {
         blade_url: '', // Frontend does not set this
         api_key: frontend.account.apiKey,
         user_id: frontend.account.userId,
+        user_email: frontend.account.email,
+        tier: frontend.account.tier,
         theme: normalizeThemeId(frontend.configuration.theme),
         markdown_view: frontend.configuration.markdownView,
         language: normalizeAppLanguage(frontend.configuration.language),
@@ -345,6 +353,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
         setHasChanges(true);
     };
 
+    const syncSavedRemoteAccount = useCallback((remoteSettings: RemoteAiConfig) => {
+        const { account } = backendRemoteToFrontend(remoteSettings);
+        setSettings(prev => ({ ...prev, account }));
+        setLoadedSettings(prev => ({ ...prev, account }));
+    }, []);
+
     const handleSave = () => {
         if (isSaving || !hasChanges) return;
 
@@ -375,6 +389,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                 const remoteAccountChanged =
                     remoteSettings.api_key !== previousRemoteSettings.api_key
                     || remoteSettings.user_id !== previousRemoteSettings.user_id
+                    || remoteSettings.user_email !== previousRemoteSettings.user_email
+                    || remoteSettings.tier !== previousRemoteSettings.tier
                     || remoteSettings.blade_url !== previousRemoteSettings.blade_url;
                 const remoteConfigurationChanged =
                     remoteSettings.markdown_view !== previousRemoteSettings.markdown_view
@@ -569,6 +585,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                                     <AccountSettings
                                         settings={settings.account}
                                         onChange={(updates) => updateSettings('account', updates)}
+                                        onConnected={syncSavedRemoteAccount}
                                     />
                                 )}
                                 {activeSection === 'editor' && (
@@ -1908,12 +1925,127 @@ const RemoteSettings: React.FC = () => {
 interface AccountSettingsProps {
     settings: SettingsState['account'];
     onChange: (updates: Partial<SettingsState['account']>) => void;
+    onConnected: (remoteSettings: RemoteAiConfig) => void;
 }
 
-const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange }) => {
+type SsoLoginProgress = {
+    status: string;
+    user_code?: string;
+    verification_uri?: string;
+    message?: string;
+    email?: string;
+    tier?: string;
+};
+
+type SsoLoginResult = {
+    user_id: string;
+    email: string;
+    tier?: string;
+};
+
+function getSsoStatusText(t: ReturnType<typeof useTranslation>['t'], progress: SsoLoginProgress | null): string | null {
+    if (!progress) return null;
+    if (progress.message) return progress.message;
+
+    switch (progress.status) {
+        case 'starting':
+            return t('settings.account.ssoStatus.starting');
+        case 'verification_required':
+            return t('settings.account.ssoStatus.verificationRequired');
+        case 'pending':
+            return t('settings.account.ssoStatus.pending');
+        case 'pending_subscription':
+            return t('settings.account.ssoStatus.pendingSubscription');
+        case 'rate_limited':
+            return t('settings.account.ssoStatus.rateLimited');
+        case 'approved':
+            return t('settings.account.ssoStatus.approved');
+        case 'cancelled':
+            return t('settings.account.ssoStatus.cancelled');
+        default:
+            return null;
+    }
+}
+
+const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange, onConnected }) => {
     const { t } = useTranslation();
     const [showKey, setShowKey] = useState(false);
+    const [isSsoLoading, setIsSsoLoading] = useState(false);
+    const [isSigningOut, setIsSigningOut] = useState(false);
+    const [ssoProgress, setSsoProgress] = useState<SsoLoginProgress | null>(null);
+    const [ssoError, setSsoError] = useState<string | null>(null);
     const apiKeyInputId = useId();
+    const isConnected = settings.apiKey.trim().length > 0;
+    const accountLabel = settings.email || settings.userId;
+    const statusText = getSsoStatusText(t, ssoProgress);
+
+    useEffect(() => {
+        const unlistenPromise = listen<SsoLoginProgress>('sso-login-progress', (event) => {
+            setSsoProgress(event.payload);
+            if (event.payload.status === 'error') {
+                setSsoError(event.payload.message || t('settings.account.ssoFailed'));
+                setIsSsoLoading(false);
+            }
+            if (event.payload.status === 'approved' || event.payload.status === 'cancelled') {
+                setIsSsoLoading(false);
+            }
+        });
+
+        return () => {
+            unlistenPromise.then((unlisten) => unlisten());
+        };
+    }, [t]);
+
+    const startSsoLogin = async () => {
+        if (isSsoLoading) return;
+        setIsSsoLoading(true);
+        setSsoError(null);
+        setSsoProgress({ status: 'starting' });
+
+        try {
+            const result = await invoke<SsoLoginResult>('start_sso_login');
+            const remoteSettings = await invoke<RemoteAiConfig>('get_remote_ai_settings');
+            onConnected(remoteSettings);
+            await emit('remote-settings-changed');
+            setSsoProgress({
+                status: 'approved',
+                email: result.email,
+                tier: result.tier || remoteSettings.tier,
+            });
+        } catch (error) {
+            const message = formatUnknownBackendError(error);
+            if (!message.toLowerCase().includes('cancelled')) {
+                setSsoError(message);
+            }
+        } finally {
+            setIsSsoLoading(false);
+        }
+    };
+
+    const cancelSsoLogin = async () => {
+        try {
+            await invoke('cancel_sso_login');
+        } catch (error) {
+            setSsoError(formatUnknownBackendError(error));
+        }
+    };
+
+    const signOut = async () => {
+        if (isSigningOut) return;
+        setIsSigningOut(true);
+        setSsoError(null);
+        try {
+            await invoke('sign_out_zaguan');
+            const remoteSettings = await invoke<RemoteAiConfig>('get_remote_ai_settings');
+            onConnected(remoteSettings);
+            await emit('remote-settings-changed');
+            setSsoProgress(null);
+        } catch (error) {
+            setSsoError(formatUnknownBackendError(error));
+        } finally {
+            setIsSigningOut(false);
+        }
+    };
 
     return (
         <div className="space-y-6">
@@ -1935,55 +2067,181 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange })
                     </div>
                     <div className="flex-1">
                         <h4 className="font-medium text-(--fg-primary) mb-1">
-                            {settings.apiKey ? t('settings.account.activeSubscription') : t('settings.account.zaguanPro')}
+                            {isConnected ? t('settings.account.activeSubscription') : t('settings.account.zaguanPro')}
                         </h4>
                         <p className="text-sm text-(--fg-secondary) mb-3">
-                            {settings.apiKey
-                                ? t('settings.account.subscriptionActive')
+                            {isConnected
+                                ? (accountLabel
+                                    ? t('settings.account.connectedAs', { account: accountLabel })
+                                    : t('settings.account.subscriptionActive'))
                                 : t('settings.account.subscriptionNeeded')}
                         </p>
-                        <a
-                            href={settings.apiKey ? "https://zaguanai.com/dashboard" : "https://zaguanai.com/pricing"}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-sm text-(--accent-ai) hover:brightness-110 font-medium"
-                        >
-                            {settings.apiKey ? t('settings.account.manageSubscription') : t('settings.account.getSubscription')}
-                        </a>
+                        {isConnected && settings.tier && (
+                            <div className="mb-3 inline-flex max-w-full items-center gap-2 rounded-[calc(var(--panel-radius)*0.5)] border border-(--border-default) bg-(--bg-editor) px-2 py-1 text-xs text-(--fg-secondary)">
+                                <span className="shrink-0 text-(--fg-tertiary)">{t('settings.account.planLabel')}</span>
+                                <span className="min-w-0 truncate font-medium text-(--fg-primary)">{settings.tier}</span>
+                            </div>
+                        )}
+                        {isConnected ? (
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                                <a
+                                    href="https://zaguanai.com/dashboard"
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-sm text-(--accent-ai) hover:brightness-110 font-medium"
+                                >
+                                    {t('settings.account.manageSubscription')}
+                                </a>
+                                <a
+                                    href="https://zaguanai.com/dashboard/api-keys"
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-sm text-(--accent-ai) hover:brightness-110 font-medium"
+                                >
+                                    {t('settings.account.manageDevices')}
+                                </a>
+                                <a
+                                    href="https://zaguanai.com/dashboard/usage"
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-sm text-(--accent-ai) hover:brightness-110 font-medium"
+                                >
+                                    {t('settings.account.usageCredits')}
+                                </a>
+                                <button
+                                    type="button"
+                                    onClick={signOut}
+                                    disabled={isSigningOut}
+                                    className="text-sm font-medium text-(--fg-secondary) transition-colors hover:text-(--fg-primary) disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {isSigningOut ? t('settings.account.signingOut') : t('settings.account.signOut')}
+                                </button>
+                            </div>
+                        ) : (
+                            <a
+                                href="https://zaguanai.com/pricing"
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-sm text-(--accent-ai) hover:brightness-110 font-medium"
+                            >
+                                {t('settings.account.getSubscription')}
+                            </a>
+                        )}
                     </div>
                 </div>
             </div>
 
-            <div className="space-y-2">
-                <label htmlFor={apiKeyInputId} className="text-sm font-medium text-(--fg-primary) block">
-                    {t('settings.apiKey')}
-                </label>
-                <div className="flex gap-2">
-                    <div className="relative flex-1">
-                        <input
-                            id={apiKeyInputId}
-                            type={showKey ? 'text' : 'password'}
-                            value={settings.apiKey}
-                            onChange={(e) => onChange({ apiKey: e.target.value })}
-                            placeholder={t('settings.apiKeyPlaceholder')}
-                            className="w-full rounded-[calc(var(--panel-radius)*0.65)] bg-(--bg-surface) border border-(--border-default) py-2 pl-3 pr-10 text-sm text-(--fg-primary) focus:outline-none focus:border-(--accent-ai) placeholder-(--fg-tertiary)"
-                        />
+            <div className="rounded-[calc(var(--panel-radius)+2px)] border border-(--border-default) bg-(--bg-surface) p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                        <h4 className="text-sm font-medium text-(--fg-primary)">{t('settings.account.ssoTitle')}</h4>
+                        <p className="mt-1 text-xs leading-5 text-(--fg-tertiary)">
+                            {t('settings.account.ssoDescription')}
+                        </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                        {isSsoLoading && (
+                            <button
+                                type="button"
+                                onClick={cancelSsoLogin}
+                                className="rounded-[calc(var(--panel-radius)*0.65)] border border-(--border-default) px-3 py-2 text-sm font-medium text-(--fg-secondary) transition-colors hover:bg-(--bg-surface-hover) hover:text-(--fg-primary)"
+                            >
+                                {t('settings.account.cancelSso')}
+                            </button>
+                        )}
                         <button
                             type="button"
-                            aria-label={showKey ? 'Hide API key' : 'Show API key'}
-                            aria-pressed={showKey}
-                            onClick={() => setShowKey(!showKey)}
-                            className="absolute right-3 top-2 text-(--fg-tertiary) hover:text-(--fg-secondary)"
+                            onClick={startSsoLogin}
+                            disabled={isSsoLoading}
+                            className="flex items-center gap-2 rounded-[calc(var(--panel-radius)*0.65)] bg-(--accent-ai) px-4 py-2 text-sm font-medium text-(--fg-bright) transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                            {showKey ? (
-                                <EyeOff className="w-4 h-4" aria-hidden="true" />
+                            {isSsoLoading ? (
+                                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                             ) : (
-                                <Eye className="w-4 h-4" aria-hidden="true" />
+                                <Cloud className="h-4 w-4" aria-hidden="true" />
                             )}
+                            {isConnected ? t('settings.account.reconnectSso') : t('settings.account.signInWithZaguan')}
                         </button>
                     </div>
                 </div>
+
+                {(statusText || ssoProgress?.user_code || ssoError) && (
+                    <div className="mt-4 rounded-[calc(var(--panel-radius)*0.65)] border border-(--border-default) bg-(--bg-editor) p-3" aria-live="polite">
+                        {statusText && (
+                            <div className="text-sm text-(--fg-secondary)">{statusText}</div>
+                        )}
+                        {ssoProgress?.user_code && (
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                                <span className="text-xs font-medium uppercase tracking-[0.14em] text-(--fg-tertiary)">
+                                    {t('settings.account.userCode')}
+                                </span>
+                                <span className="rounded-[calc(var(--panel-radius)*0.45)] border border-(--border-default) bg-(--bg-surface) px-2 py-1 font-mono text-sm text-(--fg-primary)">
+                                    {ssoProgress.user_code}
+                                </span>
+                            </div>
+                        )}
+                        {ssoProgress?.verification_uri && (
+                            <a
+                                href={ssoProgress.verification_uri}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="mt-3 inline-flex text-sm font-medium text-(--accent-ai) hover:brightness-110"
+                            >
+                                {t('settings.account.openVerification')}
+                            </a>
+                        )}
+                        {ssoError && (
+                            <div className="mt-3 rounded-[calc(var(--panel-radius)*0.55)] border border-[color-mix(in_srgb,var(--state-danger)_32%,transparent)] bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] px-3 py-2 text-sm text-(--state-danger)">
+                                {ssoError}
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
+
+            <details className="rounded-[calc(var(--panel-radius)+2px)] border border-(--border-default) bg-(--bg-surface) p-4" open={!isConnected}>
+                <summary className="cursor-pointer text-sm font-medium text-(--fg-primary)">
+                    {t('settings.account.manualApiKey')}
+                </summary>
+                <p className="mt-2 text-xs leading-5 text-(--fg-tertiary)">
+                    {t('settings.account.manualApiKeyHint')}
+                </p>
+                <div className="mt-3 space-y-2">
+                    <label htmlFor={apiKeyInputId} className="text-sm font-medium text-(--fg-primary) block">
+                        {t('settings.apiKey')}
+                    </label>
+                    <div className="flex gap-2">
+                        <div className="relative flex-1">
+                            <input
+                                id={apiKeyInputId}
+                                type={showKey ? 'text' : 'password'}
+                                value={settings.apiKey}
+                                onChange={(e) => onChange({
+                                    apiKey: e.target.value,
+                                    userId: '',
+                                    email: '',
+                                    tier: '',
+                                })}
+                                placeholder={t('settings.apiKeyPlaceholder')}
+                                className="w-full rounded-[calc(var(--panel-radius)*0.65)] bg-(--bg-surface) border border-(--border-default) py-2 pl-3 pr-10 text-sm text-(--fg-primary) focus:outline-none focus:border-(--accent-ai) placeholder-(--fg-tertiary)"
+                            />
+                            <button
+                                type="button"
+                                aria-label={showKey ? 'Hide API key' : 'Show API key'}
+                                aria-pressed={showKey}
+                                onClick={() => setShowKey(!showKey)}
+                                className="absolute right-3 top-2 text-(--fg-tertiary) hover:text-(--fg-secondary)"
+                            >
+                                {showKey ? (
+                                    <EyeOff className="w-4 h-4" aria-hidden="true" />
+                                ) : (
+                                    <Eye className="w-4 h-4" aria-hidden="true" />
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </details>
         </div>
     );
 };

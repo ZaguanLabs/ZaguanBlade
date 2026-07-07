@@ -28,6 +28,7 @@ pub mod conversation;
 pub mod conversation_memory;
 pub mod conversation_store;
 pub mod core_state;
+pub mod credential_store;
 pub mod environment;
 pub mod ephemeral_commands;
 pub mod ephemeral_documents;
@@ -60,6 +61,7 @@ pub mod remote_control;
 pub mod screenshot;
 pub mod secrets;
 pub mod semantic_patch;
+pub mod sso;
 pub mod startup;
 pub mod symbol_index;
 pub mod telegram_service;
@@ -241,6 +243,9 @@ pub fn run() {
             // Settings
             commands::settings_remote::get_remote_ai_settings,
             commands::settings_remote::save_remote_ai_settings,
+            commands::sso::start_sso_login,
+            commands::sso::cancel_sso_login,
+            commands::sso::sign_out_zaguan,
             commands::settings_local_ai::get_local_ai_settings,
             commands::settings_local_ai::save_local_ai_settings,
             commands::settings_local_ai::test_local_ollama_connection,

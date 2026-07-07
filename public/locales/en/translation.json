@@ -83,8 +83,8 @@
       "title": "Run AI locally or use cloud models",
       "subtitle": "Local = private, runs on your machine • Cloud = faster, pay per use",
       "useLocalAi": "Use Local AI (no setup)",
-      "useCloudModels": "Use Cloud Models (API key)",
-      "manageSubscription": "Manage Subscription",
+      "useCloudModels": "Sign in to Zaguán Cloud",
+      "manageSubscription": "Manage Cloud Account",
       "noApiKey": "No API key? Use Local AI.",
       "localPrivacy": "Your code stays on your machine."
     },
@@ -548,7 +548,32 @@
       "subscriptionActive": "Your subscription is active. AI features are enabled.",
       "subscriptionNeeded": "You need an active subscription to use AI features.",
       "manageSubscription": "Manage Subscription →",
-      "getSubscription": "Get Subscription →"
+      "manageDevices": "Manage Devices →",
+      "usageCredits": "Usage & Credits →",
+      "getSubscription": "Get Subscription →",
+      "signOut": "Sign out",
+      "signingOut": "Signing out...",
+      "connectedAs": "Connected as {{account}}.",
+      "planLabel": "Plan",
+      "ssoTitle": "Zaguán account sign-in",
+      "ssoDescription": "Use the browser to connect this desktop app to your subscribed Zaguán account.",
+      "signInWithZaguan": "Sign in",
+      "reconnectSso": "Reconnect",
+      "cancelSso": "Cancel",
+      "userCode": "Code",
+      "openVerification": "Open verification page",
+      "manualApiKey": "Manual API key",
+      "manualApiKeyHint": "Use this only for an existing key or local development.",
+      "ssoFailed": "Sign-in failed.",
+      "ssoStatus": {
+        "starting": "Starting browser sign-in...",
+        "verificationRequired": "Complete sign-in in your browser.",
+        "pending": "Waiting for approval in the browser.",
+        "pendingSubscription": "Waiting for subscription checkout.",
+        "rateLimited": "Waiting before the next sign-in check.",
+        "approved": "Zaguán account connected.",
+        "cancelled": "Sign-in cancelled."
+      }
     }
   },
   "activityBar": {

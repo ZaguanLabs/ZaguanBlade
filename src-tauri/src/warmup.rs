@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 use std::time::Instant;
 
 /// Warmup trigger types per Blade Protocol v2.1, extended with the editor
@@ -68,9 +68,9 @@ const BUNDLE_DEDUPE_WINDOW_SECS: u64 = 60;
 
 /// Warmup client for proactive cache warming
 pub struct WarmupClient {
-    base_url: String,
-    api_key: String,
-    user_id: String,
+    base_url: RwLock<String>,
+    api_key: RwLock<String>,
+    user_id: RwLock<String>,
     http_client: reqwest::Client,
     last_warmup: Mutex<Option<Instant>>,
     /// (key, sent-at) of the last bundle-carrying warmup, for dedupe.
@@ -87,12 +87,24 @@ impl WarmupClient {
             .unwrap_or_else(|_| reqwest::Client::new());
 
         Self {
-            base_url,
-            api_key,
-            user_id,
+            base_url: RwLock::new(base_url),
+            api_key: RwLock::new(api_key),
+            user_id: RwLock::new(user_id),
             http_client,
             last_warmup: Mutex::new(None),
             last_bundle: Mutex::new(None),
+        }
+    }
+
+    pub fn update_credentials(&self, base_url: String, api_key: String, user_id: String) {
+        if let Ok(mut current_base_url) = self.base_url.write() {
+            *current_base_url = base_url;
+        }
+        if let Ok(mut current_api_key) = self.api_key.write() {
+            *current_api_key = api_key;
+        }
+        if let Ok(mut current_user_id) = self.user_id.write() {
+            *current_user_id = user_id;
         }
     }
 
@@ -142,11 +154,26 @@ impl WarmupClient {
         } else {
             (None, None)
         };
+        let base_url = self
+            .base_url
+            .read()
+            .map_err(|e| format!("Failed to read warmup base URL: {}", e))?
+            .clone();
+        let api_key = self
+            .api_key
+            .read()
+            .map_err(|e| format!("Failed to read warmup API key: {}", e))?
+            .clone();
+        let user_id = self
+            .user_id
+            .read()
+            .map_err(|e| format!("Failed to read warmup user ID: {}", e))?
+            .clone();
 
         let request = WarmupRequest {
             request_type: "warmup".to_string(),
             session_id: session_id.to_string(),
-            user_id: self.user_id.clone(),
+            user_id,
             model: model.to_string(),
             trigger,
             cache_strategy,
@@ -154,7 +181,7 @@ impl WarmupClient {
             context,
         };
 
-        let candidates = crate::blade_endpoint::connection_candidates(&self.base_url).await;
+        let candidates = crate::blade_endpoint::connection_candidates(&base_url).await;
         let mut last_error = "no Blade endpoints configured".to_string();
         let mut data = None;
 
@@ -164,7 +191,7 @@ impl WarmupClient {
                 .http_client
                 .post(&url)
                 .header("Content-Type", "application/json")
-                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Authorization", format!("Bearer {}", api_key))
                 .json(&request)
                 .send()
                 .await
@@ -173,7 +200,7 @@ impl WarmupClient {
                 Err(error) => {
                     last_error =
                         format!("Warmup request failed via {}: {}", endpoint.base_url, error);
-                    crate::blade_endpoint::mark_failure(&endpoint, &self.api_key).await;
+                    crate::blade_endpoint::mark_failure(&endpoint, &api_key).await;
                     continue;
                 }
             };
@@ -186,7 +213,7 @@ impl WarmupClient {
                     endpoint.base_url, status, text
                 );
                 if status.is_server_error() {
-                    crate::blade_endpoint::mark_failure(&endpoint, &self.api_key).await;
+                    crate::blade_endpoint::mark_failure(&endpoint, &api_key).await;
                     continue;
                 }
                 return Err(last_error);
@@ -198,7 +225,7 @@ impl WarmupClient {
                 .map_err(|e| format!("Failed to parse warmup response: {}", e))?;
             crate::blade_endpoint::mark_success(&endpoint).await;
             if endpoint.role == crate::blade_endpoint::BladeEndpointRole::Backup {
-                crate::blade_endpoint::start_primary_monitor(self.api_key.clone());
+                crate::blade_endpoint::start_primary_monitor(api_key.clone());
             }
             data = Some(parsed);
             break;

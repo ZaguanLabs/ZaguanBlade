@@ -2,6 +2,8 @@ export interface RemoteAiConfig {
     blade_url: string;
     api_key: string;
     user_id: string;
+    user_email: string;
+    tier: string;
     theme: string;
     markdown_view: string;
     language: string;

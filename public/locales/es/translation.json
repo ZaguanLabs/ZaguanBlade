@@ -83,8 +83,8 @@
       "title": "Ejecuta la IA en local o usa modelos en la nube",
       "subtitle": "Local = privado, se ejecuta en tu equipo • Nube = más rápido, pago por uso",
       "useLocalAi": "Usar IA local (sin configuración)",
-      "useCloudModels": "Usar modelos en la nube (clave API)",
-      "manageSubscription": "Gestionar suscripción",
+      "useCloudModels": "Iniciar sesión en Zaguán Cloud",
+      "manageSubscription": "Gestionar cuenta Cloud",
       "noApiKey": "¿No tienes clave API? Usa IA local.",
       "localPrivacy": "Tu código se queda en tu equipo."
     },
@@ -544,7 +544,32 @@
       "subscriptionActive": "Tu suscripción está activa. Las funciones de IA están habilitadas.",
       "subscriptionNeeded": "Necesitas una suscripción activa para usar las funciones de IA.",
       "manageSubscription": "Gestionar suscripción →",
-      "getSubscription": "Obtener suscripción →"
+      "manageDevices": "Gestionar dispositivos →",
+      "usageCredits": "Uso y créditos →",
+      "getSubscription": "Obtener suscripción →",
+      "signOut": "Cerrar sesión",
+      "signingOut": "Cerrando sesión...",
+      "connectedAs": "Conectado como {{account}}.",
+      "planLabel": "Plan",
+      "ssoTitle": "Inicio de sesión de cuenta Zaguán",
+      "ssoDescription": "Usa el navegador para conectar esta aplicación de escritorio a tu cuenta Zaguán suscrita.",
+      "signInWithZaguan": "Iniciar sesión",
+      "reconnectSso": "Reconectar",
+      "cancelSso": "Cancelar",
+      "userCode": "Código",
+      "openVerification": "Abrir página de verificación",
+      "manualApiKey": "Clave API manual",
+      "manualApiKeyHint": "Úsala solo para una clave existente o desarrollo local.",
+      "ssoFailed": "Error al iniciar sesión.",
+      "ssoStatus": {
+        "starting": "Iniciando sesión en el navegador...",
+        "verificationRequired": "Completa el inicio de sesión en tu navegador.",
+        "pending": "Esperando aprobación en el navegador.",
+        "pendingSubscription": "Esperando el pago de la suscripción.",
+        "rateLimited": "Esperando antes de la siguiente comprobación.",
+        "approved": "Cuenta Zaguán conectada.",
+        "cancelled": "Inicio de sesión cancelado."
+      }
     }
   },
   "activityBar": {
