@@ -87,7 +87,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
           <span className="text-sm font-medium text-(--fg-primary)">{title}</span>
           {isEphemeral && (
             <span className="text-xs px-2 py-0.5 rounded-[calc(var(--panel-radius)*0.35)] bg-[color-mix(in_srgb,var(--accent-warning)_10%,transparent)] text-(--accent-warning) border border-(--accent-warning)/20">
-              Unsaved
+              {t('editor.unsavedBadge')}
             </span>
           )}
         </div>

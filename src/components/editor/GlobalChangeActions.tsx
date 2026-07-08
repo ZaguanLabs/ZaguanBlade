@@ -30,7 +30,7 @@ export const GlobalChangeActions: React.FC<GlobalChangeActionsProps> = ({
       <div className="flex items-center justify-between gap-3 px-1 py-1.5 text-xs">
         <div className="flex min-w-0 items-baseline gap-2 text-xs font-medium text-(--fg-primary)">
           <span className="truncate">
-            {fileCount} file{fileCount !== 1 ? 's' : ''}
+            {t('diff.fileCount', { count: fileCount })}
           </span>
           <span className="text-(--accent-mention)">+{totalAdded}</span>
           <span className="text-(--state-danger)">-{totalRemoved}</span>

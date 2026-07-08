@@ -1,3 +1,4 @@
+import i18n from '../i18n';
 import type { IndexHealthSnapshot } from '../types/blade';
 
 function getPendingFileCount(indexHealth: IndexHealthSnapshot): number {
@@ -86,17 +87,33 @@ export function formatIndexStatusLabel(
 export function formatIndexStatusTitle(indexHealth: IndexHealthSnapshot): string {
     const parts = [
         indexHealth.message,
-        `${indexHealth.indexed_files}/${indexHealth.supported_files} files indexed`,
-        `${indexHealth.symbol_count} symbols`,
+        i18n.t('statusBar.index.filesIndexed', {
+            defaultValue: '{{indexed}}/{{supported}} files indexed',
+            indexed: indexHealth.indexed_files,
+            supported: indexHealth.supported_files,
+        }),
+        i18n.t('statusBar.index.symbols', {
+            defaultValue: '{{count}} symbols',
+            count: indexHealth.symbol_count,
+        }),
     ];
     if (indexHealth.current_file) {
-        parts.push(`Current file: ${indexHealth.current_file}`);
+        parts.push(i18n.t('statusBar.index.currentFile', {
+            defaultValue: 'Current file: {{file}}',
+            file: indexHealth.current_file,
+        }));
     }
     if (indexHealth.queued_files > 0) {
-        parts.push(`${indexHealth.queued_files} queued`);
+        parts.push(i18n.t('statusBar.index.queued', {
+            defaultValue: '{{count}} queued',
+            count: indexHealth.queued_files,
+        }));
     }
     if (indexHealth.orphaned_files > 0) {
-        parts.push(`${indexHealth.orphaned_files} orphaned`);
+        parts.push(i18n.t('statusBar.index.orphaned', {
+            defaultValue: '{{count}} orphaned',
+            count: indexHealth.orphaned_files,
+        }));
     }
     return parts.join(' • ');
 }

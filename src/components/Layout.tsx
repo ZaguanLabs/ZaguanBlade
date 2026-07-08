@@ -623,12 +623,12 @@ const AppLayoutInner: React.FC = () => {
 
         chat.setChatMode('code');
         chat.sendMessage(
-            `Implement this plan in the current workspace.\n\n${trimmedPlan}`,
+            `${t('chat.implementPlanMessage')}\n\n${trimmedPlan}`,
             undefined,
             undefined,
             'code'
         );
-    }, [chat]);
+    }, [chat, t]);
 
     const handleOpenProject = useCallback(async () => {
         try {
@@ -834,7 +834,7 @@ const AppLayoutInner: React.FC = () => {
     }, [workspacePath]);
 
     useEffect(() => {
-        const titleParts = ['Zaguán Blade'];
+        const titleParts = [t('app.name')];
         if (projectName) titleParts.push(projectName);
         if (activeFilename) titleParts.push(activeFilename);
         const title = titleParts.join(' - ');
@@ -845,7 +845,7 @@ const AppLayoutInner: React.FC = () => {
             });
         });
         document.title = title;
-    }, [appWindow, projectName, activeFilename]);
+    }, [appWindow, projectName, activeFilename, t]);
 
     useEffect(() => {
         if (!bootstrap || bootstrapAppliedRef.current) return;
@@ -1443,7 +1443,7 @@ const AppLayoutInner: React.FC = () => {
                                         (m) => m.id === selectedModelId || m.api_id === selectedModelId
                                     );
                                     if (!hasValidModel) {
-                                        throw new Error('No model selected');
+                                        throw new Error(t('errors.noModelSelected'));
                                     }
                                     return generateGitCommitMessage(selectedModelId);
                                 }}
@@ -1696,12 +1696,12 @@ const AppLayoutInner: React.FC = () => {
                         const langMap: Record<string, string> = {
                             rs: 'Rust', ts: 'TypeScript', tsx: 'TypeScript React', js: 'JavaScript', jsx: 'JavaScript React',
                             py: 'Python', rb: 'Ruby', go: 'Go', java: 'Java', kt: 'Kotlin', swift: 'Swift',
-                            c: 'C', cpp: 'C++', h: 'C Header', hpp: 'C++ Header', cs: 'C#',
+                            c: 'C', cpp: 'C++', h: t('statusBar.languages.cHeader'), hpp: t('statusBar.languages.cppHeader'), cs: 'C#',
                             html: 'HTML', css: 'CSS', scss: 'SCSS', less: 'Less', json: 'JSON', yaml: 'YAML', yml: 'YAML',
-                            xml: 'XML', md: 'Markdown', toml: 'TOML', sql: 'SQL', sh: 'Shell', bash: 'Bash',
+                            xml: 'XML', md: 'Markdown', toml: 'TOML', sql: 'SQL', sh: t('statusBar.languages.shell'), bash: 'Bash',
                             lua: 'Lua', zig: 'Zig', dart: 'Dart', php: 'PHP', r: 'R',
                             svelte: 'Svelte', vue: 'Vue', astro: 'Astro',
-                            txt: 'Plain Text', csv: 'CSV', svg: 'SVG',
+                            txt: t('statusBar.languages.plainText'), csv: 'CSV', svg: 'SVG',
                         };
                         return langMap[ext ?? ''] ?? ext?.toUpperCase() ?? null;
                     })()}</span>

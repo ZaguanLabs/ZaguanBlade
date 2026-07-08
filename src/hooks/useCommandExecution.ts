@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { listen, emit } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import i18n from '../i18n';
 import { BladeDispatcher } from '../services/blade';
 import { subscribeBladeNestedEventType } from '../services/bladeEvents';
 import { BLADE_TERMINAL_ID, BLADE_TERMINAL_TITLE } from '../constants/terminal';
@@ -156,7 +157,10 @@ export function useCommandExecution() {
                     terminalId,
                     waiters.filter(waiter => waiter !== onReady),
                 );
-                reject(new Error(`Timed out waiting for terminal ${terminalId} to be ready.`));
+                reject(new Error(i18n.t('terminal.waitTimeout', {
+                    defaultValue: 'Timed out waiting for terminal {{terminalId}} to be ready.',
+                    terminalId,
+                })));
             }, TERMINAL_READY_TIMEOUT_MS);
 
             const onReady = () => {
@@ -356,7 +360,9 @@ export function useCommandExecution() {
     const executeNativeCommand = useCallback(async (pending: PendingCommand) => {
         if (!pending.program) {
             pendingCommandsRef.current.delete(pending.callId);
-            await handleCommandComplete(pending.callId, 'Native command execution requires a program.', 1);
+            await handleCommandComplete(pending.callId, i18n.t('commandExecution.programRequired', {
+                defaultValue: 'Native command execution requires a program.',
+            }), 1);
             return;
         }
 
@@ -369,7 +375,10 @@ export function useCommandExecution() {
             });
         } catch (err) {
             pendingCommandsRef.current.delete(pending.callId);
-            await handleCommandComplete(pending.callId, `Failed to execute native command: ${String(err)}`, 1);
+            await handleCommandComplete(pending.callId, i18n.t('commandExecution.nativeFailed', {
+                defaultValue: 'Failed to execute native command: {{error}}',
+                error: String(err),
+            }), 1);
         }
     }, [handleCommandComplete]);
 
@@ -423,7 +432,10 @@ export function useCommandExecution() {
             }
 
             pendingCommandsRef.current.delete(pending.callId);
-            await handleCommandComplete(pending.callId, `Failed to execute command in Blade terminal: ${String(err)}`, 1);
+            await handleCommandComplete(pending.callId, i18n.t('commandExecution.bladeTerminalFailed', {
+                defaultValue: 'Failed to execute command in Blade terminal: {{error}}',
+                error: String(err),
+            }), 1);
         }
     }, [buildCommandForExecution, createCommandTerminal, handleCommandComplete, invalidateTerminal, openManagedTerminal, releaseTerminalReservation]);
 
@@ -455,7 +467,9 @@ export function useCommandExecution() {
 
         if (!pending.native) {
             releaseTerminalReservation(pending, false);
-            await handleCommandComplete(callId, 'Command cancelled by user.', 130);
+            await handleCommandComplete(callId, i18n.t('commandExecution.cancelledByUser', {
+                defaultValue: 'Command cancelled by user.',
+            }), 130);
         }
     }, [clearTerminalExitFallback, handleCommandComplete, releaseTerminalReservation]);
 
@@ -602,7 +616,10 @@ export function useCommandExecution() {
                             latestPending.callId,
                             fallbackOutput.trim().length > 0
                                 ? fallbackOutput
-                                : `Command terminal exited before completion (exit ${exitCode}).`,
+                                : i18n.t('commandExecution.terminalExitedEarly', {
+                                    defaultValue: 'Command terminal exited before completion (exit {{code}}).',
+                                    code: exitCode,
+                                }),
                             exitCode,
                         );
                     }, 150);

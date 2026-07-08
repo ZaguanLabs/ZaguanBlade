@@ -1,7 +1,9 @@
+import i18n from '../i18n';
+
 export const fileToDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(new Error('Failed to read image file'));
+    reader.onerror = () => reject(new Error(i18n.t('chat.attachments.readFailed', { defaultValue: 'Failed to read image file' })));
     reader.readAsDataURL(file);
 });
 
@@ -15,22 +17,29 @@ export const SUPPORTED_IMAGE_MIME_TYPES = new Set([
 
 export const validateImageByteLength = (byteLength: number): string | null => {
     if (byteLength <= 0) {
-        return 'Image is empty.';
+        return i18n.t('chat.attachments.imageEmpty', { defaultValue: 'Image is empty.' });
     }
     if (byteLength > MAX_IMAGE_BYTES) {
         const sizeMb = (byteLength / (1024 * 1024)).toFixed(1);
         const limitMb = (MAX_IMAGE_BYTES / (1024 * 1024)).toFixed(0);
-        return `Image too large (${sizeMb} MB). Max ${limitMb} MB. Try a smaller image.`;
+        return i18n.t('chat.attachments.imageTooLarge', {
+            defaultValue: 'Image too large ({{sizeMb}} MB). Max {{limitMb}} MB. Try a smaller image.',
+            sizeMb,
+            limitMb
+        });
     }
     return null;
 };
 
 export const validateImageMimeType = (mimeType?: string | null): string | null => {
     if (!mimeType) {
-        return 'Missing image MIME type.';
+        return i18n.t('chat.attachments.missingMimeType', { defaultValue: 'Missing image MIME type.' });
     }
     if (!SUPPORTED_IMAGE_MIME_TYPES.has(mimeType)) {
-        return `Unsupported image type (${mimeType}).`;
+        return i18n.t('chat.attachments.unsupportedType', {
+            defaultValue: 'Unsupported image type ({{mimeType}}).',
+            mimeType
+        });
     }
     return null;
 };

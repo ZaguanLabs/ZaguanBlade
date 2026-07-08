@@ -1,6 +1,7 @@
 'use client';
 import React, { useState } from 'react';
 import { Terminal, ChevronDown, ChevronRight, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useSmoothWheelScroll } from '../hooks/useSmoothWheelScroll';
 
 const ORPHANED_ANSI_FINAL_BYTES = new Set(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'S', 'T', 'f', 'h', 'l', 'm', 'n', 'r', 's', 'u']);
@@ -64,6 +65,7 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
     exitCode,
     duration,
 }) => {
+    const { t } = useTranslation();
     const [isExpanded, setIsExpanded] = useState(true);
     const isSuccess = exitCode === 0;
     const handleOutputWheel = useSmoothWheelScroll<HTMLPreElement>();
@@ -117,7 +119,7 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
                         ? 'bg-[color-mix(in_srgb,var(--accent-mention)_10%,transparent)] text-(--accent-mention)'
                         : 'bg-[color-mix(in_srgb,var(--state-danger)_10%,transparent)] text-(--state-danger)'
                         }`}>
-                        Exit {exitCode}
+                        {t('chat.commandOutput.exit', { code: exitCode })}
                     </div>
                     {isExpanded ? (
                         <ChevronDown aria-hidden="true" className="w-4 h-4" />
@@ -149,7 +151,7 @@ export const CommandOutputDisplay: React.FC<CommandOutputDisplayProps> = ({
                     className="border-t px-4 py-3 text-xs text-(--fg-tertiary) italic"
                     style={{ borderTopColor: 'color-mix(in srgb, var(--border-default) 88%, transparent)' }}
                 >
-                    No output
+                    {t('chat.commandOutput.noOutput')}
                 </div>
             )}
         </div>

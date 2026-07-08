@@ -1,6 +1,7 @@
 import { StateField, StateEffect, RangeSetBuilder } from "@codemirror/state";
 import { EditorView, Decoration, DecorationSet, WidgetType, ViewPlugin, ViewUpdate } from "@codemirror/view";
 import { parsePatch } from "diff";
+import i18n from "../../../i18n";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -269,7 +270,11 @@ class RemovedBlockWidget extends WidgetType {
 
         const summary = document.createElement("span");
         summary.className = "cm-diff-removed-block-summary";
-        summary.textContent = `${this.count} removed ${this.count === 1 ? "line" : "lines"}`;
+        summary.textContent = i18n.t('diff.removedLines', {
+            count: this.count,
+            defaultValue_one: '{{count}} removed line',
+            defaultValue_other: '{{count}} removed lines',
+        });
         wrapper.appendChild(summary);
 
         const preview = document.createElement("span");
@@ -312,7 +317,11 @@ class GapWidget extends WidgetType {
 
         const label = document.createElement("span");
         label.className = "cm-diff-gap-label";
-        label.textContent = `${this.hiddenCount} unchanged line${this.hiddenCount === 1 ? '' : 's'}`;
+        label.textContent = i18n.t('diff.unchangedLines', {
+            count: this.hiddenCount,
+            defaultValue_one: '{{count}} unchanged line',
+            defaultValue_other: '{{count}} unchanged lines',
+        });
         wrapper.appendChild(label);
 
         const line2 = document.createElement("span");

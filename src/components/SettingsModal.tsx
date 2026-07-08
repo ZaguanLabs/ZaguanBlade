@@ -461,7 +461,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
             { id: 'context', label: t('settings.navigation.context'), icon: <Zap className="w-4 h-4" aria-hidden="true" /> },
             // { id: 'privacy', label: 'Privacy', icon: <Shield className="w-4 h-4" /> },
         ] as const : []),
-        { id: 'remote', label: 'Remote', icon: <Smartphone className="w-4 h-4" aria-hidden="true" /> },
+        { id: 'remote', label: t('settings.navigation.remote'), icon: <Smartphone className="w-4 h-4" aria-hidden="true" /> },
         { id: 'about', label: t('settings.navigation.about'), icon: <Info className="w-4 h-4" aria-hidden="true" /> },
     ];
 
@@ -1708,6 +1708,7 @@ interface RemoteControlStatusData {
 }
 
 const RemoteSettings: React.FC = () => {
+    const { t } = useTranslation();
     const [status, setStatus] = useState<RemoteControlStatusData | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -1764,9 +1765,9 @@ const RemoteSettings: React.FC = () => {
     return (
         <div className="space-y-6">
             <div>
-                <h3 className="text-base font-semibold text-(--fg-primary) mb-1">Remote Control</h3>
+                <h3 className="text-base font-semibold text-(--fg-primary) mb-1">{t('settings.remote.title')}</h3>
                 <p className="text-sm text-(--fg-tertiary) mb-4">
-                    Pair Zaguán Blade with Telegram to run commands remotely and approve AI actions from your phone.
+                    {t('settings.remote.description')}
                 </p>
             </div>
 
@@ -1785,24 +1786,24 @@ const RemoteSettings: React.FC = () => {
                                 <Smartphone className="w-8 h-8 text-(--accent-ai)" aria-hidden="true" />
                             </div>
                             <div>
-                                <div className="text-sm font-medium text-(--fg-primary) mb-1">Create a Telegram Bot</div>
+                                <div className="text-sm font-medium text-(--fg-primary) mb-1">{t('settings.remote.createBotTitle')}</div>
                                 <div className="text-xs text-(--fg-tertiary)">
-                                    To use remote control, you need to provide your own Telegram bot token. This keeps your connection entirely private and local.
+                                    {t('settings.remote.createBotDescription')}
                                 </div>
                             </div>
                         </div>
 
                         <div className="text-xs text-(--fg-secondary) space-y-2 bg-[color-mix(in_srgb,var(--bg-surface)_50%,transparent)] p-3 rounded-[calc(var(--panel-radius)*0.75)] border border-(--border-subtle)">
-                            <p className="font-medium">How to get a Bot Token:</p>
+                            <p className="font-medium">{t('settings.remote.howToGetToken')}</p>
                             <ol className="list-decimal pl-4 space-y-1 text-(--fg-tertiary)">
-                                <li>Open Telegram and chat with <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-(--accent-ai) hover:underline">@BotFather</a></li>
-                                <li>Send the command <code className="bg-(--bg-editor) px-1 rounded">/newbot</code> and follow the prompts</li>
-                                <li>Copy the HTTP API Token provided at the end</li>
+                                <li>{t('settings.remote.step1')} <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="text-(--accent-ai) hover:underline">@BotFather</a></li>
+                                <li>{t('settings.remote.step2')} <code className="bg-(--bg-editor) px-1 rounded">/newbot</code> {t('settings.remote.step2Suffix')}</li>
+                                <li>{t('settings.remote.step3')}</li>
                             </ol>
                         </div>
 
                         <div className="flex flex-col gap-2">
-                            <label htmlFor={botTokenInputId} className="text-xs font-medium text-(--fg-secondary)">Bot Token</label>
+                            <label htmlFor={botTokenInputId} className="text-xs font-medium text-(--fg-secondary)">{t('settings.remote.botTokenLabel')}</label>
                             <div className="flex gap-3">
                                 <input
                                     id={botTokenInputId}
@@ -1818,7 +1819,7 @@ const RemoteSettings: React.FC = () => {
                                     disabled={isLoading || !tokenInput.trim()}
                                     className="shrink-0 flex items-center gap-2 rounded-[calc(var(--panel-radius)*0.65)] bg-(--accent-ai) px-5 py-2.5 text-sm font-medium text-(--fg-bright) transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
-                                    {isLoading ? <Loader2 aria-hidden="true" className="w-4 h-4 animate-spin" /> : 'Connect'}
+                                    {isLoading ? <Loader2 aria-hidden="true" className="w-4 h-4 animate-spin" /> : t('settings.remote.connect')}
                                 </button>
                             </div>
                         </div>
@@ -1837,15 +1838,15 @@ const RemoteSettings: React.FC = () => {
                             </div>
                             <div className="flex-1">
                                 <div className="text-sm font-medium text-(--fg-primary)">
-                                    Telegram Bot Configured
+                                    {t('settings.remote.botConfigured')}
                                 </div>
                                 {status.bot_username && (
                                     <div className="text-xs text-(--fg-secondary) mt-0.5">
-                                        Bot Username: <span className="font-medium text-(--fg-primary)">@{status.bot_username}</span>
+                                        {t('settings.remote.botUsername')} <span className="font-medium text-(--fg-primary)">@{status.bot_username}</span>
                                     </div>
                                 )}
                                 <div className="text-[10px] text-(--fg-tertiary) mt-1">
-                                    Status: {status.paired ? 'Paired with your chat' : 'Waiting for you to send a message'}
+                                    {t('settings.remote.statusLabel')} {status.paired ? t('settings.remote.statusPaired') : t('settings.remote.statusWaiting')}
                                 </div>
                             </div>
                             <button
@@ -1854,7 +1855,7 @@ const RemoteSettings: React.FC = () => {
                                 disabled={isLoading}
                                 className="rounded-[calc(var(--panel-radius)*0.65)] px-3 py-1.5 text-xs font-medium text-(--state-danger) border border-[color-mix(in_srgb,var(--state-danger)_30%,var(--border-default))] bg-[color-mix(in_srgb,var(--state-danger)_8%,transparent)] hover:bg-[color-mix(in_srgb,var(--state-danger)_16%,transparent)] transition-colors disabled:opacity-50"
                             >
-                                Disconnect
+                                {t('settings.remote.disconnect')}
                             </button>
                         </div>
                     </div>
@@ -1864,9 +1865,9 @@ const RemoteSettings: React.FC = () => {
                         <div className="border border-(--border-focus) rounded-[calc(var(--panel-radius)+4px)] p-6 bg-[color-mix(in_srgb,var(--accent-ai)_5%,var(--bg-panel))] shadow-(--panel-shadow)">
                             <div className="flex flex-col items-center gap-5">
                                 <div className="text-center">
-                                    <div className="text-sm font-medium text-(--fg-primary) mb-1">Open Chat with your Bot</div>
+                                    <div className="text-sm font-medium text-(--fg-primary) mb-1">{t('settings.remote.openChatTitle')}</div>
                                     <div className="text-xs text-(--fg-tertiary)">
-                                        Scan this code with your phone's camera, or click the link below, then send <code className="bg-(--bg-editor) px-1 rounded">/start</code> to pair and begin sending commands.
+                                        {t('settings.remote.qrDescription')} <code className="bg-(--bg-editor) px-1 rounded">/start</code> {t('settings.remote.qrDescriptionSuffix')}
                                     </div>
                                 </div>
 
@@ -1895,13 +1896,13 @@ const RemoteSettings: React.FC = () => {
                     {/* Feature Info */}
                     <div className="border border-(--border-default) rounded-[calc(var(--panel-radius)+2px)] p-4 bg-(--bg-surface) space-y-3">
                         <div className="text-xs font-medium uppercase tracking-[0.16em] text-(--fg-secondary)">
-                            What you can do remotely
+                            {t('settings.remote.featuresTitle')}
                         </div>
                         <div className="space-y-2">
                             {[
-                                'Send terminal commands from Telegram',
-                                'Approve or reject AI command execution',
-                                'View command output and exit codes',
+                                t('settings.remote.featureCommands'),
+                                t('settings.remote.featureApprovals'),
+                                t('settings.remote.featureOutput'),
                             ].map((item, i) => (
                                 <div key={i} className="flex items-center gap-2 text-xs text-(--fg-secondary)">
                                     <span className="h-1.5 w-1.5 rounded-full bg-(--accent-ai) shrink-0" />
@@ -1916,7 +1917,7 @@ const RemoteSettings: React.FC = () => {
             {/* Info footer */}
             <div className="flex items-center gap-2 text-[11px] text-(--fg-tertiary)">
                 <span className="h-2 w-2 rounded-full bg-(--accent-ai)" />
-                <span>Remote control requires Zaguán Blade to be running on your computer.</span>
+                <span>{t('settings.remote.requiresRunning')}</span>
             </div>
         </div>
     );
@@ -2227,7 +2228,7 @@ const AccountSettings: React.FC<AccountSettingsProps> = ({ settings, onChange, o
                             />
                             <button
                                 type="button"
-                                aria-label={showKey ? 'Hide API key' : 'Show API key'}
+                                aria-label={showKey ? t('settings.account.hideApiKey') : t('settings.account.showApiKey')}
                                 aria-pressed={showKey}
                                 onClick={() => setShowKey(!showKey)}
                                 className="absolute right-3 top-2 text-(--fg-tertiary) hover:text-(--fg-secondary)"

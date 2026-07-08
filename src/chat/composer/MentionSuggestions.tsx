@@ -39,7 +39,7 @@ export const MentionSuggestions: React.FC<{
                         >
                             <Icon className="h-3.5 w-3.5 shrink-0 text-(--accent-ai)" aria-hidden="true" />
                             <span className="min-w-0 flex-1 truncate text-[11px]">@{suggestion.name}</span>
-                            <span className="text-[9px] text-(--fg-tertiary)">command</span>
+                            <span className="text-[9px] text-(--fg-tertiary)">{t('chat.mentions.commandBadge')}</span>
                         </button>
                     );
                 }
@@ -56,7 +56,7 @@ export const MentionSuggestions: React.FC<{
                     >
                         <Icon className="h-3.5 w-3.5 shrink-0 text-(--accent-ai)" aria-hidden="true" />
                         <span className="min-w-0 flex-1 truncate text-[11px]">@{suggestion.entry.path}</span>
-                        <span className="text-[9px] text-(--fg-tertiary)">{suggestion.entry.is_dir ? 'folder' : 'file'}</span>
+                        <span className="text-[9px] text-(--fg-tertiary)">{suggestion.entry.is_dir ? t('chat.mentions.folderBadge') : t('chat.mentions.fileBadge')}</span>
                     </button>
                 );
             })}

@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
+import i18n from '../../i18n';
 import type { ImageAttachment } from '../../types/chat';
 import {
     createThumbnailDataUrl,
@@ -61,7 +62,7 @@ export function useComposerAttachments(options: {
             return;
         }
         if (options.disabledImages) {
-            setAttachmentError(options.disabledReason || 'Images are not available for this model.');
+            setAttachmentError(options.disabledReason || i18n.t('chat.attachments.imagesNotAvailable', { defaultValue: 'Images are not available for this model.' }));
             return;
         }
 
@@ -82,7 +83,7 @@ export function useComposerAttachments(options: {
 
     const appendCapture = useCallback(async (result: { data: string; mime_type: string }, name: string) => {
         if (options.disabledImages) {
-            setAttachmentError(options.disabledReason || 'Images are not available for this model.');
+            setAttachmentError(options.disabledReason || i18n.t('chat.attachments.imagesNotAvailable', { defaultValue: 'Images are not available for this model.' }));
             return false;
         }
         try {
@@ -99,7 +100,7 @@ export function useComposerAttachments(options: {
 
     const appendDataUrl = useCallback(async (dataUrl: string, name: string) => {
         if (options.disabledImages) {
-            setAttachmentError(options.disabledReason || 'Images are not available for this model.');
+            setAttachmentError(options.disabledReason || i18n.t('chat.attachments.imagesNotAvailable', { defaultValue: 'Images are not available for this model.' }));
             return false;
         }
         try {
@@ -115,13 +116,13 @@ export function useComposerAttachments(options: {
 
     const uploadImages = useCallback(async () => {
         if (options.disabledImages) {
-            setAttachmentError(options.disabledReason || 'Images are not available for this model.');
+            setAttachmentError(options.disabledReason || i18n.t('chat.attachments.imagesNotAvailable', { defaultValue: 'Images are not available for this model.' }));
             return;
         }
 
         const selected = await open({
             multiple: true,
-            filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
+            filters: [{ name: i18n.t('chat.attachments.imagesFilter', { defaultValue: 'Images' }), extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
         });
         if (!selected) {
             return;

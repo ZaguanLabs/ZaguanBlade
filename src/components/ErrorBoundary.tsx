@@ -1,5 +1,6 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { RefreshCw, Trash2, Copy, AlertTriangle } from 'lucide-react';
+import i18n from '../i18n';
 
 interface Props {
     children?: ReactNode;
@@ -88,13 +89,13 @@ export class ErrorBoundary extends Component<Props, State> {
                         <div className="flex items-center gap-3 px-4 py-3 bg-[color-mix(in_srgb,var(--state-danger)_12%,transparent)] border-b border-(--border-subtle)">
                             <AlertTriangle className="w-5 h-5 text-(--state-danger)" aria-hidden="true" />
                             <h2 className="text-sm font-semibold text-(--fg-primary)">
-                                Something went wrong
+                                {i18n.t('errorBoundary.title', { defaultValue: 'Something went wrong' })}
                             </h2>
                         </div>
 
                         <div className="p-4 space-y-4">
                             <p className="text-xs text-(--fg-secondary)">
-                                The UI encountered an error. You can try recovering without restarting the app.
+                                {i18n.t('errorBoundary.description', { defaultValue: 'The UI encountered an error. You can try recovering without restarting the app.' })}
                             </p>
 
                             <div className="flex flex-wrap gap-2">
@@ -104,7 +105,7 @@ export class ErrorBoundary extends Component<Props, State> {
                                     className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-[calc(var(--panel-radius)*0.45)] bg-(--accent-ai) text-(--fg-bright) hover:opacity-90 transition-opacity"
                                 >
                                     <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
-                                    Reload UI
+                                    {i18n.t('errorBoundary.reloadUi', { defaultValue: 'Reload UI' })}
                                 </button>
                                 <button
                                     type="button"
@@ -112,7 +113,7 @@ export class ErrorBoundary extends Component<Props, State> {
                                     className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-[calc(var(--panel-radius)*0.45)] bg-(--bg-surface) text-(--fg-primary) border border-(--border-subtle) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
                                     <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
-                                    Clear Cache & Reload
+                                    {i18n.t('errorBoundary.clearCacheReload', { defaultValue: 'Clear Cache & Reload' })}
                                 </button>
                                 <button
                                     type="button"
@@ -120,13 +121,13 @@ export class ErrorBoundary extends Component<Props, State> {
                                     className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-[calc(var(--panel-radius)*0.45)] bg-(--bg-surface) text-(--fg-primary) border border-(--border-subtle) hover:bg-(--bg-surface-hover) transition-colors"
                                 >
                                     <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
-                                    Full Reload
+                                    {i18n.t('errorBoundary.fullReload', { defaultValue: 'Full Reload' })}
                                 </button>
                             </div>
 
                             <details className="group">
                                 <summary className="text-xs text-(--fg-tertiary) cursor-pointer hover:text-(--fg-secondary) select-none">
-                                    Show error details
+                                    {i18n.t('errorBoundary.showDetails', { defaultValue: 'Show error details' })}
                                 </summary>
                                 <div className="mt-2 p-2 bg-(--bg-app) rounded-[calc(var(--panel-radius)*0.4)] border border-(--border-subtle) overflow-auto max-h-48">
                                     <div className="flex justify-end mb-1">
@@ -136,7 +137,7 @@ export class ErrorBoundary extends Component<Props, State> {
                                             className="flex items-center gap-1 px-2 py-0.5 text-[10px] text-(--fg-tertiary) hover:text-(--fg-secondary) transition-colors"
                                         >
                                             <Copy className="w-3 h-3" aria-hidden="true" />
-                                            Copy
+                                            {i18n.t('common.copy', { defaultValue: 'Copy' })}
                                         </button>
                                     </div>
                                     <pre className="text-[10px] font-mono text-(--state-danger) whitespace-pre-wrap break-all">

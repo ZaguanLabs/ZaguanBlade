@@ -365,6 +365,7 @@ const CompactWorkLog: React.FC<{
     detailsLockedOpen: boolean;
     onToggleDetails: () => void;
 }> = React.memo(({ entries, showDetails, detailsLockedOpen, onToggleDetails }) => {
+    const { t } = useTranslation();
     const [isExpanded, setIsExpanded] = useState(false);
     if (entries.length === 0) {
         return null;
@@ -384,7 +385,7 @@ const CompactWorkLog: React.FC<{
                 <span className="flex min-w-0 items-center gap-2">
                     <Terminal aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-(--fg-tertiary)" />
                     <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-(--fg-tertiary)">
-                        Work log ({entries.length})
+                        {t('chatMessage.workLog', { count: entries.length })}
                     </span>
                     {!isExpanded && (
                         <span className="min-w-0 truncate text-[10px] text-(--fg-secondary)">
@@ -415,7 +416,7 @@ const CompactWorkLog: React.FC<{
                     ))}
                     {!isExpanded && hiddenCount > 0 && (
                         <div className="px-1 text-[10px] text-(--fg-tertiary)">
-                            +{hiddenCount} more
+                            {t('chatMessage.moreEntries', { count: hiddenCount })}
                         </div>
                     )}
                 </div>
@@ -428,7 +429,7 @@ const CompactWorkLog: React.FC<{
                     disabled={detailsLockedOpen}
                     aria-pressed={showDetails || detailsLockedOpen}
                 >
-                    {detailsLockedOpen ? 'Details visible' : showDetails ? 'Hide details' : 'Show details'}
+                    {detailsLockedOpen ? t('chatMessage.detailsVisible') : showDetails ? t('toolCall.hideDetails') : t('toolCall.showDetails')}
                 </button>
             </div>
         </div>
@@ -663,7 +664,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
             id: `${message.id || 'msg'}-image-${index}`,
             fullUrl,
             previewUrl,
-            name: name || `Attachment ${index + 1}`
+            name: name || t('chat.attachments.attachmentNumber', { number: index + 1 })
         }];
     });
     const renderSegments = useMemo(
@@ -1178,12 +1179,12 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                         className="mt-1.5 inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[10px] font-mono"
                         style={assistantChunkCounterStyle}
                     >
-                        <span>{stream!.seq} chunks</span>
+                        <span>{t('chatMessage.chunks', { count: stream!.seq })}</span>
                         <span style={assistantChunkCounterDividerStyle}>•</span>
                         <span>
                             {stream!.endTime
                                 ? `${streamElapsedSec.toFixed(1)}s`
-                                : (showAssistantLiveState && streamAgeMs > 5000 ? 'waiting...' : 'streaming...')}
+                                : (showAssistantLiveState && streamAgeMs > 5000 ? t('chatMessage.waiting') : t('chatMessage.streaming'))}
                         </span>
                     </div>
                 )}

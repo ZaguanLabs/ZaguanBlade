@@ -99,7 +99,9 @@
       "question": "¿Quieres guardar los cambios antes de salir?",
       "overflowPlain": "...y {{count}} más",
       "saveFailedSummary": "No se pudieron guardar tus cambios antes de salir."
-    }
+    },
+    "unsavedBadge": "Sin guardar",
+    "lineLocation": "Línea {{line}}"
   },
   "chat": {
     "title": "Chat con IA",
@@ -153,7 +155,8 @@
       "codeLabel": "Código",
       "codeDescription": "Implementar y ejecutar",
       "planningLabel": "Planificación",
-      "planningDescription": "Investigar y planificar primero"
+      "planningDescription": "Investigar y planificar primero",
+      "planLabel": "Plan"
     },
     "planningPlaceholder": "Investiga el código, haz preguntas de aclaración y prepara un plan concreto antes de programar…",
     "pathRef": "Ref.",
@@ -176,7 +179,9 @@
     "modelPicker": {
       "empty": "No hay modelos disponibles",
       "ollama": "Ollama",
-      "localServer": "Servidor local"
+      "localServer": "Servidor local",
+      "openaiCompatWith": "Compatible con OpenAI ({{ownedBy}})",
+      "openaiCompat": "Compatible con OpenAI"
     },
     "composer": {
       "planningReadonly": "El modo planificación es de solo lectura",
@@ -186,7 +191,9 @@
       "inputLabel": "Mensaje de chat",
       "planPlaceholder": "Planifica un cambio...",
       "requestPlaceholder": "Pregunta o solicita un cambio...",
-      "shiftEnterForNewline": "Mayús+Enter para nueva línea"
+      "shiftEnterForNewline": "Mayús+Enter para nueva línea",
+      "stopResponse": "Detener respuesta",
+      "sendMessage": "Enviar mensaje"
     },
     "tabs": {
       "chat": "Chat",
@@ -196,12 +203,22 @@
       "title": "Solicitudes en cola ({{count}})",
       "imageOnlyRequest": "(solicitud solo de imagen)",
       "editQueuedRequest": "Editar solicitud en cola",
-      "deleteQueuedRequest": "Eliminar solicitud en cola"
+      "deleteQueuedRequest": "Eliminar solicitud en cola",
+      "attachmentsCount_one": "{{count}} adjunto",
+      "attachmentsCount_other": "{{count}} adjuntos"
     },
     "attachments": {
       "title": "Adjuntos",
       "attachmentAlt": "Adjunto",
-      "removeImage": "Quitar imagen"
+      "removeImage": "Quitar imagen",
+      "imagesNotAvailable": "Las imágenes no están disponibles para este modelo.",
+      "imagesFilter": "Imágenes",
+      "attachmentNumber": "Adjunto {{number}}",
+      "readFailed": "No se pudo leer el archivo de imagen",
+      "imageEmpty": "La imagen está vacía.",
+      "imageTooLarge": "Imagen demasiado grande ({{sizeMb}} MB). Máximo {{limitMb}} MB. Prueba con una imagen más pequeña.",
+      "missingMimeType": "Falta el tipo MIME de la imagen.",
+      "unsupportedType": "Tipo de imagen no compatible ({{mimeType}})."
     },
     "system": {
       "requestFailed": "La solicitud ha fallado",
@@ -209,7 +226,58 @@
       "contextLimitRecoverable": "La IA está intentando recuperarse automáticamente. También puedes probar a:\n- Iniciar una nueva conversación\n- Pedirle a la IA que resuma la conversación",
       "contextLimitRestart": "Inicia una nueva conversación para continuar.",
       "responseTooLargeTitle": "La respuesta es demasiado grande",
-      "recoveryHintLabel": "Sugerencia de recuperación"
+      "recoveryHintLabel": "Sugerencia de recuperación",
+      "tokenUsage": "({{tokenCount}} / {{maxTokens}} tokens)",
+      "responseTooLargeBody": "La respuesta era demasiado grande para procesarla. Divide la respuesta en partes más pequeñas o usa una salida más concisa.",
+      "responseTooLargeRecoveryHint": "Tu respuesta anterior superó el límite de tamaño de mensaje. Reinténtalo con un enfoque más conciso: usa bloques de código más pequeños, evita mostrar archivos completos y divide los cambios grandes en varias llamadas a herramientas más pequeñas.",
+      "contextLimitDuringGeneration": "Se alcanzó el límite de contexto durante la generación",
+      "responseTooLargeHint": "Usa respuestas más pequeñas y divide los cambios grandes en varias llamadas a herramientas.",
+      "disconnectedWhileGenerating": "El servidor se desconectó durante la generación. Vuelve a conectarte a zcoderd y reinténtalo cuando esté disponible.",
+      "disconnectedBeforeResponse": "El servidor se desconectó antes de recibir una respuesta. Vuelve a conectarte a zcoderd y reinténtalo cuando esté disponible.",
+      "noContent": "[sin contenido]"
+    },
+    "mentions": {
+      "commandBadge": "comando",
+      "folderBadge": "carpeta",
+      "fileBadge": "archivo"
+    },
+    "commandAwaitingApproval": "Comando a la espera de tu aprobación",
+    "latest": "Último",
+    "strips": {
+      "queue": "Cola"
+    },
+    "commandOutput": {
+      "exit": "Salida {{code}}",
+      "noOutput": "Sin salida"
+    },
+    "implementPlanMessage": "Implementa este plan en el espacio de trabajo actual.",
+    "cognitiveInterrupt": {
+      "toolPaused": "{{toolName}} en pausa hasta recopilar evidencia de diagnóstico",
+      "evidenceGathered": "Evidencia de diagnóstico recopilada",
+      "editPaused": "Edición en pausa",
+      "title": "Interrupción cognitiva"
+    },
+    "workLog": {
+      "toolCall": "Llamada a herramienta",
+      "runCommand": "Ejecutar comando",
+      "ranCommand": "Comando ejecutado"
+    },
+    "researchResultsTitle": "Resultados de la investigación",
+    "research": {
+      "generated": "Generado",
+      "thinking": "Pensando",
+      "complete": "✅ **¡Investigación completada!**\n\n📄 Los resultados se han abierto en una nueva pestaña del editor.",
+      "completeLabel": "Completado",
+      "disconnected": "Desconectado"
+    },
+    "status": {
+      "reading": "📖 Leyendo `{{path}}`...",
+      "writing": "✍️ Escribiendo en `{{path}}`...",
+      "editing": "✏️ Editando `{{path}}`...",
+      "listing": "📂 Listando `{{path}}`...",
+      "searching": "🔍 Buscando `{{pattern}}`...",
+      "running": "⚙️ Ejecutando `{{command}}`...",
+      "usingTool": "🔧 Usando la herramienta `{{tool}}`..."
     }
   },
   "fileTree": {
@@ -241,7 +309,8 @@
     "redo": "Rehacer",
     "find": "Buscar",
     "renameSymbol": "Renombrar símbolo",
-    "showCallGraph": "Mostrar grafo de llamadas"
+    "showCallGraph": "Mostrar grafo de llamadas",
+    "label": "Menú contextual"
   },
   "terminal": {
     "title": "Terminal",
@@ -265,7 +334,10 @@
     "findClose": "Cerrar busqueda",
     "diagnosticsNoOutput": "Terminal iniciada, esperando salida...",
     "diagnosticsStillWaiting": "La terminal sigue sin salida. Puede que el proceso se este ejecutando en silencio.",
-    "sendToChat": "Enviar al chat"
+    "sendToChat": "Enviar al chat",
+    "processExited": "El proceso ha terminado con el código {{code}}",
+    "initFailed": "No se pudo inicializar el backend de la terminal.",
+    "waitTimeout": "Se agotó el tiempo de espera para que la terminal {{terminalId}} estuviera lista."
   },
   "tabs": {
     "openFiles": "Archivos abiertos",
@@ -280,7 +352,14 @@
     "aiEdited": "La IA ha editado este archivo",
     "aiEditedUnread": "La IA ha editado este archivo (sin leer)",
     "aiPendingReview": "Edición de IA pendiente de revisión",
-    "aiPendingReviewUnread": "Edición de IA pendiente de revisión (sin leer)"
+    "aiPendingReviewUnread": "Edición de IA pendiente de revisión (sin leer)",
+    "copyFilename": "Copiar nombre del archivo",
+    "copyFullPath": "Copiar ruta completa",
+    "moveToBeginning": "Mover al principio",
+    "moveToEnd": "Mover al final",
+    "closeOthers": "Cerrar las demás",
+    "closeAll": "Cerrar todas",
+    "closeNamed": "Cerrar {{title}}"
   },
   "diff": {
     "title": "Vista de diferencias",
@@ -303,7 +382,13 @@
     "allChangesAccepted": "Todos los cambios aceptados",
     "allChangesRejected": "Todos los cambios rechazados",
     "acceptChangesTitle": "Aceptar cambios (mantener en disco)",
-    "rejectChangesTitle": "Rechazar cambios (volver al original)"
+    "rejectChangesTitle": "Rechazar cambios (volver al original)",
+    "removedLines_one": "{{count}} línea eliminada",
+    "removedLines_other": "{{count}} líneas eliminadas",
+    "unchangedLines_one": "{{count}} línea sin cambios",
+    "unchangedLines_other": "{{count}} líneas sin cambios",
+    "fileCount_one": "{{count}} archivo",
+    "fileCount_other": "{{count}} archivos"
   },
   "approval": {
     "title": "Aprobar cambios",
@@ -325,7 +410,10 @@
     "skip": "Omitir",
     "waiting": "En espera",
     "skipping": "Omitiendo",
-    "runCommandDescription": "Ejecutar comando: {{command}}"
+    "runCommandDescription": "Ejecutar comando: {{command}}",
+    "createDirectory": "Crear directorio: {{path}}",
+    "moveFile": "Mover {{source}} a {{destination}}",
+    "copyFile": "Copiar {{source}} a {{destination}}"
   },
   "settings": {
     "title": "Ajustes",
@@ -375,7 +463,8 @@
       "localAi": "IA local",
       "storage": "Almacenamiento",
       "context": "Contexto",
-      "about": "Acerca de"
+      "about": "Acerca de",
+      "remote": "Remoto"
     },
     "configurationSection": {
       "title": "Configuración",
@@ -577,6 +666,61 @@
         "rateLimited": "Esperando antes de la siguiente comprobación.",
         "approved": "Cuenta Zaguán conectada.",
         "cancelled": "Inicio de sesión cancelado."
+      },
+      "hideApiKey": "Ocultar clave API",
+      "showApiKey": "Mostrar clave API",
+      "sso": {
+        "alreadyInProgress": "Ya hay un inicio de sesión de Zaguán en curso.",
+        "clientInitFailed": "No se pudo inicializar el cliente de inicio de sesión: {{error}}",
+        "expired": "El inicio de sesión de Zaguán ha caducado. Inicia una nueva solicitud.",
+        "cancelledError": "Inicio de sesión de Zaguán cancelado.",
+        "rateLimitWait": "Esperando {{seconds}} segundos antes de reintentar.",
+        "pendingSubscriptionMessage": "Termina el pago de la suscripción en el navegador y luego aprueba este dispositivo.",
+        "denied": "El inicio de sesión de Zaguán fue denegado en el navegador.",
+        "consumed": "Este inicio de sesión de Zaguán ya se ha utilizado. Inicia una nueva solicitud.",
+        "unexpectedStatus": "Estado inesperado del inicio de sesión de Zaguán: {{status}}",
+        "startFailed": "No se pudo iniciar el inicio de sesión: {{error}}",
+        "startHttpFailed": "El inicio de sesión falló ({{status}}): {{body}}",
+        "readResponseFailed": "No se pudo leer la respuesta del inicio de sesión: {{error}}",
+        "pollFailed": "No se pudo consultar el estado del inicio de sesión: {{error}}",
+        "pollHttpFailed": "La consulta del inicio de sesión falló ({{status}}): {{body}}",
+        "pollReadFailed": "No se pudo leer la respuesta de la consulta del inicio de sesión: {{error}}",
+        "missingApiKey": "El inicio de sesión aprobado no incluía una clave API.",
+        "missingUserId": "El inicio de sesión aprobado no incluía un ID de usuario.",
+        "missingEmail": "El inicio de sesión aprobado no incluía una dirección de correo electrónico."
+      }
+    },
+    "remote": {
+      "title": "Control remoto",
+      "description": "Empareja Zaguán Blade con Telegram para ejecutar comandos de forma remota y aprobar acciones de la IA desde tu teléfono.",
+      "createBotTitle": "Crear un bot de Telegram",
+      "createBotDescription": "Para usar el control remoto, debes proporcionar tu propio token de bot de Telegram. Así tu conexión se mantiene totalmente privada y local.",
+      "howToGetToken": "Cómo conseguir un token de bot:",
+      "step1": "Abre Telegram y habla con",
+      "step2": "Envía el comando",
+      "step2Suffix": "y sigue las instrucciones",
+      "step3": "Copia el token de la API HTTP que se proporciona al final",
+      "botTokenLabel": "Token del bot",
+      "connect": "Conectar",
+      "botConfigured": "Bot de Telegram configurado",
+      "botUsername": "Nombre de usuario del bot:",
+      "statusLabel": "Estado:",
+      "statusPaired": "Emparejado con tu chat",
+      "statusWaiting": "Esperando a que envíes un mensaje",
+      "disconnect": "Desconectar",
+      "openChatTitle": "Abre un chat con tu bot",
+      "qrDescription": "Escanea este código con la cámara de tu teléfono o pulsa el enlace de abajo y luego envía",
+      "qrDescriptionSuffix": "para emparejar y empezar a enviar comandos.",
+      "featuresTitle": "Qué puedes hacer de forma remota",
+      "featureCommands": "Enviar comandos de terminal desde Telegram",
+      "featureApprovals": "Aprobar o rechazar la ejecución de comandos de la IA",
+      "featureOutput": "Ver la salida de los comandos y los códigos de salida",
+      "requiresRunning": "El control remoto requiere que Zaguán Blade esté en ejecución en tu equipo.",
+      "errors": {
+        "emptyToken": "El token del bot no puede estar vacío",
+        "telegramUnreachable": "No se pudo contactar con Telegram: {{error}}",
+        "telegramParseFailed": "No se pudo analizar la respuesta de Telegram: {{error}}",
+        "invalidToken": "Token de bot no válido"
       }
     }
   },
@@ -613,7 +757,32 @@
       "checking": "Verificando índice de código",
       "pending": "Índice de símbolos pendiente ({{count}} archivos)",
       "partial": "Índice de símbolos parcial ({{count}} archivos pendientes)",
-      "unavailable": "Índice de símbolos no disponible"
+      "unavailable": "Índice de símbolos no disponible",
+      "filesIndexed": "{{indexed}}/{{supported}} archivos indexados",
+      "symbols": "{{count}} símbolos",
+      "currentFile": "Archivo actual: {{file}}",
+      "queued": "{{count}} en cola",
+      "orphaned": "{{count}} huérfanos",
+      "statusUnknown": "Estado de la inteligencia de código desconocido",
+      "ready": "Inteligencia de código lista",
+      "partialPending": "Inteligencia de código parcial: {{count}} archivos pendientes",
+      "refreshingPending": "Actualizando la inteligencia de código: {{count}} archivos pendientes",
+      "checkingSymbolIndex": "Comprobando el índice de símbolos",
+      "building": "Construyendo el índice de símbolos... {{done}}/{{total}} archivos",
+      "indexingDetailed": "Indexando {{file}}... {{done}}/{{total}} archivos ({{workers}} procesos)",
+      "retryingDeferred": "Reintentando {{count}} archivo(s) aplazado(s)...",
+      "resolvingRelationships": "Resolviendo relaciones entre símbolos...",
+      "resolvingCrossFile": "Resolviendo llamadas a métodos entre archivos...",
+      "rebuildingIntegrity": "Reconstruyendo el índice de símbolos tras problemas de integridad del grafo ({{missingSources}} orígenes ausentes, {{missingTargets}} destinos ausentes, {{filesMissingRoots}} archivos sin raíz)",
+      "partialIntegrity": "Inteligencia de código parcial: se detectaron problemas de integridad del grafo ({{missingSources}} orígenes ausentes, {{missingTargets}} destinos ausentes, {{filesMissingRoots}} archivos sin raíz)",
+      "readyResolved": "Inteligencia de código lista: {{resolved}}/{{total}} relaciones entre símbolos resueltas",
+      "refreshFailed": "La actualización de la inteligencia de código falló: {{error}}"
+    },
+    "languages": {
+      "plainText": "Texto sin formato",
+      "cHeader": "Encabezado de C",
+      "cppHeader": "Encabezado de C++",
+      "shell": "Shell"
     }
   },
   "windowControls": {
@@ -631,7 +800,11 @@
     "info": "Información",
     "warning": "Aviso",
     "error": "Error",
-    "success": "Éxito"
+    "success": "Éxito",
+    "filesChangedTitle": "Archivos modificados",
+    "filesChangedBody": "{{count}} archivos modificados en el espacio de trabajo",
+    "filesChangedBody_one": "{{count}} archivo modificado en el espacio de trabajo",
+    "filesChangedMore": "y {{count}} más"
   },
   "toolCall": {
     "stopCommand": "Detener comando",
@@ -694,6 +867,33 @@
       "listResources": "Listando recursos",
       "readResource": "Leyendo recurso",
       "semanticAnchorSearch": "Buscando anclas semánticas"
+    },
+    "fastContext": {
+      "title": "Contexto rápido",
+      "indexBadge": "índice {{status}}",
+      "primary": "Principales",
+      "related": "Relacionados",
+      "enriched": "Enriquecidos"
+    },
+    "badges": {
+      "unknown": "desconocido"
+    },
+    "editImpact": {
+      "title": "Impacto de la edición",
+      "riskBadge": "riesgo {{risk}}",
+      "confidenceBadge": "confianza {{confidence}}",
+      "files": "Archivos",
+      "tests": "Pruebas",
+      "refs": "Refs"
+    },
+    "skippedByUser": "Omitido por el usuario",
+    "stoppedByUser": "Detenido por el usuario",
+    "deniedByUser": "Denegado por el usuario",
+    "results": {
+      "changeApplied": "Cambio aplicado a {{path}}",
+      "fileDeleted": "Archivo eliminado: {{path}}",
+      "actionProposed": "Acción propuesta: {{description}}",
+      "disconnectedBeforeRun": "El servidor se desconectó antes de que esta herramienta pudiera ejecutarse."
     }
   },
   "search": {
@@ -753,7 +953,26 @@
     "workingTreeClean": "✓ El árbol de trabajo está limpio",
     "stagedSection": "Preparados",
     "unstageAll": "Quitar todo de staging",
-    "stageAll": "Preparar todo"
+    "stageAll": "Preparar todo",
+    "errors": {
+      "noStagedChanges": "No hay cambios preparados para hacer commit",
+      "detachedHeadCommit": "Aviso: HEAD está separado. Los commits pueden perderse.",
+      "discoverFailed": "No se pudo encontrar el repositorio Git: {{error}}",
+      "runFailed": "no se pudo ejecutar git {{args}}: {{error}}",
+      "commandFailed": "git {{args}} ha fallado: {{error}}",
+      "statusRunFailed": "no se pudo ejecutar git status: {{error}}",
+      "statusFailed": "git status ha fallado: {{error}}",
+      "pushNoBranch": "No se puede hacer push sin una rama activa",
+      "pushNoRemote": "No se puede hacer push porque no hay ningún remoto de Git configurado",
+      "diffRunFailed": "no se pudo ejecutar git diff: {{error}}",
+      "diffFailed": "git diff ha fallado: {{error}}",
+      "noChangesToCommit": "No hay cambios para hacer commit",
+      "aiEmptyResponse": "La IA devolvió una respuesta vacía",
+      "commitMessageTimeout": "Se agotó el tiempo de espera del mensaje de commit de la IA",
+      "emptyCommitMessage": "La IA devolvió un mensaje de commit vacío{{suffix}}"
+    },
+    "fallbackCommitMessage": "Actualizar {{files}}",
+    "fallbackCommitMessageMany": "Actualizar {{count}} archivos"
   },
   "errors": {
     "fileNotFound": "Archivo no encontrado: {path}",
@@ -773,7 +992,66 @@
     "notImplemented": "Función aún no implementada",
     "apiError": "Error de API: {message}",
     "authenticationFailed": "Error de autenticación",
-    "rateLimitExceeded": "Se ha superado el límite de peticiones. Vuelve a intentarlo más tarde."
+    "rateLimitExceeded": "Se ha superado el límite de peticiones. Vuelve a intentarlo más tarde.",
+    "noModelSelected": "No hay ningún modelo seleccionado",
+    "bladeEventTimeout": "Se agotó el tiempo de espera del evento de Blade tras {{timeoutMs}} ms",
+    "zlpTimeout": "La solicitud ZLP '{{method}}' superó el tiempo de espera tras {{timeout}} ms",
+    "zlpError": "Error de ZLP",
+    "applyChangeFailed": "No se pudo aplicar el cambio: {{error}}",
+    "readFileFailed": "No se pudo leer el archivo: {{error}}",
+    "writeFileFailed": "No se pudo escribir el archivo: {{error}}",
+    "patchFailed": "El parche {{index}} falló (no se hicieron cambios): {{error}}",
+    "createFileFailed": "No se pudo crear el archivo: {{error}}",
+    "deleteFileFailed": "No se pudo eliminar el archivo: {{error}}",
+    "pathParentOutsideWorkspace": "la ruta (superior) está fuera del espacio de trabajo",
+    "conversationStoreInit": "No se pudo inicializar el almacén de conversaciones",
+    "wsConnectionFailedRetries": "La conexión WebSocket falló tras {{count}} reintentos: {{error}}",
+    "sendAuthFailed": "No se pudo enviar la autenticación",
+    "readError": "Error de lectura: {{error}}",
+    "notConnected": "Sin conexión",
+    "sendMessageFailed": "No se pudo enviar el mensaje: {{error}}",
+    "sendApprovalFailed": "No se pudo enviar la respuesta de aprobación: {{error}}",
+    "waitAndRetry": "Espera un momento y vuelve a intentarlo.",
+    "sendContextPackFailed": "No se pudo enviar la respuesta del paquete de contexto: {{error}}",
+    "sendConversationContextFailed": "No se pudo enviar el contexto de la conversación: {{error}}",
+    "ollamaRequestFailed": "La solicitud a Ollama falló: {{error}}",
+    "ollamaRetryFailed": "El reintento de Ollama sin herramientas falló: {{error}}",
+    "ollamaAuthFailed": "La autenticación con Ollama falló (401). Comprueba tu clave API de la nube en Ajustes.",
+    "ollamaHttpError": "Ollama devolvió HTTP {{status}}: {{body}}",
+    "ollamaStreamError": "Error de transmisión de Ollama: {{error}}",
+    "ollamaDecodeError": "Error al decodificar la respuesta de Ollama: {{error}}",
+    "ollamaError": "Error de Ollama: {{error}}",
+    "ollamaConnectFailed": "No se pudo conectar con Ollama: {{error}}",
+    "ollamaReturned": "Ollama devolvió {{status}}: {{body}}",
+    "openaiCompatConnectFailed": "No se pudo conectar con el servidor compatible con OpenAI: {{error}}",
+    "openaiCompatRetryFailed": "El reintento sin herramientas falló en el servidor compatible con OpenAI: {{error}}",
+    "openaiCompatServerReturned": "El servidor compatible con OpenAI devolvió {{status}}: {{body}}",
+    "openaiCompatServerReturnedHttp": "El servidor compatible con OpenAI devolvió HTTP {{status}}: {{body}}",
+    "openaiCompatRequestFailed": "La solicitud al servidor compatible con OpenAI falló: {{error}}",
+    "streamError": "Error de transmisión: {{error}}",
+    "sendToolResultFailed": "No se pudo enviar el resultado de la herramienta {{tool}}: {{error}}",
+    "truncateConversation": "No se puede truncar la conversación a {{count}} mensajes; la longitud actual es {{length}}",
+    "changeNotFound": "Cambio no encontrado: {{id}}",
+    "noUncommittedChange": "No hay cambios sin confirmar para el archivo: {{path}}",
+    "conversationNotFound": "Conversación {{id}} no encontrada",
+    "readConversationFailed": "No se pudo leer la conversación: {{error}}",
+    "documentNotFound": "Documento no encontrado",
+    "snapshotNotFound": "Instantánea no encontrada",
+    "noHistoryForGroup": "No se han encontrado entradas de historial para el ID de grupo: {{id}}",
+    "wsAuthTimeout": "La autenticación WebSocket superó el tiempo de espera",
+    "aiGenerationFailed": "La generación de la IA falló: {{error}}",
+    "serverReturned": "El servidor devolvió {{status}}: {{body}}",
+    "createParentDirsFailed": "No se pudieron crear los directorios superiores: {{error}}",
+    "zlpLocalModelUnsupported": "Los mensajes ZLP no son compatibles cuando hay un modelo local activo",
+    "authenticationFailedDetail": "Error de autenticación: {{error}}",
+    "wsDisconnectedBeforeAuth": "El WebSocket se desconectó antes de la autenticación",
+    "wsClosedBeforeAuth": "El WebSocket se cerró antes de la autenticación",
+    "wsDisconnectedHistoryList": "El WebSocket se desconectó mientras se esperaba la respuesta de la lista del historial",
+    "wsClosedHistoryList": "El WebSocket se cerró mientras se esperaba la respuesta de la lista del historial",
+    "historyListTimeout": "Se agotó el tiempo de espera de la respuesta de la lista del historial",
+    "wsDisconnectedHistoryDetail": "El WebSocket se desconectó mientras se esperaba la respuesta del detalle del historial",
+    "wsClosedHistoryDetail": "El WebSocket se cerró mientras se esperaba la respuesta del detalle del historial",
+    "historyDetailTimeout": "Se agotó el tiempo de espera de la respuesta del detalle del historial"
   },
   "welcome": {
     "title": "Bienvenido a Zaguán Blade",
@@ -941,7 +1219,13 @@
     "openPath": "Abrir {{path}}",
     "you": "Tú",
     "assistant": "Asistente",
-    "live": "En directo"
+    "live": "En directo",
+    "workLog": "Registro de trabajo ({{count}})",
+    "moreEntries": "+{{count}} más",
+    "detailsVisible": "Detalles visibles",
+    "chunks": "{{count}} fragmentos",
+    "waiting": "esperando...",
+    "streaming": "transmitiendo..."
   },
   "gitGraph": {
     "title": "Grafo",
@@ -955,7 +1239,13 @@
     "insertions": "{{count}} inserción(+)",
     "insertions_other": "{{count}} inserciones(+)",
     "deletions": "{{count}} eliminación(-)",
-    "deletions_other": "{{count}} eliminaciones(-)"
+    "deletions_other": "{{count}} eliminaciones(-)",
+    "errors": {
+      "walkFailed": "No se pudieron recorrer los commits: {{error}}"
+    },
+    "relativeDate": {
+      "secondsAgo": "hace {{count}} segundos"
+    }
   },
   "graphInspector": {
     "incomingCalls": "Llamadas entrantes",
@@ -1008,7 +1298,13 @@
     "serverTitle": "Almacenamiento en servidor",
     "serverDescription": "Conversaciones guardadas en el servidor para montar el contexto más rápido.",
     "serverFasterResponses": "Respuestas más rápidas",
-    "serverEncrypted": "Cifrado en el servidor"
+    "serverEncrypted": "Cifrado en el servidor",
+    "errors": {
+      "createDirFailed": "No se pudo crear el directorio {{path}}: {{error}}",
+      "createGitignoreFailed": "No se pudo crear el .gitignore: {{error}}",
+      "serializeFailed": "No se pudo serializar la configuración: {{error}}",
+      "writeFailed": "No se pudo escribir la configuración: {{error}}"
+    }
   },
   "taskPanel": {
     "allTasksCompleted": "Todas las tareas completadas",
@@ -1047,7 +1343,9 @@
   },
   "outline": {
     "loadingStructure": "Analizando estructura...",
-    "noSymbols": "No se han encontrado símbolos."
+    "noSymbols": "No se han encontrado símbolos.",
+    "collapseSymbol": "Contraer {{name}}",
+    "expandSymbol": "Expandir {{name}}"
   },
   "protocolExplorer": {
     "title": "Explorador de protocolo",
@@ -1058,5 +1356,20 @@
     "waitingForEvents": "Esperando eventos...",
     "eventId": "ID del evento: {{id}}",
     "causedByIntent": "Causado por intención: {{id}}"
+  },
+  "errorBoundary": {
+    "title": "Algo ha ido mal",
+    "description": "La interfaz ha encontrado un error. Puedes intentar recuperarla sin reiniciar la aplicación.",
+    "reloadUi": "Recargar interfaz",
+    "clearCacheReload": "Borrar caché y recargar",
+    "fullReload": "Recarga completa",
+    "showDetails": "Mostrar detalles del error"
+  },
+  "commandExecution": {
+    "programRequired": "La ejecución de comandos nativos requiere un programa.",
+    "nativeFailed": "No se pudo ejecutar el comando nativo: {{error}}",
+    "bladeTerminalFailed": "No se pudo ejecutar el comando en la terminal Blade: {{error}}",
+    "cancelledByUser": "Comando cancelado por el usuario.",
+    "terminalExitedEarly": "La terminal del comando terminó antes de completarse (salida {{code}})."
   }
 }

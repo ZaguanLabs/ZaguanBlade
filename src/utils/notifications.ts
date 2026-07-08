@@ -1,4 +1,5 @@
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
+import i18n from '../i18n';
 
 /**
  * Notification utility for ZaguanBlade
@@ -71,14 +72,20 @@ export async function notifyFileChanges(
     fileCount: number,
     fileNames?: string[]
 ): Promise<void> {
-    const title = 'Files Changed';
-    let body = `${fileCount} file${fileCount > 1 ? 's' : ''} modified in workspace`;
-    
+    const title = i18n.t('notifications.filesChangedTitle', { defaultValue: 'Files Changed' });
+    let body = i18n.t('notifications.filesChangedBody', {
+        count: fileCount,
+        defaultValue: '{{count}} files modified in workspace'
+    });
+
     if (fileNames && fileNames.length > 0) {
         const displayFiles = fileNames.slice(0, 3);
         body = displayFiles.join(', ');
         if (fileNames.length > 3) {
-            body += ` and ${fileNames.length - 3} more`;
+            body += ` ${i18n.t('notifications.filesChangedMore', {
+                count: fileNames.length - 3,
+                defaultValue: 'and {{count}} more'
+            })}`;
         }
     }
     

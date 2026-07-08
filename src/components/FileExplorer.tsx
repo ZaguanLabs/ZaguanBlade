@@ -534,7 +534,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
     const tree = useTree<NodeData>({
         rootItemId: TREE_ROOT_ID,
-        getItemName: (item) => item.getItemData()?.name || 'Unknown',
+        getItemName: (item) => item.getItemData()?.name || t('common.unknown'),
         isItemFolder: (item) => item.getItemData()?.is_dir || false,
 
         indent: 12,
@@ -602,7 +602,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
         createLoadingItemData: () => ({
             id: 'loading',
-            name: 'Loading...',
+            name: t('common.loading'),
             is_dir: false
         }),
 

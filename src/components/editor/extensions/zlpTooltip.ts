@@ -1,6 +1,7 @@
 import { hoverTooltip } from "@codemirror/view";
 import { Extension } from "@codemirror/state";
 import { ZLPService } from "../../../services/zlp";
+import i18n from "../../../i18n";
 
 /**
  * Hover tooltip extension that shows ZLP symbol information
@@ -90,7 +91,10 @@ export function zlpHoverTooltip(filename: string): Extension {
                     // Location info
                     const location = document.createElement("div");
                     location.className = "cm-zlp-location";
-                    location.textContent = `Line ${symbol.range.start.line + 1}`;
+                    location.textContent = i18n.t("editor.lineLocation", {
+                        defaultValue: "Line {{line}}",
+                        line: symbol.range.start.line + 1,
+                    });
                     dom.appendChild(location);
                     
                     return { dom };

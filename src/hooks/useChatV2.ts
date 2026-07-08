@@ -13,6 +13,7 @@ import type { ChatMention } from '../types/blade';
 import type { ChatImage, ChatMessage, ChatMode, CognitiveInterruptState, ComposerMention, CommandExecution, HookApprovalRequest, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
 import type { ChatActivity } from '../utils/chatTimeline';
 import { buildContextLengthSystemMessage, buildMessageTooLargeSystemMessage, formatChatErrorPayload } from '../utils/localizedEvents';
+import i18n from '../i18n';
 
 const TOOL_ACTIVITY_DISPATCH_INTERVAL_MS = 120;
 const MESSAGE_COMPLETION_GRACE_MS = 1200;
@@ -168,7 +169,7 @@ function cognitiveInterruptStatus(state: string): ToolCall['status'] {
 
 function cognitiveInterruptActivityDetail(interrupt: CognitiveInterruptState): string {
     if (interrupt.state === 'blocked' && interrupt.tool_name) {
-        return `${interrupt.tool_name} paused until diagnostic evidence is gathered`;
+        return i18n.t('chat.cognitiveInterrupt.toolPaused', { toolName: interrupt.tool_name, defaultValue: '{{toolName}} paused until diagnostic evidence is gathered' });
     }
     return interrupt.summary;
 }
@@ -1143,7 +1144,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
                     ? {
                         ...toolCall,
                         status: pendingStatus,
-                        ...(pendingStatus === 'skipped' && !toolCall.result ? { result: 'Skipped by user' } : {}),
+                        ...(pendingStatus === 'skipped' && !toolCall.result ? { result: i18n.t('toolCall.skippedByUser', { defaultValue: 'Skipped by user' }) } : {}),
                     }
                     : toolCall),
             };
@@ -1184,7 +1185,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
         markToolCallsExecutingLocallyRef.current = markToolCallsExecutingLocally;
     }, [markToolCallsExecutingLocally]);
 
-    const markToolCallsSkippedLocally = useCallback((toolCallIds: string[], skippedResultText = 'Skipped by user') => {
+    const markToolCallsSkippedLocally = useCallback((toolCallIds: string[], skippedResultText = i18n.t('toolCall.skippedByUser', { defaultValue: 'Skipped by user' })) => {
         updateToolCallsStatusLocally(toolCallIds, 'skipped', skippedResultText);
     }, [updateToolCallsStatusLocally]);
 
@@ -1749,7 +1750,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
                             ? {
                                 ...toolCall,
                                 status: effectiveStatus,
-                                ...(skipped && !toolCall.result ? { result: 'Skipped by user' } : {}),
+                                ...(skipped && !toolCall.result ? { result: i18n.t('toolCall.skippedByUser', { defaultValue: 'Skipped by user' }) } : {}),
                             }
                             : toolCall),
                     };
@@ -2304,7 +2305,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
         ]));
 
         if (inFlightToolCallIds.length > 0) {
-            markToolCallsSkippedLocally(inFlightToolCallIds, 'Stopped by user');
+            markToolCallsSkippedLocally(inFlightToolCallIds, i18n.t('toolCall.stoppedByUser', { defaultValue: 'Stopped by user' }));
         }
 
         toolChunkCountsRef.current.clear();
@@ -2361,7 +2362,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
         if (approved) {
             markToolCallsExecutingLocally([request.toolCallId]);
         } else {
-            markToolCallsSkippedLocally([request.toolCallId], 'Denied by user');
+            markToolCallsSkippedLocally([request.toolCallId], i18n.t('toolCall.deniedByUser', { defaultValue: 'Denied by user' }));
         }
 
         dispatch({ type: 'pending-approval-request/set', request: null });

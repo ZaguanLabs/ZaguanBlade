@@ -240,7 +240,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
                 themeConf.current.of(getZaguanTheme(themeAppearanceRef.current === 'dark')),
 
                 // UX enhancements
-                placeholder("Start typing or paste code here..."),
+                placeholder(t('editor.placeholder')),
                 highlightSpecialChars(),
 
                 // Error handling

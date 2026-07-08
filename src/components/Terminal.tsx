@@ -575,7 +575,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             const { id: termId, code } = payload;
             if (termId === id && xtermRef.current) {
                 clearSpawnDiagnosticTimers();
-                xtermRef.current.write(`\r\n\x1b[33mProcess exited with code ${code}\x1b[0m\r\n`);
+                xtermRef.current.write(`\r\n\x1b[33m${t('terminal.processExited', { code })}\x1b[0m\r\n`);
             }
         });
         const writeDisplayCommand = (commandText: string) => {
@@ -641,7 +641,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
                 }, 50);
             } catch (err) {
                 console.error("Failed to create terminal:", err);
-                term.write("\r\n\x1b[31mFailed to initialize terminal backend.\x1b[0m\r\n");
+                term.write(`\r\n\x1b[31m${t('terminal.initFailed')}\x1b[0m\r\n`);
             }
         };
 

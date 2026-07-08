@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import i18n from '../i18n';
 import { BladeDispatcher } from './blade';
 import { subscribeBladeNestedEventType } from './bladeEvents';
 import type { ZLPStructureResponse, ZLPValidationError, ZLPValidationResponse, ZLPGraphResponse, StructureNode } from '../types/zlp';
@@ -77,7 +78,11 @@ export class ZLPService {
             // 1. Setup Timeout
             const timeoutId = setTimeout(() => {
                 if (unsubscribe) unsubscribe();
-                reject(new Error(`ZLP Request '${method}' timed out after ${ZLPService.TIMEOUT_MS}ms`));
+                reject(new Error(i18n.t('errors.zlpTimeout', {
+                    defaultValue: "ZLP Request '{{method}}' timed out after {{timeout}}ms",
+                    method,
+                    timeout: ZLPService.TIMEOUT_MS
+                })));
             }, ZLPService.TIMEOUT_MS);
 
             // 2. Setup Listener
@@ -88,7 +93,7 @@ export class ZLPService {
 
                     const zlpResult = payload.result as any;
                     if (zlpResult?.error) {
-                        reject(new Error(zlpResult.error.message || 'ZLP error'));
+                        reject(new Error(zlpResult.error.message || i18n.t('errors.zlpError', { defaultValue: 'ZLP error' })));
                         return;
                     }
 

@@ -99,7 +99,9 @@
       "question": "Save changes before quitting?",
       "overflowPlain": "...and {{count}} more",
       "saveFailedSummary": "Your changes could not be saved before quitting."
-    }
+    },
+    "unsavedBadge": "Unsaved",
+    "lineLocation": "Line {{line}}"
   },
   "chat": {
     "title": "AI Chat",
@@ -153,7 +155,8 @@
       "codeLabel": "Code",
       "codeDescription": "Implement and execute",
       "planningLabel": "Planning",
-      "planningDescription": "Investigate and plan first"
+      "planningDescription": "Investigate and plan first",
+      "planLabel": "Plan"
     },
     "planningPlaceholder": "Investigate the codebase, ask clarifying questions, and build a concrete plan before coding…",
     "pathRef": "Ref",
@@ -176,7 +179,9 @@
     "modelPicker": {
       "empty": "No models available",
       "ollama": "Ollama",
-      "localServer": "Local Server"
+      "localServer": "Local Server",
+      "openaiCompatWith": "OpenAI-compatible ({{ownedBy}})",
+      "openaiCompat": "OpenAI-compatible"
     },
     "composer": {
       "planningReadonly": "Planning mode is read-only",
@@ -186,7 +191,9 @@
       "inputLabel": "Chat message",
       "planPlaceholder": "Plan a change...",
       "requestPlaceholder": "Ask or request a change...",
-      "shiftEnterForNewline": "Shift-Enter for newline"
+      "shiftEnterForNewline": "Shift-Enter for newline",
+      "stopResponse": "Stop response",
+      "sendMessage": "Send message"
     },
     "tabs": {
       "chat": "Chat",
@@ -196,12 +203,22 @@
       "title": "Queued requests ({{count}})",
       "imageOnlyRequest": "(image-only request)",
       "editQueuedRequest": "Edit queued request",
-      "deleteQueuedRequest": "Delete queued request"
+      "deleteQueuedRequest": "Delete queued request",
+      "attachmentsCount_one": "{{count}} attachment",
+      "attachmentsCount_other": "{{count}} attachments"
     },
     "attachments": {
       "title": "Attachments",
       "attachmentAlt": "Attachment",
-      "removeImage": "Remove image"
+      "removeImage": "Remove image",
+      "imagesNotAvailable": "Images are not available for this model.",
+      "imagesFilter": "Images",
+      "attachmentNumber": "Attachment {{number}}",
+      "readFailed": "Failed to read image file",
+      "imageEmpty": "Image is empty.",
+      "imageTooLarge": "Image too large ({{sizeMb}} MB). Max {{limitMb}} MB. Try a smaller image.",
+      "missingMimeType": "Missing image MIME type.",
+      "unsupportedType": "Unsupported image type ({{mimeType}})."
     },
     "system": {
       "requestFailed": "Request failed",
@@ -209,7 +226,58 @@
       "contextLimitRecoverable": "The AI is attempting to recover automatically. You can also try:\n- Starting a new conversation\n- Asking the AI to summarize the conversation",
       "contextLimitRestart": "Please start a new conversation to continue.",
       "responseTooLargeTitle": "Response Too Large",
-      "recoveryHintLabel": "Recovery hint"
+      "recoveryHintLabel": "Recovery hint",
+      "tokenUsage": "({{tokenCount}} / {{maxTokens}} tokens)",
+      "responseTooLargeBody": "The response was too large to process. Please break your response into smaller parts or use more concise output.",
+      "responseTooLargeRecoveryHint": "Your previous response exceeded the message size limit. Please retry with a more concise approach: use smaller code blocks, avoid outputting entire files, and break large changes into multiple smaller tool calls.",
+      "contextLimitDuringGeneration": "Context limit reached during generation",
+      "responseTooLargeHint": "Please use smaller responses and break large changes into multiple tool calls.",
+      "disconnectedWhileGenerating": "Server disconnected while generating. Reconnect to zcoderd and retry when it is available.",
+      "disconnectedBeforeResponse": "Server disconnected before a response was received. Reconnect to zcoderd and retry when it is available.",
+      "noContent": "[no content]"
+    },
+    "mentions": {
+      "commandBadge": "command",
+      "folderBadge": "folder",
+      "fileBadge": "file"
+    },
+    "commandAwaitingApproval": "Command awaiting your approval",
+    "latest": "Latest",
+    "strips": {
+      "queue": "Queue"
+    },
+    "commandOutput": {
+      "exit": "Exit {{code}}",
+      "noOutput": "No output"
+    },
+    "implementPlanMessage": "Implement this plan in the current workspace.",
+    "cognitiveInterrupt": {
+      "toolPaused": "{{toolName}} paused until diagnostic evidence is gathered",
+      "evidenceGathered": "Diagnostic evidence gathered",
+      "editPaused": "Edit paused",
+      "title": "Cognitive Interrupt"
+    },
+    "workLog": {
+      "toolCall": "Tool call",
+      "runCommand": "Run command",
+      "ranCommand": "Ran command"
+    },
+    "researchResultsTitle": "Research Results",
+    "research": {
+      "generated": "Generated",
+      "thinking": "Thinking",
+      "complete": "✅ **Research complete!**\n\n📄 Results opened in new editor tab above.",
+      "completeLabel": "Complete",
+      "disconnected": "Disconnected"
+    },
+    "status": {
+      "reading": "📖 Reading `{{path}}`...",
+      "writing": "✍️ Writing to `{{path}}`...",
+      "editing": "✏️ Editing `{{path}}`...",
+      "listing": "📂 Listing `{{path}}`...",
+      "searching": "🔍 Searching for `{{pattern}}`...",
+      "running": "⚙️ Running `{{command}}`...",
+      "usingTool": "🔧 Using tool `{{tool}}`..."
     }
   },
   "fileTree": {
@@ -241,7 +309,8 @@
     "redo": "Redo",
     "find": "Find",
     "renameSymbol": "Rename Symbol",
-    "showCallGraph": "Show Call Graph"
+    "showCallGraph": "Show Call Graph",
+    "label": "Context menu"
   },
   "terminal": {
     "title": "Terminal",
@@ -265,7 +334,10 @@
     "findClose": "Close find",
     "diagnosticsNoOutput": "Terminal started, waiting for output...",
     "diagnosticsStillWaiting": "Still waiting for terminal output. The process may be running silently.",
-    "sendToChat": "Send to Chat"
+    "sendToChat": "Send to Chat",
+    "processExited": "Process exited with code {{code}}",
+    "initFailed": "Failed to initialize terminal backend.",
+    "waitTimeout": "Timed out waiting for terminal {{terminalId}} to be ready."
   },
   "tabs": {
     "openFiles": "Open files",
@@ -280,7 +352,14 @@
     "aiEdited": "AI edited this file",
     "aiEditedUnread": "AI edited this file (unread)",
     "aiPendingReview": "AI edit pending review",
-    "aiPendingReviewUnread": "AI edit pending review (unread)"
+    "aiPendingReviewUnread": "AI edit pending review (unread)",
+    "copyFilename": "Copy filename",
+    "copyFullPath": "Copy full path",
+    "moveToBeginning": "Move to beginning",
+    "moveToEnd": "Move to end",
+    "closeOthers": "Close Others",
+    "closeAll": "Close All",
+    "closeNamed": "Close {{title}}"
   },
   "diff": {
     "title": "Diff View",
@@ -303,7 +382,13 @@
     "allChangesAccepted": "All changes accepted",
     "allChangesRejected": "All changes rejected",
     "acceptChangesTitle": "Accept changes (keep on disk)",
-    "rejectChangesTitle": "Reject changes (revert to original)"
+    "rejectChangesTitle": "Reject changes (revert to original)",
+    "removedLines_one": "{{count}} removed line",
+    "removedLines_other": "{{count}} removed lines",
+    "unchangedLines_one": "{{count}} unchanged line",
+    "unchangedLines_other": "{{count}} unchanged lines",
+    "fileCount_one": "{{count}} file",
+    "fileCount_other": "{{count}} files"
   },
   "approval": {
     "title": "Approve Changes",
@@ -329,7 +414,10 @@
     "skipping": "Skipping",
     "runCommandDescription": "Run command: {{command}}",
     "hookApproval": "Tool approval",
-    "hookApprovalDetail": "Review this tool action before the run can continue."
+    "hookApprovalDetail": "Review this tool action before the run can continue.",
+    "createDirectory": "Create directory: {{path}}",
+    "moveFile": "Move {{source}} to {{destination}}",
+    "copyFile": "Copy {{source}} to {{destination}}"
   },
   "settings": {
     "title": "Settings",
@@ -379,7 +467,8 @@
       "localAi": "Local AI",
       "storage": "Storage",
       "context": "Context",
-      "about": "About"
+      "about": "About",
+      "remote": "Remote"
     },
     "configurationSection": {
       "title": "Configuration",
@@ -581,6 +670,61 @@
         "rateLimited": "Waiting before the next sign-in check.",
         "approved": "Zaguán account connected.",
         "cancelled": "Sign-in cancelled."
+      },
+      "hideApiKey": "Hide API key",
+      "showApiKey": "Show API key",
+      "sso": {
+        "alreadyInProgress": "A Zaguán sign-in is already in progress.",
+        "clientInitFailed": "Failed to initialize sign-in client: {{error}}",
+        "expired": "Zaguán sign-in expired. Start a new sign-in request.",
+        "cancelledError": "Zaguán sign-in cancelled.",
+        "rateLimitWait": "Waiting {{seconds}} seconds before retrying.",
+        "pendingSubscriptionMessage": "Finish subscription checkout in the browser, then approve this device.",
+        "denied": "Zaguán sign-in was denied in the browser.",
+        "consumed": "This Zaguán sign-in was already used. Start a new request.",
+        "unexpectedStatus": "Unexpected Zaguán sign-in status: {{status}}",
+        "startFailed": "Failed to start sign-in: {{error}}",
+        "startHttpFailed": "Sign-in start failed ({{status}}): {{body}}",
+        "readResponseFailed": "Failed to read sign-in response: {{error}}",
+        "pollFailed": "Failed to poll sign-in: {{error}}",
+        "pollHttpFailed": "Sign-in poll failed ({{status}}): {{body}}",
+        "pollReadFailed": "Failed to read sign-in poll response: {{error}}",
+        "missingApiKey": "Approved sign-in did not include an API key.",
+        "missingUserId": "Approved sign-in did not include a user ID.",
+        "missingEmail": "Approved sign-in did not include an email address."
+      }
+    },
+    "remote": {
+      "title": "Remote Control",
+      "description": "Pair Zaguán Blade with Telegram to run commands remotely and approve AI actions from your phone.",
+      "createBotTitle": "Create a Telegram Bot",
+      "createBotDescription": "To use remote control, you need to provide your own Telegram bot token. This keeps your connection entirely private and local.",
+      "howToGetToken": "How to get a Bot Token:",
+      "step1": "Open Telegram and chat with",
+      "step2": "Send the command",
+      "step2Suffix": "and follow the prompts",
+      "step3": "Copy the HTTP API Token provided at the end",
+      "botTokenLabel": "Bot Token",
+      "connect": "Connect",
+      "botConfigured": "Telegram Bot Configured",
+      "botUsername": "Bot Username:",
+      "statusLabel": "Status:",
+      "statusPaired": "Paired with your chat",
+      "statusWaiting": "Waiting for you to send a message",
+      "disconnect": "Disconnect",
+      "openChatTitle": "Open Chat with your Bot",
+      "qrDescription": "Scan this code with your phone's camera, or click the link below, then send",
+      "qrDescriptionSuffix": "to pair and begin sending commands.",
+      "featuresTitle": "What you can do remotely",
+      "featureCommands": "Send terminal commands from Telegram",
+      "featureApprovals": "Approve or reject AI command execution",
+      "featureOutput": "View command output and exit codes",
+      "requiresRunning": "Remote control requires Zaguán Blade to be running on your computer.",
+      "errors": {
+        "emptyToken": "Bot token cannot be empty",
+        "telegramUnreachable": "Failed to reach Telegram: {{error}}",
+        "telegramParseFailed": "Failed to parse Telegram response: {{error}}",
+        "invalidToken": "Invalid bot token"
       }
     }
   },
@@ -617,7 +761,32 @@
       "checking": "Checking code index",
       "pending": "Symbol index pending ({{count}} files)",
       "partial": "Symbol index partial ({{count}} files pending)",
-      "unavailable": "Symbol index unavailable"
+      "unavailable": "Symbol index unavailable",
+      "filesIndexed": "{{indexed}}/{{supported}} files indexed",
+      "symbols": "{{count}} symbols",
+      "currentFile": "Current file: {{file}}",
+      "queued": "{{count}} queued",
+      "orphaned": "{{count}} orphaned",
+      "statusUnknown": "Code intelligence status unknown",
+      "ready": "Code intelligence ready",
+      "partialPending": "Code intelligence partial: {{count}} files pending",
+      "refreshingPending": "Refreshing code intelligence: {{count}} files pending",
+      "checkingSymbolIndex": "Checking symbol index",
+      "building": "Building symbol index... {{done}}/{{total}} files",
+      "indexingDetailed": "Indexing {{file}}... {{done}}/{{total}} files ({{workers}} workers)",
+      "retryingDeferred": "Retrying {{count}} deferred file(s)...",
+      "resolvingRelationships": "Resolving symbol relationships...",
+      "resolvingCrossFile": "Resolving cross-file method calls...",
+      "rebuildingIntegrity": "Rebuilding symbol index after graph integrity issues ({{missingSources}} missing sources, {{missingTargets}} missing targets, {{filesMissingRoots}} files missing roots)",
+      "partialIntegrity": "Code intelligence partial: graph integrity issues detected ({{missingSources}} missing sources, {{missingTargets}} missing targets, {{filesMissingRoots}} files missing roots)",
+      "readyResolved": "Code intelligence ready: {{resolved}}/{{total}} symbol relationships resolved",
+      "refreshFailed": "Code intelligence refresh failed: {{error}}"
+    },
+    "languages": {
+      "plainText": "Plain Text",
+      "cHeader": "C Header",
+      "cppHeader": "C++ Header",
+      "shell": "Shell"
     }
   },
   "windowControls": {
@@ -635,7 +804,11 @@
     "info": "Info",
     "warning": "Warning",
     "error": "Error",
-    "success": "Success"
+    "success": "Success",
+    "filesChangedTitle": "Files Changed",
+    "filesChangedBody": "{{count}} files modified in workspace",
+    "filesChangedBody_one": "{{count}} file modified in workspace",
+    "filesChangedMore": "and {{count}} more"
   },
   "toolCall": {
     "stopCommand": "Stop command",
@@ -698,6 +871,33 @@
       "listResources": "Listing Resources",
       "readResource": "Reading Resource",
       "semanticAnchorSearch": "Searching Semantic Anchors"
+    },
+    "fastContext": {
+      "title": "Fast Context",
+      "indexBadge": "index {{status}}",
+      "primary": "Primary",
+      "related": "Related",
+      "enriched": "Enriched"
+    },
+    "badges": {
+      "unknown": "unknown"
+    },
+    "editImpact": {
+      "title": "Edit Impact",
+      "riskBadge": "risk {{risk}}",
+      "confidenceBadge": "confidence {{confidence}}",
+      "files": "Files",
+      "tests": "Tests",
+      "refs": "Refs"
+    },
+    "skippedByUser": "Skipped by user",
+    "stoppedByUser": "Stopped by user",
+    "deniedByUser": "Denied by user",
+    "results": {
+      "changeApplied": "Change applied to {{path}}",
+      "fileDeleted": "File deleted: {{path}}",
+      "actionProposed": "Action proposed: {{description}}",
+      "disconnectedBeforeRun": "Server disconnected before this tool could run."
     }
   },
   "search": {
@@ -757,7 +957,26 @@
     "workingTreeClean": "✓ Working tree clean",
     "stagedSection": "Staged",
     "unstageAll": "Unstage All",
-    "stageAll": "Stage All"
+    "stageAll": "Stage All",
+    "errors": {
+      "noStagedChanges": "No staged changes to commit",
+      "detachedHeadCommit": "Warning: HEAD is detached. Commits may be lost.",
+      "discoverFailed": "Failed to discover git repository: {{error}}",
+      "runFailed": "failed to run git {{args}}: {{error}}",
+      "commandFailed": "git {{args}} failed: {{error}}",
+      "statusRunFailed": "failed to run git status: {{error}}",
+      "statusFailed": "git status failed: {{error}}",
+      "pushNoBranch": "Cannot push without an active branch",
+      "pushNoRemote": "Cannot push because no Git remote is configured",
+      "diffRunFailed": "failed to run git diff: {{error}}",
+      "diffFailed": "git diff failed: {{error}}",
+      "noChangesToCommit": "No changes to commit",
+      "aiEmptyResponse": "AI returned empty response",
+      "commitMessageTimeout": "Timed out waiting for AI commit message",
+      "emptyCommitMessage": "AI returned empty commit message{{suffix}}"
+    },
+    "fallbackCommitMessage": "Update {{files}}",
+    "fallbackCommitMessageMany": "Update {{count}} files"
   },
   "errors": {
     "fileNotFound": "File not found: {path}",
@@ -777,7 +996,66 @@
     "notImplemented": "Feature not yet implemented",
     "apiError": "API error: {message}",
     "authenticationFailed": "Authentication failed",
-    "rateLimitExceeded": "Rate limit exceeded. Please try again later."
+    "rateLimitExceeded": "Rate limit exceeded. Please try again later.",
+    "noModelSelected": "No model selected",
+    "bladeEventTimeout": "Timed out waiting for blade-event after {{timeoutMs}}ms",
+    "zlpTimeout": "ZLP Request '{{method}}' timed out after {{timeout}}ms",
+    "zlpError": "ZLP error",
+    "applyChangeFailed": "Failed to apply change: {{error}}",
+    "readFileFailed": "Failed to read file: {{error}}",
+    "writeFileFailed": "Failed to write file: {{error}}",
+    "patchFailed": "Patch {{index}} failed (no changes made): {{error}}",
+    "createFileFailed": "Failed to create file: {{error}}",
+    "deleteFileFailed": "Failed to delete file: {{error}}",
+    "pathParentOutsideWorkspace": "path (parent) is outside workspace",
+    "conversationStoreInit": "Conversation store failed to initialize",
+    "wsConnectionFailedRetries": "WebSocket connection failed after {{count}} retries: {{error}}",
+    "sendAuthFailed": "Failed to send authentication",
+    "readError": "Read error: {{error}}",
+    "notConnected": "Not connected",
+    "sendMessageFailed": "Failed to send message: {{error}}",
+    "sendApprovalFailed": "Failed to send approval response: {{error}}",
+    "waitAndRetry": "Please wait a moment and try again.",
+    "sendContextPackFailed": "Failed to send context pack response: {{error}}",
+    "sendConversationContextFailed": "Failed to send conversation context: {{error}}",
+    "ollamaRequestFailed": "Ollama request failed: {{error}}",
+    "ollamaRetryFailed": "Ollama retry without tools failed: {{error}}",
+    "ollamaAuthFailed": "Ollama authentication failed (401). Check your cloud API key in Settings.",
+    "ollamaHttpError": "Ollama returned HTTP {{status}}: {{body}}",
+    "ollamaStreamError": "Ollama stream error: {{error}}",
+    "ollamaDecodeError": "Ollama response decode error: {{error}}",
+    "ollamaError": "Ollama error: {{error}}",
+    "ollamaConnectFailed": "Failed to connect to Ollama: {{error}}",
+    "ollamaReturned": "Ollama returned {{status}}: {{body}}",
+    "openaiCompatConnectFailed": "Failed to connect to OpenAI-compatible server: {{error}}",
+    "openaiCompatRetryFailed": "Retry without tools failed for OpenAI-compatible server: {{error}}",
+    "openaiCompatServerReturned": "OpenAI-compatible server returned {{status}}: {{body}}",
+    "openaiCompatServerReturnedHttp": "OpenAI-compatible server returned HTTP {{status}}: {{body}}",
+    "openaiCompatRequestFailed": "OpenAI-compatible request failed: {{error}}",
+    "streamError": "Stream error: {{error}}",
+    "sendToolResultFailed": "Failed to send tool result for {{tool}}: {{error}}",
+    "truncateConversation": "Cannot truncate conversation to {{count}} messages; current length is {{length}}",
+    "changeNotFound": "Change not found: {{id}}",
+    "noUncommittedChange": "No uncommitted change for file: {{path}}",
+    "conversationNotFound": "Conversation {{id}} not found",
+    "readConversationFailed": "Failed to read conversation: {{error}}",
+    "documentNotFound": "Document not found",
+    "snapshotNotFound": "Snapshot not found",
+    "noHistoryForGroup": "No history entries found for group ID: {{id}}",
+    "wsAuthTimeout": "WebSocket authentication timed out",
+    "aiGenerationFailed": "AI generation failed: {{error}}",
+    "serverReturned": "Server returned {{status}}: {{body}}",
+    "createParentDirsFailed": "Failed to create parent directories: {{error}}",
+    "zlpLocalModelUnsupported": "ZLP messages are not supported when a local model is active",
+    "authenticationFailedDetail": "Authentication failed: {{error}}",
+    "wsDisconnectedBeforeAuth": "WebSocket disconnected before authentication",
+    "wsClosedBeforeAuth": "WebSocket closed before authentication",
+    "wsDisconnectedHistoryList": "WebSocket disconnected while waiting for history list response",
+    "wsClosedHistoryList": "WebSocket closed while waiting for history list response",
+    "historyListTimeout": "Timed out waiting for history list response",
+    "wsDisconnectedHistoryDetail": "WebSocket disconnected while waiting for history detail response",
+    "wsClosedHistoryDetail": "WebSocket closed while waiting for history detail response",
+    "historyDetailTimeout": "Timed out waiting for history detail response"
   },
   "welcome": {
     "title": "Welcome to Zaguán Blade",
@@ -945,7 +1223,13 @@
     "openPath": "Open {{path}}",
     "you": "You",
     "assistant": "Assistant",
-    "live": "Live"
+    "live": "Live",
+    "workLog": "Work log ({{count}})",
+    "moreEntries": "+{{count}} more",
+    "detailsVisible": "Details visible",
+    "chunks": "{{count}} chunks",
+    "waiting": "waiting...",
+    "streaming": "streaming..."
   },
   "gitGraph": {
     "title": "Graph",
@@ -959,7 +1243,13 @@
     "insertions": "{{count}} insertion(+)",
     "insertions_other": "{{count}} insertions(+)",
     "deletions": "{{count}} deletion(-)",
-    "deletions_other": "{{count}} deletions(-)"
+    "deletions_other": "{{count}} deletions(-)",
+    "errors": {
+      "walkFailed": "Failed to walk commits: {{error}}"
+    },
+    "relativeDate": {
+      "secondsAgo": "{{count}} seconds ago"
+    }
   },
   "graphInspector": {
     "incomingCalls": "Incoming Calls",
@@ -1012,7 +1302,13 @@
     "serverTitle": "Server Storage",
     "serverDescription": "Conversations stored on server for faster context assembly.",
     "serverFasterResponses": "Faster responses",
-    "serverEncrypted": "Encrypted on server"
+    "serverEncrypted": "Encrypted on server",
+    "errors": {
+      "createDirFailed": "Failed to create directory {{path}}: {{error}}",
+      "createGitignoreFailed": "Failed to create .gitignore: {{error}}",
+      "serializeFailed": "Failed to serialize settings: {{error}}",
+      "writeFailed": "Failed to write settings: {{error}}"
+    }
   },
   "taskPanel": {
     "allTasksCompleted": "All tasks completed",
@@ -1051,7 +1347,9 @@
   },
   "outline": {
     "loadingStructure": "Parsing structure...",
-    "noSymbols": "No symbols found."
+    "noSymbols": "No symbols found.",
+    "collapseSymbol": "Collapse {{name}}",
+    "expandSymbol": "Expand {{name}}"
   },
   "protocolExplorer": {
     "title": "Protocol Explorer",
@@ -1062,5 +1360,20 @@
     "waitingForEvents": "Waiting for events...",
     "eventId": "Event ID: {{id}}",
     "causedByIntent": "Caused by Intent: {{id}}"
+  },
+  "errorBoundary": {
+    "title": "Something went wrong",
+    "description": "The UI encountered an error. You can try recovering without restarting the app.",
+    "reloadUi": "Reload UI",
+    "clearCacheReload": "Clear Cache & Reload",
+    "fullReload": "Full Reload",
+    "showDetails": "Show error details"
+  },
+  "commandExecution": {
+    "programRequired": "Native command execution requires a program.",
+    "nativeFailed": "Failed to execute native command: {{error}}",
+    "bladeTerminalFailed": "Failed to execute command in Blade terminal: {{error}}",
+    "cancelledByUser": "Command cancelled by user.",
+    "terminalExitedEarly": "Command terminal exited before completion (exit {{code}})."
   }
 }

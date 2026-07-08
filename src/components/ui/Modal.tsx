@@ -25,7 +25,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
     isOpen,
     title,
     message,
-    confirmLabel = 'Confirm',
+    confirmLabel,
     cancelLabel,
     confirmVariant = 'primary',
     onConfirm,
@@ -108,7 +108,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
                         onClick={onConfirm}
                         className={`px-3 py-1.5 text-xs font-medium rounded-(--radius-control) transition-all duration-(--transition-fast) ${confirmButtonClasses}`}
                     >
-                        {confirmLabel}
+                        {confirmLabel ?? t('common.confirm')}
                     </button>
                 </div>
             </div>

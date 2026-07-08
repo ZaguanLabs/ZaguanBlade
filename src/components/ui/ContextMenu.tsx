@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, createContext, useContext, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 
 /**
  * Context Menu System
@@ -87,6 +88,7 @@ export const ContextMenuProvider: React.FC<{ children: React.ReactNode }> = ({ c
  * The actual menu portal that renders at the root level
  */
 const ContextMenuPortal: React.FC = () => {
+    const { t } = useTranslation();
     const { state, hideMenu } = useContextMenu();
     const menuRef = useRef<HTMLDivElement>(null);
     const [adjustedPosition, setAdjustedPosition] = useState(state.position);
@@ -185,7 +187,7 @@ const ContextMenuPortal: React.FC = () => {
             ref={menuRef}
             role="menu"
             tabIndex={-1}
-            aria-label="Context menu"
+            aria-label={t('contextMenu.label')}
             aria-activedescendant={activeDescendantId}
             className="fixed z-9999 min-w-[180px] max-w-[280px] py-1.5 bg-(--surface-overlay) border border-(--focus-ring) rounded-(--radius-popover) shadow-(--shadow-popover) animate-in fade-in zoom-in-95 duration-(--transition-fast) overflow-hidden"
             style={{

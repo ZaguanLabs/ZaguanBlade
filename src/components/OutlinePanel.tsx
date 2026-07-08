@@ -49,6 +49,7 @@ const OutlineItem: React.FC<{
     onNavigate: (path: string, line: number, character: number) => void;
     filePath: string;
 }> = ({ node, depth, onNavigate, filePath }) => {
+    const { t } = useTranslation();
     const [expanded, setExpanded] = useState(true);
     const hasChildren = node.children && node.children.length > 0;
 
@@ -74,7 +75,7 @@ const OutlineItem: React.FC<{
                         className={`transition-transform hover:text-(--fg-primary) p-0.5 rounded-[calc(var(--panel-radius)*0.25)] ${expanded ? 'rotate-90' : ''}`}
                         onClick={toggleExpand}
                         aria-expanded={expanded}
-                        aria-label={expanded ? `Collapse ${node.name}` : `Expand ${node.name}`}
+                        aria-label={expanded ? t('outline.collapseSymbol', { name: node.name }) : t('outline.expandSymbol', { name: node.name })}
                     >
                         <ChevronRight className="w-3 h-3 text-(--fg-tertiary)" aria-hidden="true" />
                     </button>

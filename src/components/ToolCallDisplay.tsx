@@ -118,6 +118,7 @@ const FastContextResultCard: React.FC<{
     isVisuallyComplete: boolean;
     onOpenFile?: (path: string) => void;
 }> = ({ payload, statusText, statusIcon, isVisuallyComplete, onOpenFile }) => {
+    const { t } = useTranslation();
     const primaryFiles = asArray(payload.primary_files).map(asRecord).filter(Boolean) as JsonRecord[];
     const relatedFiles = asArray(payload.related_files).map(asRecord).filter(Boolean) as JsonRecord[];
     const enrichedFiles = asArray(payload.enriched_files).map(asRecord).filter(Boolean) as JsonRecord[];
@@ -135,9 +136,9 @@ const FastContextResultCard: React.FC<{
                 </div>
                 <div className="min-w-0 flex-1 space-y-2">
                     <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="font-semibold text-(--fg-primary)">Fast Context</span>
-                        <CompactBadge label={confidence || 'unknown'} tone={confidence} />
-                        {healthStatus && <CompactBadge label={`index ${healthStatus}`} tone={healthStatus === 'Fresh' ? 'low' : 'medium'} />}
+                        <span className="font-semibold text-(--fg-primary)">{t('toolCall.fastContext.title')}</span>
+                        <CompactBadge label={confidence || t('toolCall.badges.unknown')} tone={confidence} />
+                        {healthStatus && <CompactBadge label={t('toolCall.fastContext.indexBadge', { status: healthStatus })} tone={healthStatus === 'Fresh' ? 'low' : 'medium'} />}
                         <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-(--fg-tertiary)">
                             {statusIcon}
                             {statusText}
@@ -146,15 +147,15 @@ const FastContextResultCard: React.FC<{
                     {summary && <div className="text-[11px] leading-4 text-(--fg-secondary)">{summary}</div>}
                     <div className="grid grid-cols-3 gap-1.5">
                         <div className="rounded border border-(--border-subtle) bg-(--bg-surface)/45 px-2 py-1">
-                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">Primary</div>
+                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">{t('toolCall.fastContext.primary')}</div>
                             <div className="text-sm font-semibold text-(--fg-primary)">{primaryFiles.length}</div>
                         </div>
                         <div className="rounded border border-(--border-subtle) bg-(--bg-surface)/45 px-2 py-1">
-                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">Related</div>
+                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">{t('toolCall.fastContext.related')}</div>
                             <div className="text-sm font-semibold text-(--fg-primary)">{relatedFiles.length}</div>
                         </div>
                         <div className="rounded border border-(--border-subtle) bg-(--bg-surface)/45 px-2 py-1">
-                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">Enriched</div>
+                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">{t('toolCall.fastContext.enriched')}</div>
                             <div className="text-sm font-semibold text-(--fg-primary)">{enrichedFiles.length}</div>
                         </div>
                     </div>
@@ -197,6 +198,7 @@ const EditImpactResultCard: React.FC<{
     isVisuallyComplete: boolean;
     onOpenFile?: (path: string) => void;
 }> = ({ payload, statusText, statusIcon, isVisuallyComplete, onOpenFile }) => {
+    const { t } = useTranslation();
     const impact = asRecord(payload.impact) || {};
     const impactedFiles = asArray(impact.impacted_files).map(asRecord).filter(Boolean) as JsonRecord[];
     const likelyTests = asArray(impact.likely_tests).map(asRecord).filter(Boolean) as JsonRecord[];
@@ -213,9 +215,9 @@ const EditImpactResultCard: React.FC<{
                 </div>
                 <div className="min-w-0 flex-1 space-y-2">
                     <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="font-semibold text-(--fg-primary)">Edit Impact</span>
-                        <CompactBadge label={`risk ${risk || 'unknown'}`} tone={risk} />
-                        <CompactBadge label={`confidence ${confidence || 'unknown'}`} tone={confidence} />
+                        <span className="font-semibold text-(--fg-primary)">{t('toolCall.editImpact.title')}</span>
+                        <CompactBadge label={t('toolCall.editImpact.riskBadge', { risk: risk || t('toolCall.badges.unknown') })} tone={risk} />
+                        <CompactBadge label={t('toolCall.editImpact.confidenceBadge', { confidence: confidence || t('toolCall.badges.unknown') })} tone={confidence} />
                         <span className="ml-auto inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-(--fg-tertiary)">
                             {statusIcon}
                             {statusText}
@@ -223,15 +225,15 @@ const EditImpactResultCard: React.FC<{
                     </div>
                     <div className="grid grid-cols-3 gap-1.5">
                         <div className="rounded border border-(--border-subtle) bg-(--bg-surface)/45 px-2 py-1">
-                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">Files</div>
+                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">{t('toolCall.editImpact.files')}</div>
                             <div className="text-sm font-semibold text-(--fg-primary)">{impactedFiles.length}</div>
                         </div>
                         <div className="rounded border border-(--border-subtle) bg-(--bg-surface)/45 px-2 py-1">
-                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">Tests</div>
+                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">{t('toolCall.editImpact.tests')}</div>
                             <div className="text-sm font-semibold text-(--fg-primary)">{likelyTests.length}</div>
                         </div>
                         <div className="rounded border border-(--border-subtle) bg-(--bg-surface)/45 px-2 py-1">
-                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">Refs</div>
+                            <div className="text-[9px] uppercase tracking-[0.12em] text-(--fg-tertiary)">{t('toolCall.editImpact.refs')}</div>
                             <div className="text-sm font-semibold text-(--fg-primary)">{referenceCount}</div>
                         </div>
                     </div>

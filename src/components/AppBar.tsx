@@ -196,44 +196,44 @@ export const AppBar: React.FC<AppBarProps> = ({
         showMenu({ x: e.clientX, y: e.clientY }, [
             {
                 id: 'copy-filename',
-                label: 'Copy filename',
+                label: t('tabs.copyFilename'),
                 onClick: () => copyText(tab.title),
             },
             {
                 id: 'copy-full-path',
-                label: 'Copy full path',
+                label: t('tabs.copyFullPath'),
                 disabled: !tab.path,
                 onClick: () => copyText(tab.path),
             },
             { id: 'divider-copy-move', label: '', divider: true },
             {
                 id: 'move-to-beginning',
-                label: 'Move to beginning',
+                label: t('tabs.moveToBeginning'),
                 disabled: !onTabMoveToBeginning || index === 0,
                 onClick: () => onTabMoveToBeginning?.(tab.id),
             },
             {
                 id: 'move-to-end',
-                label: 'Move to end',
+                label: t('tabs.moveToEnd'),
                 disabled: !onTabMoveToEnd || index === tabs.length - 1,
                 onClick: () => onTabMoveToEnd?.(tab.id),
             },
             { id: 'divider-move-close', label: '', divider: true },
             {
                 id: 'close-others',
-                label: 'Close Others',
+                label: t('tabs.closeOthers'),
                 disabled: !onTabCloseOthers || tabs.length <= 1,
                 onClick: () => onTabCloseOthers?.(tab.id),
             },
             {
                 id: 'close-all',
-                label: 'Close All',
+                label: t('tabs.closeAll'),
                 danger: true,
                 disabled: !onTabCloseAll || tabs.length === 0,
                 onClick: () => onTabCloseAll?.(),
             },
         ]);
-    }, [onTabCloseAll, onTabCloseOthers, onTabMoveToBeginning, onTabMoveToEnd, showMenu, tabs.length]);
+    }, [onTabCloseAll, onTabCloseOthers, onTabMoveToBeginning, onTabMoveToEnd, showMenu, t, tabs.length]);
 
     useLayoutEffect(() => {
         const scrollContainer = scrollRef.current;
@@ -501,7 +501,7 @@ export const AppBar: React.FC<AppBarProps> = ({
                                 )}
                                 <button
                                     type="button"
-                                    aria-label={`Close ${tab.title}`}
+                                    aria-label={t('tabs.closeNamed', { title: tab.title })}
                                     onClick={(e) => {
                                         e.stopPropagation();
                                         onTabClose?.(tab.id);

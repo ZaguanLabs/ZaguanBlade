@@ -1,3 +1,4 @@
+import i18n from '../i18n';
 import type { ChatMessage as ChatMessageType, CognitiveInterruptState, CommandExecution, HookApprovalRequest, MessageBlock, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
 
@@ -357,7 +358,7 @@ function humanizeToolName(value: string): string {
         .split(/\s+/)
         .filter(Boolean);
     if (words.length === 0) {
-        return 'Tool call';
+        return i18n.t('chat.workLog.toolCall', { defaultValue: 'Tool call' });
     }
     return words.map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`).join(' ');
 }
@@ -390,7 +391,7 @@ function deriveToolCallWorkEntry(messageId: string, toolCall: ToolCall): ChatWor
         id: `tool:${toolCall.id}`,
         messageId,
         source: 'tool_call',
-        label: command ? 'Run command' : humanizeToolName(name),
+        label: command ? i18n.t('chat.workLog.runCommand', { defaultValue: 'Run command' }) : humanizeToolName(name),
         tone,
         ...(detail ? { detail } : {}),
         ...(command ? { command } : {}),
@@ -405,7 +406,7 @@ function deriveCommandExecutionWorkEntry(messageId: string, execution: CommandEx
         id: `command:${execution.id}`,
         messageId,
         source: 'command_execution',
-        label: 'Ran command',
+        label: i18n.t('chat.workLog.ranCommand', { defaultValue: 'Ran command' }),
         tone,
         detail: execution.command,
         command: execution.command,
@@ -451,7 +452,7 @@ function deriveActivityWorkEntry(activity: ChatActivity, messageId: string): Cha
         id: `activity:${activity.id}`,
         messageId,
         source: 'activity',
-        label: command ? 'Run command' : humanizeToolName(activity.toolName),
+        label: command ? i18n.t('chat.workLog.runCommand', { defaultValue: 'Run command' }) : humanizeToolName(activity.toolName),
         tone,
         ...(detail ? { detail } : {}),
         ...(command ? { command } : {}),
@@ -462,17 +463,20 @@ function deriveActivityWorkEntry(activity: ChatActivity, messageId: string): Cha
 
 function cognitiveInterruptLabel(interrupt: CognitiveInterruptState): string {
     if (interrupt.state === 'cleared') {
-        return 'Diagnostic evidence gathered';
+        return i18n.t('chat.cognitiveInterrupt.evidenceGathered', { defaultValue: 'Diagnostic evidence gathered' });
     }
     if (interrupt.state === 'blocked') {
-        return 'Edit paused';
+        return i18n.t('chat.cognitiveInterrupt.editPaused', { defaultValue: 'Edit paused' });
     }
-    return 'Cognitive Interrupt';
+    return i18n.t('chat.cognitiveInterrupt.title', { defaultValue: 'Cognitive Interrupt' });
 }
 
 function cognitiveInterruptDetail(interrupt: CognitiveInterruptState): string {
     if (interrupt.state === 'blocked' && interrupt.tool_name) {
-        return `${interrupt.tool_name} paused until diagnostic evidence is gathered`;
+        return i18n.t('chat.cognitiveInterrupt.toolPaused', {
+            defaultValue: '{{toolName}} paused until diagnostic evidence is gathered',
+            toolName: interrupt.tool_name,
+        });
     }
     return interrupt.summary;
 }

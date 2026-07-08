@@ -42,19 +42,23 @@ export function formatChatErrorPayload(payload: string | ChatErrorPayload): stri
 
 export function buildContextLengthSystemMessage(payload: ContextLengthExceededPayload): string {
     const tokenInfo = payload.token_count && payload.max_tokens
-        ? ` (${payload.token_count.toLocaleString()} / ${payload.max_tokens.toLocaleString()} tokens)`
+        ? ` ${i18n.t('chat.system.tokenUsage', {
+            defaultValue: '({{tokenCount}} / {{maxTokens}} tokens)',
+            tokenCount: payload.token_count.toLocaleString(),
+            maxTokens: payload.max_tokens.toLocaleString(),
+        })}`
         : '';
     const title = translateWithFallback(
-        payload.titleKey,
+        payload.titleKey ?? 'chat.system.contextLimitReachedTitle',
         'Context Limit Reached',
     );
     const recoveryText = payload.recoverable
         ? (payload.recovery_hint || translateWithFallback(
-            payload.recoverableHintKey,
+            payload.recoverableHintKey ?? 'chat.system.contextLimitRecoverable',
             'The AI is attempting to recover automatically. You can also try:\n- Starting a new conversation\n- Asking the AI to summarize the conversation',
         ))
         : translateWithFallback(
-            payload.nonRecoverableHintKey,
+            payload.nonRecoverableHintKey ?? 'chat.system.contextLimitRestart',
             'Please start a new conversation to continue.',
         );
 
@@ -63,11 +67,11 @@ export function buildContextLengthSystemMessage(payload: ContextLengthExceededPa
 
 export function buildMessageTooLargeSystemMessage(payload: MessageTooLargePayload): string {
     const title = translateWithFallback(
-        payload.titleKey,
+        payload.titleKey ?? 'chat.system.responseTooLargeTitle',
         'Response Too Large',
     );
     const hintLabel = translateWithFallback(
-        payload.recoveryHintLabelKey,
+        payload.recoveryHintLabelKey ?? 'chat.system.recoveryHintLabel',
         'Recovery hint',
     );
 

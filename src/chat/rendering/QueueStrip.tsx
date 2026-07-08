@@ -17,12 +17,12 @@ export const QueueStrip: React.FC<QueueStripProps> = ({ requests, onEditRequest,
     }
 
     return (
-        <StatusStripFrame label="Queue" count={requests.length}>
+        <StatusStripFrame label={t('chat.strips.queue')} count={requests.length}>
             {requests.map((request, index) => (
                 <div key={`${request.text}:${index}`} className="flex items-center gap-2 text-[11px] text-(--fg-secondary)">
-                    <span className="min-w-0 flex-1 truncate">{request.text || `${request.attachments?.length ?? 0} attachment(s)`}</span>
-                    <button type="button" onClick={() => onEditRequest?.(index)} aria-label={`${t('chat.queue.editQueuedRequest')} ${index + 1}`} className="text-(--fg-tertiary) hover:text-(--fg-primary)">Edit</button>
-                    <button type="button" onClick={() => onDeleteRequest?.(index)} aria-label={`${t('chat.queue.deleteQueuedRequest')} ${index + 1}`} className="text-(--state-danger) hover:text-(--fg-primary)">Delete</button>
+                    <span className="min-w-0 flex-1 truncate">{request.text || t('chat.queue.attachmentsCount', { count: request.attachments?.length ?? 0 })}</span>
+                    <button type="button" onClick={() => onEditRequest?.(index)} aria-label={`${t('chat.queue.editQueuedRequest')} ${index + 1}`} className="text-(--fg-tertiary) hover:text-(--fg-primary)">{t('common.edit')}</button>
+                    <button type="button" onClick={() => onDeleteRequest?.(index)} aria-label={`${t('chat.queue.deleteQueuedRequest')} ${index + 1}`} className="text-(--state-danger) hover:text-(--fg-primary)">{t('common.delete')}</button>
                 </div>
             ))}
         </StatusStripFrame>

@@ -1,4 +1,5 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import i18n from '../i18n';
 import type { BladeEvent, BladeEventEnvelope, BladeEventTransport } from '../types/blade';
 
 type BladeEventListener = (envelope: BladeEventEnvelope) => void;
@@ -146,7 +147,10 @@ export async function waitForBladeEvent(
     return new Promise<BladeEventEnvelope>((resolve, reject) => {
         const timeoutId = window.setTimeout(() => {
             unsubscribe();
-            reject(new Error(`Timed out waiting for blade-event after ${timeoutMs}ms`));
+            reject(new Error(i18n.t('errors.bladeEventTimeout', {
+                defaultValue: 'Timed out waiting for blade-event after {{timeoutMs}}ms',
+                timeoutMs,
+            })));
         }, timeoutMs);
 
         const unsubscribe = subscribeBladeEvents((envelope) => {

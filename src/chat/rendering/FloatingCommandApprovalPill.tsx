@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Terminal } from 'lucide-react';
 
 interface FloatingCommandApprovalPillProps {
@@ -7,6 +8,8 @@ interface FloatingCommandApprovalPillProps {
 }
 
 export const FloatingCommandApprovalPill: React.FC<FloatingCommandApprovalPillProps> = ({ visible, onClick }) => {
+    const { t } = useTranslation();
+
     if (!visible) {
         return null;
     }
@@ -19,7 +22,7 @@ export const FloatingCommandApprovalPill: React.FC<FloatingCommandApprovalPillPr
                 className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-(--accent-warning)/30 bg-[color-mix(in_srgb,var(--accent-warning)_12%,transparent)] px-3 py-2 text-[11px] font-medium text-(--accent-warning) shadow-lg backdrop-blur-sm transition-colors hover:bg-[color-mix(in_srgb,var(--accent-warning)_22%,transparent)]"
             >
                 <Terminal className="h-3.5 w-3.5" aria-hidden="true" />
-                Command awaiting your approval
+                {t('chat.commandAwaitingApproval')}
             </button>
         </div>
     );
