@@ -20,6 +20,7 @@
         "center": true,
         "visible": false,
         "transparent": false,
+        "dragDropEnabled": false,
         "backgroundColor": [10, 10, 10, 255]
       }
     ],
