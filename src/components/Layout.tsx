@@ -315,6 +315,8 @@ const AppLayoutInner: React.FC = () => {
     // Sidebar State
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [activeSidebar, setActiveSidebar] = useState<'explorer' | 'git' | 'history'>('explorer');
+    const sidebarRef = useRef<HTMLDivElement>(null);
+    const activityBarRef = useRef<HTMLDivElement>(null);
     const [shutdownPrompt, setShutdownPrompt] = useState<ShutdownPromptState | null>(null);
     const [shutdownSaveError, setShutdownSaveError] = useState<ShutdownSaveErrorState | null>(null);
     const [autoApproveRunCommands, setAutoApproveRunCommands] = useState(false);
@@ -1147,6 +1149,20 @@ const AppLayoutInner: React.FC = () => {
         }
     };
 
+    // Close the sidebar when clicking anywhere outside the sidebar panel and activity bar.
+    useEffect(() => {
+        if (!isSidebarOpen) return;
+        const handlePointerDown = (event: PointerEvent) => {
+            const target = event.target as Node | null;
+            if (!target) return;
+            if (sidebarRef.current?.contains(target)) return;
+            if (activityBarRef.current?.contains(target)) return;
+            setIsSidebarOpen(false);
+        };
+        document.addEventListener('pointerdown', handlePointerDown, true);
+        return () => document.removeEventListener('pointerdown', handlePointerDown, true);
+    }, [isSidebarOpen]);
+
     const editorViewportBottomInset = !disableTerminalSurface && terminalHeight > 0 ? terminalHeight : 0;
     const desktopShellV1 = readDebugFlag('desktopShellV1');
     const shellGap = desktopShellV1 ? '0px' : 'var(--panel-gap)';
@@ -1296,6 +1312,7 @@ const AppLayoutInner: React.FC = () => {
                 {/* Activity Bar (Vertical) — floating pill */}
                 {!disableActivityBar && (
                     <div
+                        ref={activityBarRef}
                         className="flex flex-col items-center py-4 gap-6 z-50 shrink-0 relative"
                         style={activityBarStyle}
                     >
@@ -1390,6 +1407,7 @@ const AppLayoutInner: React.FC = () => {
                 {/* Explorer / Sidebar (Floating overlay — anchored to outer row, above all editor content) */}
                 {!disableSidebarOverlay && (
                     <div
+                        ref={sidebarRef}
                         className={`
                             absolute top-0 bottom-0 w-80 bg-(--bg-panel) flex flex-col overflow-hidden
                             transition-all duration-(--transition-fast) ease-[cubic-bezier(0.22,1,0.36,1)]
