@@ -545,9 +545,11 @@ impl Language {
         // `#!/usr/bin/env [-S] [VAR=val ...] python3 -u` → real interpreter is
         // the first token after `env` that is neither a flag nor an assignment.
         if interpreter == "env" {
-            interpreter = tokens
-                .find(|token| !token.starts_with('-') && !token.contains('='))?;
-            interpreter = interpreter.rsplit(['/', '\\']).next().unwrap_or(interpreter);
+            interpreter = tokens.find(|token| !token.starts_with('-') && !token.contains('='))?;
+            interpreter = interpreter
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(interpreter);
         }
 
         Self::interpreter_to_language(interpreter)
@@ -907,7 +909,11 @@ mod tests {
             ("path/to/go.mod", Language::Toml, SupportLevel::Partial),
             ("go.sum", Language::Json, SupportLevel::Partial),
             ("requirements.txt", Language::Toml, SupportLevel::Partial),
-            ("requirements-dev.txt", Language::Toml, SupportLevel::Partial),
+            (
+                "requirements-dev.txt",
+                Language::Toml,
+                SupportLevel::Partial,
+            ),
             (".env", Language::Toml, SupportLevel::Partial),
             ("config/.env", Language::Toml, SupportLevel::Partial),
             ("kustomization.yaml", Language::Yaml, SupportLevel::Partial),
@@ -947,7 +953,10 @@ mod tests {
             Language::from_path("resources/views/welcome.blade.php"),
             Some(Language::Php)
         );
-        assert_eq!(Language::from_path("welcome.blade.php"), Some(Language::Php));
+        assert_eq!(
+            Language::from_path("welcome.blade.php"),
+            Some(Language::Php)
+        );
         // A plain `.php` still resolves through the last-extension fallback.
         assert_eq!(Language::from_path("app.php"), Some(Language::Php));
         // Unrelated compound extensions still fall through to the last ext.
@@ -994,9 +1003,15 @@ mod tests {
             Some(Language::Rust)
         );
         // No shebang and an unknown extensionless name → still unknown.
-        assert_eq!(Language::detect_with_head("LICENSE", b"MIT License\n"), None);
+        assert_eq!(
+            Language::detect_with_head("LICENSE", b"MIT License\n"),
+            None
+        );
         assert_eq!(Language::detect_by_shebang("not a shebang"), None);
-        assert_eq!(Language::detect_by_shebang("#!/usr/bin/env weirdlang"), None);
+        assert_eq!(
+            Language::detect_by_shebang("#!/usr/bin/env weirdlang"),
+            None
+        );
     }
 
     #[test]

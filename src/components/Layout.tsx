@@ -1284,6 +1284,8 @@ const AppLayoutInner: React.FC = () => {
                 onTabCloseAll={handleTabCloseAll}
                 onTabCloseOthers={handleTabCloseOthers}
                 tabStripMaxWidth={editorColumnWidth}
+                chatPanelWidth={chatPanelWidth}
+                chatVisible={!disableChatSurface}
                 onOpenProject={handleOpenProject}
             />
 

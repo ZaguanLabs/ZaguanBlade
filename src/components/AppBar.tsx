@@ -30,6 +30,8 @@ interface AppBarProps {
     onTabCloseAll?: () => void;
     onTabCloseOthers?: (id: string) => void;
     tabStripMaxWidth?: number;
+    chatPanelWidth?: number;
+    chatVisible?: boolean;
     onOpenProject?: () => void;
 }
 
@@ -45,6 +47,8 @@ export const AppBar: React.FC<AppBarProps> = ({
     onTabCloseAll,
     onTabCloseOthers,
     tabStripMaxWidth,
+    chatPanelWidth,
+    chatVisible = true,
     onOpenProject,
 }) => {
     const [isMaximized, setIsMaximized] = useState(false);
@@ -516,25 +520,28 @@ export const AppBar: React.FC<AppBarProps> = ({
                 <div className="flex-1" data-tauri-drag-region />
             )}
 
-            {!hasTabs && (
-                <div className="absolute inset-0 flex items-center justify-center gap-2 pointer-events-none" data-tauri-drag-region>
-                    <img src={zbladeAppIcon} alt="" className="w-4 h-4 object-contain opacity-60" draggable={false} />
-                    <span
-                        className="text-[11px] font-medium tracking-wider uppercase"
-                        style={{ color: 'var(--fg-tertiary)' }}
-                        data-tauri-drag-region
-                    >
-                        {appBarBrandText}
-                    </span>
-                    {isFullscreen && (
-                        <span className="text-[9px] opacity-40 ml-2" style={{ color: 'var(--fg-tertiary)' }}>
-                            {t('windowControls.exitFullscreen')}
-                        </span>
-                    )}
-                </div>
-            )}
-
             {hasTabs && <div className="flex-1" data-tauri-drag-region />}
+
+            {/* Brand: app + project name, sits above the AI chat column */}
+            <div
+                className="flex items-center justify-center gap-2 shrink-0 px-3 overflow-hidden"
+                style={chatVisible && chatPanelWidth ? { width: chatPanelWidth } : undefined}
+                data-tauri-drag-region
+            >
+                <img src={zbladeAppIcon} alt="" className="w-4 h-4 object-contain opacity-60 shrink-0" draggable={false} />
+                <span
+                    className="text-[11px] font-medium tracking-wider uppercase truncate min-w-0"
+                    style={{ color: 'var(--fg-tertiary)' }}
+                    data-tauri-drag-region
+                >
+                    {appBarBrandText}
+                </span>
+                {isFullscreen && (
+                    <span className="text-[9px] opacity-40 ml-2 shrink-0" style={{ color: 'var(--fg-tertiary)' }}>
+                        {t('windowControls.exitFullscreen')}
+                    </span>
+                )}
+            </div>
 
             {/* Right: Window controls */}
             {!isFullscreen && (

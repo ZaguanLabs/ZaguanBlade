@@ -43,8 +43,7 @@ const MAX_QUERIES: usize = 5;
 /// actually return FTS hits over the corpus, so every timed query exercises a
 /// real result path.
 const CANDIDATE_TERMS: &[&str] = &[
-    "symbol", "index", "search", "store", "service", "query", "language", "parse", "file",
-    "result",
+    "symbol", "index", "search", "store", "service", "query", "language", "parse", "file", "result",
 ];
 
 /// Resolve the corpus directory and its label.
@@ -55,7 +54,10 @@ fn resolve_corpus() -> (PathBuf, String) {
             path.is_absolute(),
             "BENCH_CORPUS must be an absolute path, got {raw:?}"
         );
-        assert!(path.is_dir(), "BENCH_CORPUS must be a directory, got {raw:?}");
+        assert!(
+            path.is_dir(),
+            "BENCH_CORPUS must be a directory, got {raw:?}"
+        );
         return (path, "pinned".to_string());
     }
     let default = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

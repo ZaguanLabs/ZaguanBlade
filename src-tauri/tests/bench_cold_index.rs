@@ -62,7 +62,10 @@ fn resolve_corpus() -> (PathBuf, String) {
             path.is_absolute(),
             "BENCH_CORPUS must be an absolute path, got {raw:?}"
         );
-        assert!(path.is_dir(), "BENCH_CORPUS must be a directory, got {raw:?}");
+        assert!(
+            path.is_dir(),
+            "BENCH_CORPUS must be a directory, got {raw:?}"
+        );
         return (path, "pinned".to_string());
     }
     let default = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -237,8 +240,11 @@ fn bench_cold_index() {
     println!("BENCH_JSON {}", serde_json::to_string(&report).unwrap());
 
     // DoD reconciliation: do the per-stage timers account for wall?
-    let stage_sum_ms =
-        discovery_ms + parse_extract_ms + relationship_enrichment_ms + db_write_ms + cache_update_ms;
+    let stage_sum_ms = discovery_ms
+        + parse_extract_ms
+        + relationship_enrichment_ms
+        + db_write_ms
+        + cache_update_ms;
     let discrepancy = (wall_ms as f64 - stage_sum_ms as f64).abs() / (wall_ms.max(1) as f64);
     println!(
         "[reconcile] wall_ms={wall_ms} stage_sum_ms={stage_sum_ms} discrepancy={discrepancy:.4} within_10pct={} within_25pct={} (asserted bound={RECONCILE_BOUND})",

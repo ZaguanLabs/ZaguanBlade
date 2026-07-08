@@ -86,7 +86,12 @@ pub async fn list_local_models_with_prompt_status(
     let models = crate::models::catalog::list_all_models(&config).await;
     let result = models
         .into_iter()
-        .filter(|m| matches!(m.provider.as_deref(), Some("ollama") | Some("openai-compat")))
+        .filter(|m| {
+            matches!(
+                m.provider.as_deref(),
+                Some("ollama") | Some("openai-compat")
+            )
+        })
         .map(|m| {
             let (has_local_prompt, prompt_file) = config::local_prompt_status_for_model(&m.id);
             let builtin_kind = config::builtin_prompt_kind(&m.id).to_string();

@@ -77,7 +77,6 @@ impl IdempotencyCache {
             },
         );
     }
-
 }
 
 impl Default for IdempotencyCache {

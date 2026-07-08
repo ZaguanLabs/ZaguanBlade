@@ -640,7 +640,10 @@ mod tests {
 
         assert_eq!(snap.content.as_deref(), Some("disk content"));
         assert_eq!(snap.source, SnapshotSource::Disk);
-        assert_eq!(snap.hash.as_deref(), Some(sha256_hex(b"disk content").as_str()));
+        assert_eq!(
+            snap.hash.as_deref(),
+            Some(sha256_hex(b"disk content").as_str())
+        );
         assert_eq!(snap.byte_length, 12);
         assert!(!snap.is_modified);
         assert!(!snap.truncated);
@@ -677,9 +680,7 @@ mod tests {
         let mut snapshot = snapshot_for(dir.path(), "a.rs");
         snapshot.open_files[0].is_modified = true; // dirty, but no buffer sent
 
-        let snap = build(dir.path(), snapshot)
-            .active_file_snapshot
-            .unwrap();
+        let snap = build(dir.path(), snapshot).active_file_snapshot.unwrap();
 
         assert!(snap.content.is_none());
         assert_eq!(
@@ -718,7 +719,10 @@ mod tests {
                 .unwrap();
             assert!(snap.content.is_none(), "content leaked for {name}");
             assert!(snap.hash.is_none(), "hash leaked for {name}");
-            assert_eq!(snap.content_omitted_reason.as_deref(), Some("sensitive_file"));
+            assert_eq!(
+                snap.content_omitted_reason.as_deref(),
+                Some("sensitive_file")
+            );
         }
     }
 
@@ -775,7 +779,10 @@ mod tests {
         assert_eq!(bundle.repo_guidance.len(), 2);
         assert!(bundle.repo_guidance[0].path.ends_with("/AGENTS.md"));
         assert!(bundle.repo_guidance[1].path.ends_with("/src/AGENTS.md"));
-        assert_eq!(bundle.repo_guidance[0].content.as_deref(), Some("root rules"));
+        assert_eq!(
+            bundle.repo_guidance[0].content.as_deref(),
+            Some("root rules")
+        );
         assert_eq!(
             bundle.repo_guidance[0].hash.as_deref(),
             Some(sha256_hex(b"root rules").as_str())
@@ -816,7 +823,11 @@ mod tests {
         let open_files: Vec<SnapshotOpenFile> = (0..(MAX_OPEN_FILES + 5))
             .rev() // deliberately unsorted input
             .map(|i| SnapshotOpenFile {
-                path: dir.path().join(format!("f{i:02}.rs")).to_string_lossy().to_string(),
+                path: dir
+                    .path()
+                    .join(format!("f{i:02}.rs"))
+                    .to_string_lossy()
+                    .to_string(),
                 is_modified: false,
                 tab_order: i as u32,
             })
@@ -866,19 +877,19 @@ mod tests {
         write(&dir.path().join("a.rs"), "disk content");
 
         // The identity used by the live chat path...
-        let identity = active_file_identity(
-            dir.path(),
-            &dir.path().join("a.rs").to_string_lossy(),
-            None,
-        )
-        .unwrap();
+        let identity =
+            active_file_identity(dir.path(), &dir.path().join("a.rs").to_string_lossy(), None)
+                .unwrap();
         // ...must equal the hash the warmup snapshot shipped for the same file.
         let warm = build(dir.path(), snapshot_for(dir.path(), "a.rs"))
             .active_file_snapshot
             .unwrap();
 
         assert_eq!(identity.hash, warm.hash);
-        assert_eq!(identity.hash.as_deref(), Some(sha256_hex(b"disk content").as_str()));
+        assert_eq!(
+            identity.hash.as_deref(),
+            Some(sha256_hex(b"disk content").as_str())
+        );
         assert!(!identity.is_modified);
     }
 
@@ -904,7 +915,9 @@ mod tests {
         let mut warm_snapshot = snapshot_for(dir.path(), "a.rs");
         warm_snapshot.open_files[0].is_modified = true;
         warm_snapshot.active_buffer_content = Some("new buffer content".to_string());
-        let warm = build(dir.path(), warm_snapshot).active_file_snapshot.unwrap();
+        let warm = build(dir.path(), warm_snapshot)
+            .active_file_snapshot
+            .unwrap();
         assert_eq!(identity.hash, warm.hash);
     }
 
@@ -915,12 +928,9 @@ mod tests {
         fs::write(dir.path().join("blob.bin"), b"ab\x00cd").unwrap();
 
         for name in [".env", "blob.bin"] {
-            let identity = active_file_identity(
-                dir.path(),
-                &dir.path().join(name).to_string_lossy(),
-                None,
-            )
-            .unwrap();
+            let identity =
+                active_file_identity(dir.path(), &dir.path().join(name).to_string_lossy(), None)
+                    .unwrap();
             assert!(identity.hash.is_none(), "hash leaked for {name}");
         }
     }
@@ -952,13 +962,13 @@ mod tests {
         // without a buffer only arises if the frontend fails to ship it; then
         // the buffer is None and we must not impersonate with disk content —
         // callers pass the buffer whenever dirty, so None here means clean.
-        let identity = active_file_identity(
-            dir.path(),
-            &dir.path().join("a.rs").to_string_lossy(),
-            None,
-        )
-        .unwrap();
-        assert_eq!(identity.hash.as_deref(), Some(sha256_hex(b"stale disk").as_str()));
+        let identity =
+            active_file_identity(dir.path(), &dir.path().join("a.rs").to_string_lossy(), None)
+                .unwrap();
+        assert_eq!(
+            identity.hash.as_deref(),
+            Some(sha256_hex(b"stale disk").as_str())
+        );
         assert!(!identity.is_modified);
     }
 
@@ -985,11 +995,8 @@ mod tests {
             r#"{"warmup_context_prefetch": false}"#,
         );
 
-        let identity = active_file_identity(
-            dir.path(),
-            &dir.path().join("a.rs").to_string_lossy(),
-            None,
-        );
+        let identity =
+            active_file_identity(dir.path(), &dir.path().join("a.rs").to_string_lossy(), None);
         assert!(identity.is_none());
     }
 

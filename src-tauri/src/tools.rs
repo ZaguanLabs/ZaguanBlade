@@ -533,22 +533,22 @@ fn build_tool_failure_feedback(tool_name: &str, error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::normalize_session_input;
     use super::{
         apply_multi_patch_to_string, apply_patch_to_string, apply_patch_to_string_with_line_hint,
         apply_semantic_patch_with_service, apply_semantic_patch_writes_with_service,
         compact_outline_nodes_for_parent, execute_tool, execute_tool_with_editor,
-        fast_context_tool, grep_search, impact_confidence, impact_risk_level,
-        is_batch_read_only_tool, language_support_for_path_json, language_support_meta_json,
-        format_investigation_markdown, investigation_confidence, merge_language_diagnostics,
+        fast_context_tool, format_investigation_markdown, grep_search, impact_confidence,
+        impact_risk_level, investigation_confidence, is_batch_read_only_tool,
+        language_support_for_path_json, language_support_meta_json, merge_language_diagnostics,
         paginate_tool_results, parse_grep_timeout_ms, parse_relationship_types_arg,
         related_symbol_to_json, related_test_files_for_paths, stage_semantic_patch_writes,
         symbol_inventory_entries, symbol_inventory_summary, symbol_language_diagnostics,
         symbol_outline_diagnostics, symbol_reference_resolution_json,
         symbol_search_connection_json, symbol_to_json, symbol_to_json_full, EditorState, PatchHunk,
-        SemanticPatchWrite,
-        ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
+        SemanticPatchWrite, ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
+        GREP_TIMEOUT_MIN_MS,
     };
-    use super::normalize_session_input;
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
     use crate::tree_sitter::{Position, Range, Symbol, SymbolType};
@@ -1299,17 +1299,14 @@ mod tests {
     }
 
     #[test]
-    fn apply_patch_rejects_whitespace_only_fuzzy_match() {
+    fn apply_patch_recovers_uniform_indent_shift_and_reindents_new_text() {
         let content = "    TARGET   \nB\n";
-        let err = apply_patch_to_string(content, "TARGET\n", "TARGET\nEXTRA\n").unwrap_err();
-        assert!(
-            err.contains("Exact match required"),
-            "unexpected error: {err}"
-        );
+        let updated = apply_patch_to_string(content, "TARGET\n", "TARGET\nEXTRA\n").unwrap();
+        assert_eq!(updated, "    TARGET\n    EXTRA\nB\n");
     }
 
     #[test]
-    fn apply_multi_patch_rejects_whitespace_only_fuzzy_validation() {
+    fn apply_multi_patch_recovers_whitespace_drift() {
         let content = "    TARGET   \nB\n";
         let patches = vec![PatchHunk {
             old_text: "TARGET\n".to_string(),
@@ -1317,11 +1314,74 @@ mod tests {
             start_line: None,
             end_line: None,
         }];
-        let err = apply_multi_patch_to_string(content, &patches).unwrap_err();
+        let updated = apply_multi_patch_to_string(content, &patches).unwrap();
+        assert_eq!(updated, "    TARGET\n    EXTRA\nB\n");
+    }
+
+    #[test]
+    fn apply_patch_recovers_trailing_whitespace_drift_preserving_indentation() {
+        let content = "fn main() {\n    let x = 1;   \n    let y = 2;\n}\n";
+        let updated = apply_patch_to_string(
+            content,
+            "    let x = 1;\n    let y = 2;\n",
+            "    let x = 10;\n    let y = 2;\n",
+        )
+        .unwrap();
+        assert_eq!(updated, "fn main() {\n    let x = 10;\n    let y = 2;\n}\n");
+    }
+
+    #[test]
+    fn apply_patch_recovers_removed_indentation() {
+        let content = "code line\n";
+        let updated =
+            apply_patch_to_string(content, "    code line\n", "    changed line\n").unwrap();
+        assert_eq!(updated, "changed line\n");
+    }
+
+    #[test]
+    fn apply_patch_rejects_ambiguous_whitespace_normalized_match() {
+        let content = "  first\n  second\nC\n    first\n    second\nD\n";
+        let err = apply_patch_to_string(content, "first\nsecond\n", "replaced\n").unwrap_err();
+        assert!(
+            err.contains("Ambiguous match") && err.contains("whitespace normalization"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn apply_patch_rejects_content_drift_beyond_whitespace() {
+        let content = "let value = compute();\n";
+        let err = apply_patch_to_string(content, "let value = calculate();\n", "let value = 1;\n")
+            .unwrap_err();
         assert!(
             err.contains("old_text not found in file"),
             "unexpected error: {err}"
         );
+        assert!(err.contains("read_file_range"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn apply_patch_not_found_error_points_at_partial_anchor_line() {
+        let content = "alpha\nbeta\ngamma\n";
+        let err = apply_patch_to_string(content, "beta\nDIFFERENT\n", "beta\nnew\n").unwrap_err();
+        assert!(
+            err.contains("does appear at line 2"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn apply_patch_line_hint_recovers_whitespace_drift_within_window() {
+        let content = "A\n  TARGET\nB\n  TARGET   \nC\n";
+        let updated = apply_patch_to_string_with_line_hint(
+            content,
+            "TARGET\n",
+            "REPLACED\n",
+            Some(4),
+            Some(4),
+        )
+        .unwrap();
+        assert_eq!(updated, "A\n  TARGET\nB\n  REPLACED\nC\n");
     }
 
     #[test]
@@ -1902,12 +1962,16 @@ fn command_session_tool<R: tauri::Runtime>(
 
     let handle = match app_handle {
         Some(h) => h,
-        None => return ToolResult::err("command_session is unavailable in this context".to_string()),
+        None => {
+            return ToolResult::err("command_session is unavailable in this context".to_string())
+        }
     };
 
     let session_id = match args.get("session_id").and_then(|v| v.as_str()) {
         Some(s) if !s.trim().is_empty() => s.to_string(),
-        _ => return ToolResult::err("command_session requires a non-empty 'session_id'".to_string()),
+        _ => {
+            return ToolResult::err("command_session requires a non-empty 'session_id'".to_string())
+        }
     };
     let input = normalize_session_input(args.get("input").and_then(|v| v.as_str()).unwrap_or(""));
     let kill = args.get("kill").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -2649,7 +2713,8 @@ fn codebase_investigator<R: tauri::Runtime>(
     // Orchestrate the existing structural + literal search primitives over the
     // objective's keywords, then aggregate ranked, reference-only findings.
     let mut scored: Vec<(f32, serde_json::Value)> = Vec::new();
-    let mut seen: std::collections::HashSet<(String, u32, String)> = std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<(String, u32, String)> =
+        std::collections::HashSet::new();
     let mut keywords_with_hits = 0usize;
     let mut considered = 0usize;
     let service = language_service_from_app_handle(app_handle);
@@ -2681,15 +2746,12 @@ fn codebase_investigator<R: tauri::Runtime>(
                 }
             }
 
-            if let Ok(results) = service.search_semantic_anchors(keyword, None, INVESTIGATOR_PER_KEYWORD)
+            if let Ok(results) =
+                service.search_semantic_anchors(keyword, None, INVESTIGATOR_PER_KEYWORD)
             {
                 for result in results {
                     let anchor = result.anchor;
-                    let key = (
-                        anchor.file_path.clone(),
-                        anchor.line,
-                        anchor.value.clone(),
-                    );
+                    let key = (anchor.file_path.clone(), anchor.line, anchor.value.clone());
                     if !seen.insert(key) {
                         continue;
                     }
@@ -4265,7 +4327,8 @@ fn symbol_search_tool<R: tauri::Runtime>(
     let (results, healing_report) = if file_is_unsupported {
         (Vec::new(), None)
     } else if self_healing_applies {
-        match service.search_symbols_filtered_self_healing(&query, None, symbol_types, fetch_limit) {
+        match service.search_symbols_filtered_self_healing(&query, None, symbol_types, fetch_limit)
+        {
             Ok(outcome) => (outcome.results, Some(outcome.healing)),
             Err(err) => return ToolResult::err(err.to_string()),
         }
@@ -5205,6 +5268,10 @@ pub fn apply_patch_to_string(
             out.push_str(&content[pos + old_text.len()..]);
             return Ok(out);
         }
+
+        if let Some(result) = apply_patch_whitespace_recovery(content, old_text, new_text) {
+            return result;
+        }
     } else if let Some(pos) = content.find(old_text) {
         let mut out = String::with_capacity(content.len() - old_text.len() + new_text.len());
         out.push_str(&content[..pos]);
@@ -5213,10 +5280,184 @@ pub fn apply_patch_to_string(
         return Ok(out);
     }
 
-    Err(format!(
-        "old_text not found in file (searched {} chars). Exact match required; whitespace-normalized fuzzy matching is disabled for safety.",
+    Err(old_text_not_found_error(content, old_text))
+}
+
+// Recovery shift between the file's leading indentation and old_text's.
+// The file's indentation always wins: the shift observed on the matched
+// lines is re-applied to new_text, so a recovered patch can never
+// re-indent code relative to its surroundings.
+#[derive(Debug, Clone, PartialEq)]
+enum IndentShift {
+    Unchanged,
+    Add(String),
+    Remove(String),
+}
+
+fn leading_whitespace(line: &str) -> &str {
+    &line[..line.len() - line.trim_start().len()]
+}
+
+// Byte span (start, end-excluding-line-terminator) of every line.
+fn content_line_spans(content: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut start = 0usize;
+    for segment in content.split_inclusive('\n') {
+        let end = start + segment.len();
+        let text = segment.strip_suffix('\n').unwrap_or(segment);
+        let text = text.strip_suffix('\r').unwrap_or(text);
+        spans.push((start, start + text.len()));
+        start = end;
+    }
+    if spans.is_empty() {
+        spans.push((0, content.len()));
+    }
+    spans
+}
+
+// Returns the uniform indent shift if every window line equals the
+// corresponding old_text line ignoring trailing whitespace, and (when
+// allow_indent_shift is set) one consistent leading-indentation change.
+fn window_indent_shift(
+    window: &[&str],
+    old_lines: &[&str],
+    allow_indent_shift: bool,
+) -> Option<IndentShift> {
+    let mut shift: Option<IndentShift> = None;
+    for (file_line, old_line) in window.iter().zip(old_lines.iter()) {
+        let file_trimmed = file_line.trim_end();
+        let old_trimmed = old_line.trim_end();
+        if !allow_indent_shift {
+            if file_trimmed != old_trimmed {
+                return None;
+            }
+            continue;
+        }
+        if file_trimmed.trim_start() != old_trimmed.trim_start() {
+            return None;
+        }
+        if file_trimmed.trim_start().is_empty() {
+            // Blank lines do not constrain the shift.
+            continue;
+        }
+        let file_lead = leading_whitespace(file_trimmed);
+        let old_lead = leading_whitespace(old_trimmed);
+        let line_shift = if file_lead == old_lead {
+            IndentShift::Unchanged
+        } else if let Some(prefix) = file_lead.strip_suffix(old_lead) {
+            IndentShift::Add(prefix.to_string())
+        } else if let Some(prefix) = old_lead.strip_suffix(file_lead) {
+            IndentShift::Remove(prefix.to_string())
+        } else {
+            return None;
+        };
+        match &shift {
+            None => shift = Some(line_shift),
+            Some(existing) if *existing == line_shift => {}
+            Some(_) => return None,
+        }
+    }
+    Some(shift.unwrap_or(IndentShift::Unchanged))
+}
+
+fn apply_indent_shift(new_text: &str, shift: &IndentShift) -> String {
+    let lines: Vec<String> = new_text
+        .lines()
+        .map(|line| match shift {
+            IndentShift::Unchanged => line.to_string(),
+            IndentShift::Add(prefix) => {
+                if line.trim().is_empty() {
+                    line.to_string()
+                } else {
+                    format!("{prefix}{line}")
+                }
+            }
+            IndentShift::Remove(prefix) => line
+                .strip_prefix(prefix.as_str())
+                .unwrap_or(line)
+                .to_string(),
+        })
+        .collect();
+    lines.join("\n")
+}
+
+// Line-based whitespace recovery, attempted only after an exact match
+// fails. Pass 1 tolerates trailing-whitespace drift; pass 2 additionally
+// allows one uniform leading-indentation shift, re-applied to new_text.
+// Content differences beyond whitespace never match, and an ambiguous
+// normalized match is an error rather than a guess.
+fn apply_patch_whitespace_recovery(
+    content: &str,
+    old_text: &str,
+    new_text: &str,
+) -> Option<Result<String, String>> {
+    let old_lines: Vec<&str> = old_text.lines().collect();
+    if old_lines.is_empty() || old_lines.iter().all(|line| line.trim().is_empty()) {
+        return None;
+    }
+    let line_spans = content_line_spans(content);
+    if line_spans.len() < old_lines.len() {
+        return None;
+    }
+    let content_lines: Vec<&str> = line_spans
+        .iter()
+        .map(|&(start, end)| &content[start..end])
+        .collect();
+
+    for allow_indent_shift in [false, true] {
+        let mut found: Option<(usize, IndentShift)> = None;
+        let mut match_count = 0usize;
+        for start in 0..=(content_lines.len() - old_lines.len()) {
+            let window = &content_lines[start..start + old_lines.len()];
+            if let Some(shift) = window_indent_shift(window, &old_lines, allow_indent_shift) {
+                match_count += 1;
+                if found.is_none() {
+                    found = Some((start, shift));
+                }
+            }
+        }
+        if match_count > 1 {
+            return Some(Err(format!(
+                "Ambiguous match: old_text matches {match_count} locations after whitespace normalization. Please provide more unique context."
+            )));
+        }
+        if let Some((start, shift)) = found {
+            let region_start = line_spans[start].0;
+            let region_end = line_spans[start + old_lines.len() - 1].1;
+            let replacement = apply_indent_shift(new_text, &shift);
+            let mut out = String::with_capacity(
+                content.len() - (region_end - region_start) + replacement.len(),
+            );
+            out.push_str(&content[..region_start]);
+            out.push_str(&replacement);
+            out.push_str(&content[region_end..]);
+            return Some(Ok(out));
+        }
+    }
+    None
+}
+
+fn old_text_not_found_error(content: &str, old_text: &str) -> String {
+    let mut message = format!(
+        "old_text not found in file (searched {} chars) after exact and whitespace-normalized matching.",
         old_text.len()
-    ))
+    );
+    if let Some(anchor) = old_text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+    {
+        if let Some(line_index) = content.lines().position(|line| line.trim() == anchor) {
+            message.push_str(&format!(
+                " The first line of old_text does appear at line {}, but the surrounding lines differ from the file.",
+                line_index + 1
+            ));
+        }
+    }
+    message.push_str(
+        " Re-read the current content with read_file_range and retry with old_text copied exactly from it.",
+    );
+    message
 }
 
 fn line_window_byte_range(
@@ -5290,10 +5531,21 @@ pub fn apply_patch_to_string_with_line_hint(
             out.push_str(&content[pos + old_text.len()..]);
             return Ok(out);
         }
+
+        if let Some(result) = apply_patch_whitespace_recovery(window, old_text, new_text) {
+            return result.map(|patched_window| {
+                let mut out =
+                    String::with_capacity(content.len() - window.len() + patched_window.len());
+                out.push_str(&content[..window_start]);
+                out.push_str(&patched_window);
+                out.push_str(&content[window_end..]);
+                out
+            });
+        }
     }
 
     Err(format!(
-        "old_text not found in hinted line range {}-{} (searched {} chars). Exact match required.",
+        "old_text not found in hinted line range {}-{} (searched {} chars) after exact and whitespace-normalized matching. Re-read the current content with read_file_range and retry with old_text copied exactly from it.",
         start_line,
         end_line.unwrap_or(start_line),
         old_text.len()

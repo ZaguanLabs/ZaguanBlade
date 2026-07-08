@@ -318,7 +318,10 @@ fn golden_sql_multiline_create() {
 
 #[test]
 fn golden_dockerfile_continuation() {
-    check_case("dockerfile-continuation", "dockerfile-continuation.dockerfile");
+    check_case(
+        "dockerfile-continuation",
+        "dockerfile-continuation.dockerfile",
+    );
 }
 
 #[test]

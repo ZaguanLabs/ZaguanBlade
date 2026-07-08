@@ -166,7 +166,8 @@ mod tests {
     #[test]
     fn ignores_non_code_and_version_like_tokens() {
         // "e.g." / "v1.2" / prose should not be mistaken for code refs.
-        let refs = extract_code_references("e.g. bump to v1.2 as discussed, see the README overview");
+        let refs =
+            extract_code_references("e.g. bump to v1.2 as discussed, see the README overview");
         assert!(refs.is_empty(), "unexpected refs: {refs:?}");
     }
 
@@ -190,12 +191,16 @@ mod tests {
         assert!(hit[0].context.as_deref().unwrap().starts_with("because"));
 
         // Decision WITHOUT a reason → not captured (precision gate).
-        let no_reason = extract_moments(&[msg("m", "assistant", "We decided to use SQLite for this.")]);
+        let no_reason =
+            extract_moments(&[msg("m", "assistant", "We decided to use SQLite for this.")]);
         assert!(no_reason.is_empty());
 
         // Reason WITHOUT a decision marker → not captured.
-        let no_decision =
-            extract_moments(&[msg("m", "user", "The tests pass because the index is fresh now.")]);
+        let no_decision = extract_moments(&[msg(
+            "m",
+            "user",
+            "The tests pass because the index is fresh now.",
+        )]);
         assert!(no_decision.is_empty());
     }
 

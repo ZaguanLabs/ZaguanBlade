@@ -1389,148 +1389,154 @@ impl LanguageService {
             // cross-file resolution order the commit-time enrichment relies on.
             // Staging never touches the store (workers only parse), so it races
             // safely against the committer's writes.
-            let commit_outcome = std::thread::scope(|commit_scope| -> Result<usize, LanguageError> {
-                let (commit_tx, commit_rx) =
-                    std::sync::mpsc::sync_channel::<Vec<StagedFileIndex>>(1);
-                // Large stack like the extraction workers: commit-time enrichment
-                // resolves module re-exports by recursively indexing target files
-                // (bounded by the M5.11 re-entrancy guard, but still deep on big
-                // re-export chains), which the default ~2 MB thread stack can't hold.
-                let committer = std::thread::Builder::new()
-                    .stack_size(256 * 1024 * 1024)
-                    .spawn_scoped(commit_scope, move || -> Result<usize, LanguageError> {
-                        let mut suppressed = 0usize;
-                        while let Ok(staged) = commit_rx.recv() {
-                            suppressed += self.commit_staged_file_indexes(&staged)?;
-                        }
-                        Ok(suppressed)
-                    })
-                    .expect("spawn index committer thread");
-
-            for (batch_start, batch_end) in self.size_bounded_batch_ranges(&queued_files) {
-                let batch = &queued_files[batch_start..batch_end];
-                let worker_count = indexing_worker_count(batch.len());
-                let (tx, rx) = mpsc::channel::<IndexWorkerEvent>();
-                let mut active_files = HashSet::new();
-                let mut staged_files = Vec::with_capacity(batch.len());
-                let mut batch_completed = 0usize;
-                // M5.4 — throttle the IPC progress emits (reset per batch so each
-                // batch's first event paints immediately).
-                let mut last_emit: Option<std::time::Instant> = None;
-
-                std::thread::scope(|scope| {
-                    for worker_index in 0..worker_count {
-                        let tx = tx.clone();
-                        let worker_files = batch
-                            .iter()
-                            .skip(worker_index)
-                            .step_by(worker_count)
-                            .cloned()
-                            .collect::<Vec<_>>();
-
-                        // M5.7 — index workers get a large (virtual, lazily-committed)
-                        // stack: symbol/relationship extraction walks the AST
-                        // recursively, and real C files (e.g. the kernel's deeply
-                        // nested generated tables / macro expansions) can be deep
-                        // enough to overflow the default 2 MB thread stack and abort
-                        // the process.
-                        std::thread::Builder::new()
-                            .stack_size(256 * 1024 * 1024)
-                            .spawn_scoped(scope, move || {
-                                for file_path in worker_files {
-                                    let _ = tx.send(IndexWorkerEvent::Started(file_path.clone()));
-                                    let result = self
-                                        .stage_file_index(&file_path)
-                                        .map_err(|error| error.to_string());
-                                    let _ = tx.send(IndexWorkerEvent::Finished(file_path, result));
-                                }
-                            })
-                            .expect("spawn index worker thread");
-                    }
-                    drop(tx);
-
-                    while batch_completed < batch.len() {
-                        let Ok(event) = rx.recv() else {
-                            break;
-                        };
-                        // Keep the drain loop LEAN. With the pool saturating every
-                        // core this thread must keep up with the event firehose, so
-                        // per-event work is just cheap bookkeeping — no string
-                        // formatting, no IPC. The expensive status build + emit is
-                        // throttled below (UI_EMIT_INTERVAL).
-                        match event {
-                            IndexWorkerEvent::Started(file_path) => {
-                                active_files.insert(file_path.clone());
-                                health.current_file = Some(file_path);
+            let commit_outcome = std::thread::scope(
+                |commit_scope| -> Result<usize, LanguageError> {
+                    let (commit_tx, commit_rx) =
+                        std::sync::mpsc::sync_channel::<Vec<StagedFileIndex>>(1);
+                    // Large stack like the extraction workers: commit-time enrichment
+                    // resolves module re-exports by recursively indexing target files
+                    // (bounded by the M5.11 re-entrancy guard, but still deep on big
+                    // re-export chains), which the default ~2 MB thread stack can't hold.
+                    let committer = std::thread::Builder::new()
+                        .stack_size(256 * 1024 * 1024)
+                        .spawn_scoped(commit_scope, move || -> Result<usize, LanguageError> {
+                            let mut suppressed = 0usize;
+                            while let Ok(staged) = commit_rx.recv() {
+                                suppressed += self.commit_staged_file_indexes(&staged)?;
                             }
-                            IndexWorkerEvent::Finished(file_path, result) => {
-                                active_files.remove(&file_path);
-                                batch_completed += 1;
-                                match result {
-                                    Ok(staged_file) => {
-                                        staged_files.push(staged_file);
-                                        files_indexed += 1;
+                            Ok(suppressed)
+                        })
+                        .expect("spawn index committer thread");
+
+                    for (batch_start, batch_end) in self.size_bounded_batch_ranges(&queued_files) {
+                        let batch = &queued_files[batch_start..batch_end];
+                        let worker_count = indexing_worker_count(batch.len());
+                        let (tx, rx) = mpsc::channel::<IndexWorkerEvent>();
+                        let mut active_files = HashSet::new();
+                        let mut staged_files = Vec::with_capacity(batch.len());
+                        let mut batch_completed = 0usize;
+                        // M5.4 — throttle the IPC progress emits (reset per batch so each
+                        // batch's first event paints immediately).
+                        let mut last_emit: Option<std::time::Instant> = None;
+
+                        std::thread::scope(|scope| {
+                            for worker_index in 0..worker_count {
+                                let tx = tx.clone();
+                                let worker_files = batch
+                                    .iter()
+                                    .skip(worker_index)
+                                    .step_by(worker_count)
+                                    .cloned()
+                                    .collect::<Vec<_>>();
+
+                                // M5.7 — index workers get a large (virtual, lazily-committed)
+                                // stack: symbol/relationship extraction walks the AST
+                                // recursively, and real C files (e.g. the kernel's deeply
+                                // nested generated tables / macro expansions) can be deep
+                                // enough to overflow the default 2 MB thread stack and abort
+                                // the process.
+                                std::thread::Builder::new()
+                                    .stack_size(256 * 1024 * 1024)
+                                    .spawn_scoped(scope, move || {
+                                        for file_path in worker_files {
+                                            let _ = tx
+                                                .send(IndexWorkerEvent::Started(file_path.clone()));
+                                            let result = self
+                                                .stage_file_index(&file_path)
+                                                .map_err(|error| error.to_string());
+                                            let _ = tx.send(IndexWorkerEvent::Finished(
+                                                file_path, result,
+                                            ));
+                                        }
+                                    })
+                                    .expect("spawn index worker thread");
+                            }
+                            drop(tx);
+
+                            while batch_completed < batch.len() {
+                                let Ok(event) = rx.recv() else {
+                                    break;
+                                };
+                                // Keep the drain loop LEAN. With the pool saturating every
+                                // core this thread must keep up with the event firehose, so
+                                // per-event work is just cheap bookkeeping — no string
+                                // formatting, no IPC. The expensive status build + emit is
+                                // throttled below (UI_EMIT_INTERVAL).
+                                match event {
+                                    IndexWorkerEvent::Started(file_path) => {
+                                        active_files.insert(file_path.clone());
+                                        health.current_file = Some(file_path);
                                     }
-                                    Err(error) => {
-                                        eprintln!(
+                                    IndexWorkerEvent::Finished(file_path, result) => {
+                                        active_files.remove(&file_path);
+                                        batch_completed += 1;
+                                        match result {
+                                            Ok(staged_file) => {
+                                                staged_files.push(staged_file);
+                                                files_indexed += 1;
+                                            }
+                                            Err(error) => {
+                                                eprintln!(
                                             "[LanguageService] Failed to index {} (parallel pass): {}",
                                             file_path, error
                                         );
-                                        // Defer for the sequential second pass.
-                                        failed_files.push(file_path.clone());
+                                                // Defer for the sequential second pass.
+                                                failed_files.push(file_path.clone());
+                                            }
+                                        }
+                                        health.current_file = active_files.iter().next().cloned();
                                     }
                                 }
-                                health.current_file = active_files.iter().next().cloned();
+
+                                // Throttled UI update (~10/s) — plus an unconditional emit on
+                                // the batch's final event so the bar lands exactly on N/N.
+                                let final_event = batch_completed == batch.len();
+                                let should_emit = final_event
+                                    || last_emit
+                                        .map_or(true, |at| at.elapsed() >= UI_EMIT_INTERVAL);
+                                if should_emit {
+                                    let done = completed_files + batch_completed;
+                                    health.queued_files = total_queued.saturating_sub(done);
+                                    health.active_workers = active_files.len();
+                                    health.message = match &health.current_file {
+                                        Some(current_file) => format!(
+                                            "Indexing {}... {}/{} files ({} workers)",
+                                            current_file, done, total_queued, worker_count
+                                        ),
+                                        None => format!(
+                                            "Building symbol index... {}/{} files",
+                                            done, total_queued
+                                        ),
+                                    };
+                                    self.set_index_health(health.clone());
+                                    progress(&health);
+                                    last_emit = Some(std::time::Instant::now());
+                                }
                             }
-                        }
+                        });
 
-                        // Throttled UI update (~10/s) — plus an unconditional emit on
-                        // the batch's final event so the bar lands exactly on N/N.
-                        let final_event = batch_completed == batch.len();
-                        let should_emit = final_event
-                            || last_emit.map_or(true, |at| at.elapsed() >= UI_EMIT_INTERVAL);
-                        if should_emit {
-                            let done = completed_files + batch_completed;
-                            health.queued_files = total_queued.saturating_sub(done);
-                            health.active_workers = active_files.len();
-                            health.message = match &health.current_file {
-                                Some(current_file) => format!(
-                                    "Indexing {}... {}/{} files ({} workers)",
-                                    current_file, done, total_queued, worker_count
-                                ),
-                                None => format!(
-                                    "Building symbol index... {}/{} files",
-                                    done, total_queued
-                                ),
-                            };
-                            self.set_index_health(health.clone());
-                            progress(&health);
-                            last_emit = Some(std::time::Instant::now());
+                        completed_files += batch_completed;
+
+                        if !staged_files.is_empty() {
+                            // Hand this batch to the background committer and immediately
+                            // begin staging the next. `send` blocks ONLY while the committer
+                            // is still writing the previous batch (bounded channel =
+                            // backpressure, capping staged memory). A send error means the
+                            // committer stopped on a DB error — surfaced at `join` below.
+                            if commit_tx.send(staged_files).is_err() {
+                                break;
+                            }
+                            committed_any = true;
                         }
                     }
-                });
 
-                completed_files += batch_completed;
-
-                if !staged_files.is_empty() {
-                    // Hand this batch to the background committer and immediately
-                    // begin staging the next. `send` blocks ONLY while the committer
-                    // is still writing the previous batch (bounded channel =
-                    // backpressure, capping staged memory). A send error means the
-                    // committer stopped on a DB error — surfaced at `join` below.
-                    if commit_tx.send(staged_files).is_err() {
-                        break;
-                    }
-                    committed_any = true;
-                }
-            }
-
-                // Close the queue and wait for the committer to drain it; its
-                // Result (total suppressed edges, or the first DB error) is the
-                // scope's value.
-                drop(commit_tx);
-                committer.join().expect("index committer thread panicked")
-            });
+                    // Close the queue and wait for the committer to drain it; its
+                    // Result (total suppressed edges, or the first DB error) is the
+                    // scope's value.
+                    drop(commit_tx);
+                    committer.join().expect("index committer thread panicked")
+                },
+            );
             suppressed_external_relationships += commit_outcome?;
 
             // M5.10 — SECOND PASS: retry the files that errored in the parallel
@@ -1846,7 +1852,9 @@ impl LanguageService {
 
     /// M6.1 — invalidate the reconcile checkpoint.
     fn clear_reconcile_checkpoint(&self) {
-        let _ = self.symbol_store.delete_index_meta(RECONCILE_CHECKPOINT_KEY);
+        let _ = self
+            .symbol_store
+            .delete_index_meta(RECONCILE_CHECKPOINT_KEY);
     }
 
     pub fn get_file_content(&self, file_path: &str) -> Result<String, LanguageError> {
@@ -2549,54 +2557,54 @@ impl LanguageService {
         // bloating with unsearchable register macros, and still records the file
         // (via its root symbol) so it stays discoverable by path.
         let skip_extraction = content.len() > MAX_EXTRACT_BYTES || is_generated_path(file_path);
-        let (symbols, mut relationships, extraction_content, extraction_language) = if skip_extraction
-        {
-            eprintln!(
-                "[LanguageService] {} — indexing anchor-only (skipping symbol extraction; {})",
-                file_path,
-                if content.len() > MAX_EXTRACT_BYTES {
-                    format!(
-                        "{:.1} MiB, likely generated",
-                        content.len() as f64 / (1024.0 * 1024.0)
-                    )
-                } else {
-                    "generated-file name pattern".to_string()
-                }
-            );
-            (
-                self.with_file_root_symbol(file_path, &content, Vec::new()),
-                Vec::new(),
-                std::borrow::Cow::Borrowed(content.as_str()),
-                language,
-            )
-        } else {
-            let SymbolExtraction {
-                symbols: extracted_symbols,
-                relationships,
-                content: extraction_content,
-                language: extraction_language,
-            } = self.extract_file_symbols_and_relationships(file_path, &content, language)?;
-            // M5.7 — cap pathological files before adding the file-root symbol (so
-            // the root is always retained). Truncated symbols are simply not
-            // indexed; any relationship pointing at a dropped symbol stays
-            // unresolved (handled).
-            let mut extracted_symbols = extracted_symbols;
-            if extracted_symbols.len() > MAX_SYMBOLS_PER_FILE {
+        let (symbols, mut relationships, extraction_content, extraction_language) =
+            if skip_extraction {
                 eprintln!(
+                    "[LanguageService] {} — indexing anchor-only (skipping symbol extraction; {})",
+                    file_path,
+                    if content.len() > MAX_EXTRACT_BYTES {
+                        format!(
+                            "{:.1} MiB, likely generated",
+                            content.len() as f64 / (1024.0 * 1024.0)
+                        )
+                    } else {
+                        "generated-file name pattern".to_string()
+                    }
+                );
+                (
+                    self.with_file_root_symbol(file_path, &content, Vec::new()),
+                    Vec::new(),
+                    std::borrow::Cow::Borrowed(content.as_str()),
+                    language,
+                )
+            } else {
+                let SymbolExtraction {
+                    symbols: extracted_symbols,
+                    relationships,
+                    content: extraction_content,
+                    language: extraction_language,
+                } = self.extract_file_symbols_and_relationships(file_path, &content, language)?;
+                // M5.7 — cap pathological files before adding the file-root symbol (so
+                // the root is always retained). Truncated symbols are simply not
+                // indexed; any relationship pointing at a dropped symbol stays
+                // unresolved (handled).
+                let mut extracted_symbols = extracted_symbols;
+                if extracted_symbols.len() > MAX_SYMBOLS_PER_FILE {
+                    eprintln!(
                     "[LanguageService] {} produced {} symbols; capping to {} (pathological/generated file)",
                     file_path,
                     extracted_symbols.len(),
                     MAX_SYMBOLS_PER_FILE
                 );
-                extracted_symbols.truncate(MAX_SYMBOLS_PER_FILE);
-            }
-            (
-                self.with_file_root_symbol(file_path, &content, extracted_symbols),
-                relationships,
-                extraction_content,
-                extraction_language,
-            )
-        };
+                    extracted_symbols.truncate(MAX_SYMBOLS_PER_FILE);
+                }
+                (
+                    self.with_file_root_symbol(file_path, &content, extracted_symbols),
+                    relationships,
+                    extraction_content,
+                    extraction_language,
+                )
+            };
         self.canonicalize_import_relationships(file_path, &mut relationships);
         let anchors = if skip_extraction {
             Vec::new()
@@ -2811,8 +2819,8 @@ impl LanguageService {
                                 let result = self
                                     .stage_file_index_with_metrics(&file_path)
                                     .map_err(|error| error.to_string());
-                                let _ = tx
-                                    .send(IndexDirectoryStageEvent::Finished(file_path, result));
+                                let _ =
+                                    tx.send(IndexDirectoryStageEvent::Finished(file_path, result));
                             }
                         })
                         .expect("spawn index worker thread");
@@ -2852,8 +2860,7 @@ impl LanguageService {
             });
 
             if !staged_files.is_empty() {
-                let commit_metrics =
-                    self.commit_staged_file_indexes_with_metrics(&staged_files)?;
+                let commit_metrics = self.commit_staged_file_indexes_with_metrics(&staged_files)?;
                 stats.relationships_extracted += commit_metrics.relationship_count;
                 stats.relationship_enrichment_ms += commit_metrics.relationship_enrichment_ms;
                 stats.db_write_ms += commit_metrics.db_write_ms;
@@ -7961,7 +7968,9 @@ fn extract_css_symbols(file_path: &str, content: &str) -> Vec<Symbol> {
         let line = line_without_lf
             .strip_suffix('\r')
             .unwrap_or(line_without_lf);
-        let blanked_without_lf = blanked_segment.strip_suffix('\n').unwrap_or(blanked_segment);
+        let blanked_without_lf = blanked_segment
+            .strip_suffix('\n')
+            .unwrap_or(blanked_segment);
         let line_code = blanked_without_lf
             .strip_suffix('\r')
             .unwrap_or(blanked_without_lf);
@@ -8390,11 +8399,7 @@ fn extract_config_symbols(file_path: &str, content: &str, language: Language) ->
 /// still extracted those keys, so on that error we FALL BACK to the same
 /// serde-based extraction — the keys are preserved (positions degrade to the
 /// legacy `locate_config_key` re-find, acceptable for non-mapping roots).
-fn collect_yaml_config_entries(
-    file_path: &str,
-    content: &str,
-    entries: &mut Vec<ConfigKeyEntry>,
-) {
+fn collect_yaml_config_entries(file_path: &str, content: &str, entries: &mut Vec<ConfigKeyEntry>) {
     let start = entries.len();
     match marked_yaml::parse_yaml(0usize, content) {
         Ok(root) => {
@@ -8541,7 +8546,9 @@ fn collect_kustomize_import_symbols(file_path: &str, content: &str) -> Vec<Symbo
     };
     let line_start_offsets = line_start_offsets(content);
     for section in ["resources", "bases", "components"] {
-        let Some(sequence) = map.get_node(section).and_then(marked_yaml::types::Node::as_sequence)
+        let Some(sequence) = map
+            .get_node(section)
+            .and_then(marked_yaml::types::Node::as_sequence)
         else {
             continue;
         };
@@ -8614,7 +8621,11 @@ fn derive_config_import_relationships(
         if symbol.symbol_type != SymbolType::Import || symbol.name.is_empty() {
             continue;
         }
-        if !seen.insert((symbol.id.clone(), symbol.name.clone(), symbol.range.start.line)) {
+        if !seen.insert((
+            symbol.id.clone(),
+            symbol.name.clone(),
+            symbol.range.start.line,
+        )) {
             continue;
         }
         relationships.push(SymbolRelationship {
@@ -9285,12 +9296,7 @@ fn collect_toml_config_keys(content: &str, entries: &mut Vec<ConfigKeyEntry>) {
             continue;
         };
         let column = line.len().saturating_sub(line.trim_start().len()) as u32;
-        push_config_key_entry_at(
-            &path,
-            &leaf_key,
-            Some((line_index as u32, column)),
-            entries,
-        );
+        push_config_key_entry_at(&path, &leaf_key, Some((line_index as u32, column)), entries);
     }
 }
 
@@ -11969,12 +11975,16 @@ mod tests {
         .unwrap();
 
         // Without the guard, either of these never returns (overflow / spin).
-        let symbols_a = service.index_file("a.js").expect("indexing a.js must terminate");
+        let symbols_a = service
+            .index_file("a.js")
+            .expect("indexing a.js must terminate");
         assert!(
             symbols_a.iter().any(|s| s.name == "fromA"),
             "a.js's own symbol must still be extracted"
         );
-        let symbols_b = service.index_file("b.js").expect("indexing b.js must terminate");
+        let symbols_b = service
+            .index_file("b.js")
+            .expect("indexing b.js must terminate");
         assert!(symbols_b.iter().any(|s| s.name == "fromB"));
     }
 
@@ -11988,7 +11998,9 @@ mod tests {
             "export * from './a';\nexport const fromA = 1;\n",
         )
         .unwrap();
-        let symbols = service.index_file("a.js").expect("self re-export must terminate");
+        let symbols = service
+            .index_file("a.js")
+            .expect("self re-export must terminate");
         assert!(symbols.iter().any(|s| s.name == "fromA"));
     }
 
@@ -12590,7 +12602,10 @@ class B {
             // The nested-function `this.run()` is attributed to `inner`; it must
             // carry no recv_type (a plain function rebinds `this`).
             let (raw_syms, raw_rels) = extract_raw("nested_this.ts", TS, Language::TypeScript);
-            let inner = raw_syms.iter().find(|s| s.name == "inner").expect("inner fn");
+            let inner = raw_syms
+                .iter()
+                .find(|s| s.name == "inner")
+                .expect("inner fn");
             let recv_types: Vec<Option<String>> = raw_rels
                 .iter()
                 .filter(|r| {
@@ -14072,7 +14087,9 @@ components:
             "imports: {imports:?}"
         );
         // A kustomization is imports, not a Resource manifest.
-        assert!(symbols.iter().all(|s| s.symbol_type != SymbolType::Resource));
+        assert!(symbols
+            .iter()
+            .all(|s| s.symbol_type != SymbolType::Resource));
 
         // Each list entry becomes an Import edge (target = the referenced path).
         let relationships = derive_config_import_relationships("kustomization.yaml", &symbols);
@@ -14834,11 +14851,7 @@ export function loadPosts() {
     #[test]
     fn discovery_includes_dotenv_files() {
         let (service, temp_dir) = create_test_service();
-        fs::write(
-            temp_dir.path().join(".env"),
-            "API_KEY=secret\nPORT=8080\n",
-        )
-        .unwrap();
+        fs::write(temp_dir.path().join(".env"), "API_KEY=secret\nPORT=8080\n").unwrap();
         fs::write(temp_dir.path().join(".env.local"), "LOCAL_ONLY=1\n").unwrap();
         fs::write(temp_dir.path().join("app.ts"), "export function app() {}").unwrap();
         // A non-dotenv dotfile must still be ignored.
@@ -15253,7 +15266,8 @@ metadata:
         let ts =
             extract_semantic_anchors("src/foo.ts", "const kName = \"BladeProtocolGateway\";\n");
         assert!(
-            ts.iter().any(|anchor| anchor.value == "BladeProtocolGateway"),
+            ts.iter()
+                .any(|anchor| anchor.value == "BladeProtocolGateway"),
             "front-end files still anchor string-literal cross-references"
         );
     }
@@ -15397,7 +15411,10 @@ metadata:
             !third.fast_path,
             "a changed worktree must NOT take the fast path"
         );
-        assert!(third.files_indexed >= 1, "the changed file must be re-indexed");
+        assert!(
+            third.files_indexed >= 1,
+            "the changed file must be re-indexed"
+        );
         assert_eq!(third.health.status, IndexHealthStatus::Fresh);
     }
 
@@ -17669,8 +17686,14 @@ func helper() {}
         let src = "package p;\n/*\nclass Foo {\n*/\nclass Bar {}\n";
         let out = blank_noncode_spans(src, &JAVA_LEX);
         assert_length_and_newlines_preserved(src, out.as_str());
-        assert!(!out.contains("Foo"), "block-comment body must be blanked: {out:?}");
-        assert!(out.contains("class Bar {}"), "real code must survive: {out:?}");
+        assert!(
+            !out.contains("Foo"),
+            "block-comment body must be blanked: {out:?}"
+        );
+        assert!(
+            out.contains("class Bar {}"),
+            "real code must survive: {out:?}"
+        );
     }
 
     #[test]
@@ -17680,7 +17703,10 @@ func helper() {}
         let out = blank_noncode_spans(src, &PHP_LEX);
         assert_length_and_newlines_preserved(src, out.as_str());
         assert!(out.starts_with("return 1;"));
-        assert!(!out.contains("class Baz"), "trailing comment must be blanked: {out:?}");
+        assert!(
+            !out.contains("class Baz"),
+            "trailing comment must be blanked: {out:?}"
+        );
     }
 
     #[test]
@@ -17689,8 +17715,14 @@ func helper() {}
         let src = "var url = \"http://x // y\"; // real comment\n";
         let out = blank_noncode_spans(src, &JAVA_LEX);
         assert_length_and_newlines_preserved(src, out.as_str());
-        assert!(out.contains("var url ="), "code before the string survives: {out:?}");
-        assert!(!out.contains("real comment"), "trailing comment is blanked: {out:?}");
+        assert!(
+            out.contains("var url ="),
+            "code before the string survives: {out:?}"
+        );
+        assert!(
+            !out.contains("real comment"),
+            "trailing comment is blanked: {out:?}"
+        );
     }
 
     #[test]
@@ -17699,8 +17731,14 @@ func helper() {}
         let src = "require \"json\" # load\n";
         let out = blank_noncode_spans(src, &RUBY_LEX);
         assert_length_and_newlines_preserved(src, out.as_str());
-        assert!(out.contains("\"json\""), "ruby string content must survive: {out:?}");
-        assert!(!out.contains("load"), "trailing `#` comment is still blanked: {out:?}");
+        assert!(
+            out.contains("\"json\""),
+            "ruby string content must survive: {out:?}"
+        );
+        assert!(
+            !out.contains("load"),
+            "trailing `#` comment is still blanked: {out:?}"
+        );
     }
 
     #[test]
@@ -17708,8 +17746,14 @@ func helper() {}
         let src = "$x = <<<EOT\nclass Hidden {}\nEOT;\nclass Real {}\n";
         let out = blank_noncode_spans(src, &PHP_LEX);
         assert_length_and_newlines_preserved(src, out.as_str());
-        assert!(!out.contains("Hidden"), "heredoc body must be blanked: {out:?}");
-        assert!(out.contains("class Real {}"), "code after EOT survives: {out:?}");
+        assert!(
+            !out.contains("Hidden"),
+            "heredoc body must be blanked: {out:?}"
+        );
+        assert!(
+            out.contains("class Real {}"),
+            "code after EOT survives: {out:?}"
+        );
     }
 
     #[test]
@@ -17729,8 +17773,14 @@ func helper() {}
         );
         let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"Bar"), "real class kept: {names:?}");
-        assert!(!names.contains(&"Foo"), "commented class dropped: {names:?}");
-        assert!(!names.contains(&"hidden"), "commented method dropped: {names:?}");
+        assert!(
+            !names.contains(&"Foo"),
+            "commented class dropped: {names:?}"
+        );
+        assert!(
+            !names.contains(&"hidden"),
+            "commented method dropped: {names:?}"
+        );
     }
 
     #[test]
@@ -17742,7 +17792,10 @@ func helper() {}
         let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"Bar"), "real class kept: {names:?}");
         assert!(names.contains(&"handle"), "real method kept: {names:?}");
-        assert!(!names.contains(&"Baz"), "trailing-comment class dropped: {names:?}");
+        assert!(
+            !names.contains(&"Baz"),
+            "trailing-comment class dropped: {names:?}"
+        );
     }
 
     #[test]
@@ -17750,7 +17803,10 @@ func helper() {}
         // Regression guard: string blanking must stay disabled for Ruby.
         let symbols = extract_ruby_symbols("svc.rb", "require \"json\"\nclass Svc\nend\n");
         let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.contains(&"json"), "require target survives: {names:?}");
+        assert!(
+            names.contains(&"json"),
+            "require target survives: {names:?}"
+        );
         assert!(names.contains(&"Svc"), "class survives: {names:?}");
     }
 }

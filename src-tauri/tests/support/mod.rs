@@ -47,8 +47,8 @@ pub fn index_corpus(root: &Path) -> IndexedCorpus {
     let db_tmp = TempDir::new().expect("create temp dir for cold symbol db");
     let db_path = db_tmp.path().join("symbols.db");
     let store = Arc::new(SymbolStore::new(&db_path).expect("create cold symbol store"));
-    let service =
-        LanguageService::new(root.to_path_buf(), Arc::clone(&store)).expect("create language service");
+    let service = LanguageService::new(root.to_path_buf(), Arc::clone(&store))
+        .expect("create language service");
     service
         .index_directory("")
         .expect("cold index of corpus root");

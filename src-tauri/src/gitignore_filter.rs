@@ -127,7 +127,10 @@ impl GitignoreFilter {
         // Global gitignore: anchored at the workspace root, applied to the full
         // relative path.
         if let Some(global) = &self.global {
-            apply(&mut ignored, global.matched_path_or_any_parents(rel_path, is_dir));
+            apply(
+                &mut ignored,
+                global.matched_path_or_any_parents(rel_path, is_dir),
+            );
         }
 
         // Each ancestor directory's own `.gitignore`, from the workspace root
@@ -147,7 +150,6 @@ impl GitignoreFilter {
 
         ignored
     }
-
 }
 
 /// Fold one matcher's verdict into the running decision. `Ignore` excludes,

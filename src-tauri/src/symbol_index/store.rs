@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
 
-use crate::tree_sitter::{Language, Symbol, SymbolRelationship, SymbolRelationshipType, SymbolType};
+use crate::tree_sitter::{
+    Language, Symbol, SymbolRelationship, SymbolRelationshipType, SymbolType,
+};
 
 const GENERATED_INDEX_CLEAR_STATEMENTS: &[&str] = &[
     "DELETE FROM symbol_relationships",
@@ -153,8 +155,7 @@ impl GlobalReceiverRegistry {
             let mut ids: Vec<String> = Vec::new();
             let mut seen: HashSet<String> = HashSet::new();
             for class_qn in &level {
-                if let Some(method_ids) =
-                    self.methods.get(&(class_qn.clone(), method.to_string()))
+                if let Some(method_ids) = self.methods.get(&(class_qn.clone(), method.to_string()))
                 {
                     for id in method_ids {
                         if seen.insert(id.clone()) {
@@ -1119,7 +1120,8 @@ impl SymbolStore {
                 tx.prepare_cached("DELETE FROM symbol_relationships WHERE source_file_path = ?1")?;
             let mut delete_anchors =
                 tx.prepare_cached("DELETE FROM semantic_anchors WHERE file_path = ?1")?;
-            let mut delete_symbols = tx.prepare_cached("DELETE FROM symbols WHERE file_path = ?1")?;
+            let mut delete_symbols =
+                tx.prepare_cached("DELETE FROM symbols WHERE file_path = ?1")?;
 
             for file in files {
                 delete_relationships.execute(params![&file.file_path])?;
@@ -2388,8 +2390,8 @@ impl SymbolStore {
         }
 
         {
-            let mut stmt =
-                conn.prepare("SELECT source_file_path, relationship_type FROM symbol_relationships")?;
+            let mut stmt = conn
+                .prepare("SELECT source_file_path, relationship_type FROM symbol_relationships")?;
             let mut rows = stmt.query([])?;
             while let Some(row) = rows.next()? {
                 let file_path: String = row.get(0)?;
@@ -2596,10 +2598,7 @@ impl SymbolStore {
     /// Fetch the given symbol ids in a single query, returning an `id -> Symbol`
     /// map. Ids are de-duplicated and chunked under SQLite's bound-parameter
     /// ceiling so one logical lookup replaces N `get_symbol` calls.
-    fn get_symbols_by_ids<'a, I>(
-        &self,
-        ids: I,
-    ) -> Result<HashMap<String, Symbol>, SymbolStoreError>
+    fn get_symbols_by_ids<'a, I>(&self, ids: I) -> Result<HashMap<String, Symbol>, SymbolStoreError>
     where
         I: IntoIterator<Item = &'a str>,
     {
@@ -2838,9 +2837,7 @@ fn run_migrations(conn: &Connection) -> Result<(), SymbolStoreError> {
 /// COLUMN`, which makes each add idempotent: re-running this migration, or
 /// running it on a DB where a prior ad-hoc `ensure_column` already added one of
 /// these columns, is a safe no-op (no "duplicate column name" error).
-fn migration_v1_relationship_resolution_columns(
-    conn: &Connection,
-) -> Result<(), SymbolStoreError> {
+fn migration_v1_relationship_resolution_columns(conn: &Connection) -> Result<(), SymbolStoreError> {
     ensure_column(conn, "symbol_relationships", "resolution_strategy", "TEXT")?;
     ensure_column(conn, "symbol_relationships", "confidence", "REAL")?;
     ensure_column(conn, "symbol_relationships", "metadata_json", "TEXT")?;
@@ -3723,10 +3720,7 @@ mod tests {
         assert_eq!(coverage_count(&rust.relationship_counts, "implements"), 1);
         assert_eq!(coverage_count(&rust.relationship_counts, "call"), 0);
         assert_eq!(coverage_count(&rust.relationship_counts, "import"), 0);
-        assert_eq!(
-            rust.relationship_counts.len(),
-            ALL_RELATIONSHIP_TYPES.len()
-        );
+        assert_eq!(rust.relationship_counts.len(), ALL_RELATIONSHIP_TYPES.len());
 
         // Signature percentage: 3 of 4 Function/Method symbols carry a signature.
         assert!((rust.function_method_signature_pct - 0.75).abs() < 1e-9);
@@ -4028,7 +4022,10 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(rerun_version, LATEST_SCHEMA_VERSION);
-        assert_eq!(after.len(), table_columns(&conn, "symbol_relationships").len());
+        assert_eq!(
+            after.len(),
+            table_columns(&conn, "symbol_relationships").len()
+        );
     }
 
     #[test]
@@ -4047,7 +4044,10 @@ mod tests {
 
         let columns = table_columns(&conn, "symbol_relationships");
         for new_column in NEW_RELATIONSHIP_COLUMNS {
-            let occurrences = columns.iter().filter(|column| *column == new_column).count();
+            let occurrences = columns
+                .iter()
+                .filter(|column| *column == new_column)
+                .count();
             assert_eq!(occurrences, 1, "column `{new_column}` was duplicated");
         }
     }

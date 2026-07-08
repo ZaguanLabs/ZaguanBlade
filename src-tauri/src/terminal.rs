@@ -126,10 +126,7 @@ impl BgOutputBuffer {
     /// any bytes were dropped, a notice is prepended so truncation is never silent.
     fn snapshot(&self) -> String {
         if self.dropped > 0 {
-            let mut out = format!(
-                "[… {} bytes of earlier output truncated …]\n",
-                self.dropped
-            );
+            let mut out = format!("[… {} bytes of earlier output truncated …]\n", self.dropped);
             out.push_str(&self.text);
             out
         } else {
@@ -241,13 +238,10 @@ impl TerminalManager {
 
     /// Write bytes to a background session's stdin (PTY). `"\u{0003}"` = Ctrl-C.
     pub fn bg_write(&self, session_id: &str, input: &str) -> Result<(), String> {
-        let mut writers = self
-            .external_writers
-            .lock()
-            .map_err(|e| e.to_string())?;
-        let writer = writers
-            .get_mut(session_id)
-            .ok_or_else(|| format!("session '{session_id}' is no longer writable (process ended?)"))?;
+        let mut writers = self.external_writers.lock().map_err(|e| e.to_string())?;
+        let writer = writers.get_mut(session_id).ok_or_else(|| {
+            format!("session '{session_id}' is no longer writable (process ended?)")
+        })?;
         writer
             .write_all(input.as_bytes())
             .map_err(|e| e.to_string())?;
@@ -256,10 +250,7 @@ impl TerminalManager {
 
     /// Force-kill a background session's process.
     pub fn bg_kill(&self, session_id: &str) -> Result<(), String> {
-        let mut killers = self
-            .external_killers
-            .lock()
-            .map_err(|e| e.to_string())?;
+        let mut killers = self.external_killers.lock().map_err(|e| e.to_string())?;
         match killers.get_mut(session_id) {
             Some(killer) => killer.kill().map_err(|e| e.to_string()),
             None => Ok(()), // already exited; nothing to kill
@@ -1857,14 +1848,21 @@ mod bg_eviction_tests {
         let t0 = Instant::now();
         let mut jobs = HashMap::new();
         // Oldest overall is running, but an exited job is the preferred victim.
-        jobs.insert("old_running".to_string(), job("old_running", BgStatus::Running, t0));
+        jobs.insert(
+            "old_running".to_string(),
+            job("old_running", BgStatus::Running, t0),
+        );
         jobs.insert(
             "exited".to_string(),
             job("exited", BgStatus::Exited(0), t0 + Duration::from_secs(1)),
         );
         jobs.insert(
             "new_running".to_string(),
-            job("new_running", BgStatus::Running, t0 + Duration::from_secs(2)),
+            job(
+                "new_running",
+                BgStatus::Running,
+                t0 + Duration::from_secs(2),
+            ),
         );
         assert_eq!(select_eviction_victim(&jobs, 3).as_deref(), Some("exited"));
     }

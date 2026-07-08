@@ -158,7 +158,10 @@ pub async fn load_conversation(
             }
             None => {
                 let fresh = crate::chat_manager::fresh_session_id();
-                eprintln!("[CHAT] No session ID in loaded conversation; minted {}", fresh);
+                eprintln!(
+                    "[CHAT] No session ID in loaded conversation; minted {}",
+                    fresh
+                );
                 fresh
             }
         };

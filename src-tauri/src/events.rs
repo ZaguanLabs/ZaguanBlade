@@ -69,7 +69,6 @@ pub mod event_names {
 
     /// History entry added (snapshot created)
     pub const HISTORY_ENTRY_ADDED: &str = "history-entry-added";
-
 }
 
 /// Payload for history-entry-added event
@@ -244,4 +243,3 @@ pub struct CommandExecutionStartedPayload {
     pub blocking: bool,
     pub wait_ms_before_async: Option<u64>,
 }
-

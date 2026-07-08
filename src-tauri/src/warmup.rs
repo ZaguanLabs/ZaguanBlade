@@ -310,7 +310,10 @@ mod tests {
             base,
             bundle_dedupe_key("sess_b", "anthropic/claude-opus-4-8", "{\"a\":1}")
         );
-        assert_ne!(base, bundle_dedupe_key("sess_a", "openai/gpt-5", "{\"a\":1}"));
+        assert_ne!(
+            base,
+            bundle_dedupe_key("sess_a", "openai/gpt-5", "{\"a\":1}")
+        );
         assert_ne!(
             base,
             bundle_dedupe_key("sess_a", "anthropic/claude-opus-4-8", "{\"a\":2}")
@@ -408,4 +411,3 @@ mod tests {
         assert_eq!(json["limits"]["max_open_files"], 20);
     }
 }
-

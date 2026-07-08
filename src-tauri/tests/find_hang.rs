@@ -57,9 +57,8 @@ fn find_hang() {
     }));
 
     let store = Arc::new(SymbolStore::in_memory().expect("in-memory store"));
-    let service = Arc::new(
-        LanguageService::new(root.clone(), Arc::clone(&store)).expect("language service"),
-    );
+    let service =
+        Arc::new(LanguageService::new(root.clone(), Arc::clone(&store)).expect("language service"));
 
     let mut files = Vec::new();
     collect_files(&root, &mut files);

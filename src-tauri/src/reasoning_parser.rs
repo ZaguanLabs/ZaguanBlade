@@ -73,7 +73,6 @@ impl ParseResult {
     pub fn new() -> Self {
         Self::default()
     }
-
 }
 
 /// Parser state for streaming reasoning extraction

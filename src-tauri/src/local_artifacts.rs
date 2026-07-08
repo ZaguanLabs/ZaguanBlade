@@ -122,7 +122,6 @@ impl ConversationArtifact {
         self.metadata.total_messages = self.messages.len() as i32;
         self.updated_at = chrono::Utc::now().to_rfc3339();
     }
-
 }
 
 /// Local artifact store for a project

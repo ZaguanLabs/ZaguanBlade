@@ -851,7 +851,8 @@ impl SymbolExtractor {
             return;
         };
         let range = Range::from_node(node);
-        let Some(source_id) = resolve_enclosing_scope(&state.scope, &range).map(|s| s.id.to_string())
+        let Some(source_id) =
+            resolve_enclosing_scope(&state.scope, &range).map(|s| s.id.to_string())
         else {
             return;
         };
@@ -1005,12 +1006,7 @@ impl SymbolExtractor {
     ) {
         // The symbol just appended by `enter_symbol_scope` for THIS node.
         let (source_id, line) = match state.symbols.last() {
-            Some(sym)
-                if matches!(
-                    sym.symbol_type,
-                    SymbolType::Function | SymbolType::Method
-                ) =>
-            {
+            Some(sym) if matches!(sym.symbol_type, SymbolType::Function | SymbolType::Method) => {
                 (sym.id.clone(), sym.range.start.line)
             }
             _ => return,
@@ -1359,12 +1355,7 @@ impl SymbolExtractor {
         None
     }
 
-    fn rust_node_to_symbol(
-        &self,
-        node: &Node,
-        source: &str,
-        language: Language,
-    ) -> Option<Symbol> {
+    fn rust_node_to_symbol(&self, node: &Node, source: &str, language: Language) -> Option<Symbol> {
         let kind = node.kind();
         let kind_id = node.kind_id();
         let bits = lang_bitsets(language, &node.language());
@@ -1388,7 +1379,12 @@ impl SymbolExtractor {
             } else {
                 SymbolType::Function
             };
-            return Some(Symbol::new(name, symbol_type, self.file_path.clone(), range));
+            return Some(Symbol::new(
+                name,
+                symbol_type,
+                self.file_path.clone(),
+                range,
+            ));
         }
         if bits.field.contains(kind_id) {
             let name = self.get_child_text(node, "name", source)?;
@@ -1484,12 +1480,7 @@ impl SymbolExtractor {
         }
     }
 
-    fn go_node_to_symbol(
-        &self,
-        node: &Node,
-        source: &str,
-        language: Language,
-    ) -> Option<Symbol> {
+    fn go_node_to_symbol(&self, node: &Node, source: &str, language: Language) -> Option<Symbol> {
         let kind = node.kind();
         let kind_id = node.kind_id();
         let bits = lang_bitsets(language, &node.language());
@@ -1573,27 +1564,36 @@ impl SymbolExtractor {
     /// prototypes (plain variables/globals are intentionally dropped as noise).
     fn cpp_node_to_symbol(&self, node: &Node, source: &str, _language: Language) -> Option<Symbol> {
         let range = Range::from_node(node);
-        let mk =
-            |name: String, ty: SymbolType| Some(Symbol::new(name, ty, self.file_path.clone(), range));
+        let mk = |name: String, ty: SymbolType| {
+            Some(Symbol::new(name, ty, self.file_path.clone(), range))
+        };
         match node.kind() {
             // `#define X` / `#define X(...)` → macro, modeled as a Constant.
-            "preproc_def" | "preproc_function_def" => {
-                mk(self.get_child_text(node, "name", source)?, SymbolType::Constant)
-            }
+            "preproc_def" | "preproc_function_def" => mk(
+                self.get_child_text(node, "name", source)?,
+                SymbolType::Constant,
+            ),
             // `namespace ns { … }` → Namespace; members nest via the scope stack.
-            "namespace_definition" => {
-                mk(self.get_child_text(node, "name", source)?, SymbolType::Namespace)
-            }
+            "namespace_definition" => mk(
+                self.get_child_text(node, "name", source)?,
+                SymbolType::Namespace,
+            ),
             // struct / union WITH a body → Struct (the body gate skips usages such
             // as `struct Foo x;` and forward declarations `struct Foo;`).
             "struct_specifier" | "union_specifier" => {
                 node.child_by_field_name("body")?;
-                mk(self.get_child_text(node, "name", source)?, SymbolType::Struct)
+                mk(
+                    self.get_child_text(node, "name", source)?,
+                    SymbolType::Struct,
+                )
             }
             // class WITH a body → Class.
             "class_specifier" => {
                 node.child_by_field_name("body")?;
-                mk(self.get_child_text(node, "name", source)?, SymbolType::Class)
+                mk(
+                    self.get_child_text(node, "name", source)?,
+                    SymbolType::Class,
+                )
             }
             // enum WITH a body → Enum; its `enumerator`s are handled below and nest
             // under it via the scope stack.
@@ -1601,9 +1601,10 @@ impl SymbolExtractor {
                 node.child_by_field_name("body")?;
                 mk(self.get_child_text(node, "name", source)?, SymbolType::Enum)
             }
-            "enumerator" => {
-                mk(self.get_child_text(node, "name", source)?, SymbolType::EnumMember)
-            }
+            "enumerator" => mk(
+                self.get_child_text(node, "name", source)?,
+                SymbolType::EnumMember,
+            ),
             // typedef → Type, EXCEPT when it merely names an aggregate that already
             // produces its own symbol (named struct/union/enum/class WITH a body):
             // defer to that aggregate so the ubiquitous `typedef struct Foo {…} Foo;`
@@ -1623,7 +1624,8 @@ impl SymbolExtractor {
                     }
                 }
                 let decl = node.child_by_field_name("declarator")?;
-                let name = cpp_clean_declarator_name(&cpp_innermost_declarator_name(&decl)?, source)?;
+                let name =
+                    cpp_clean_declarator_name(&cpp_innermost_declarator_name(&decl)?, source)?;
                 mk(name, SymbolType::Type)
             }
             // function definition (has a body) → Function (free) or Method (member).
@@ -1651,7 +1653,8 @@ impl SymbolExtractor {
             // declarator shape — not the name kind — decides here.
             "field_declaration" => {
                 let decl = node.child_by_field_name("declarator")?;
-                let name = cpp_clean_declarator_name(&cpp_innermost_declarator_name(&decl)?, source)?;
+                let name =
+                    cpp_clean_declarator_name(&cpp_innermost_declarator_name(&decl)?, source)?;
                 let ty = if cpp_declarator_is_function(&decl) {
                     SymbolType::Method
                 } else {
@@ -1671,10 +1674,9 @@ impl SymbolExtractor {
 
     fn extract_js_ts_binding_name(&self, node: &Node, source: &str) -> Option<String> {
         match node.kind() {
-            "identifier" | "type_identifier" => node
-                .safe_text(source)
-                .ok()
-                .map(|value| value.to_string()),
+            "identifier" | "type_identifier" => {
+                node.safe_text(source).ok().map(|value| value.to_string())
+            }
             _ => None,
         }
     }
@@ -2066,10 +2068,18 @@ fn append_route_symbols(
 /// abstract declarator that names nothing. (M5.3)
 fn cpp_innermost_declarator_name<'a>(node: &Node<'a>) -> Option<Node<'a>> {
     match node.kind() {
-        "identifier" | "field_identifier" | "qualified_identifier" | "type_identifier"
-        | "destructor_name" | "operator_name" | "operator_cast" => Some(*node),
-        "function_declarator" | "pointer_declarator" | "reference_declarator"
-        | "array_declarator" | "init_declarator" => {
+        "identifier"
+        | "field_identifier"
+        | "qualified_identifier"
+        | "type_identifier"
+        | "destructor_name"
+        | "operator_name"
+        | "operator_cast" => Some(*node),
+        "function_declarator"
+        | "pointer_declarator"
+        | "reference_declarator"
+        | "array_declarator"
+        | "init_declarator" => {
             let child = node.child_by_field_name("declarator")?;
             cpp_innermost_declarator_name(&child)
         }
@@ -2092,11 +2102,11 @@ fn cpp_innermost_declarator_name<'a>(node: &Node<'a>) -> Option<Node<'a>> {
 fn cpp_declarator_is_function(node: &Node) -> bool {
     match node.kind() {
         "function_declarator" => true,
-        "pointer_declarator" | "reference_declarator" | "array_declarator"
-        | "init_declarator" => node
-            .child_by_field_name("declarator")
-            .map(|child| cpp_declarator_is_function(&child))
-            .unwrap_or(false),
+        "pointer_declarator" | "reference_declarator" | "array_declarator" | "init_declarator" => {
+            node.child_by_field_name("declarator")
+                .map(|child| cpp_declarator_is_function(&child))
+                .unwrap_or(false)
+        }
         _ => false,
     }
 }
@@ -2257,7 +2267,10 @@ fn resolve_route_handler<'a>(
     all_symbols: &'a [Symbol],
 ) -> Option<&'a Symbol> {
     let is_callable = |symbol: &Symbol| {
-        matches!(symbol.symbol_type, SymbolType::Function | SymbolType::Method)
+        matches!(
+            symbol.symbol_type,
+            SymbolType::Function | SymbolType::Method
+        )
     };
     match handler {
         HandlerRef::ByPosition(pos) => all_symbols
@@ -2513,8 +2526,8 @@ fn python_routes_from_decorated(
         } else {
             continue;
         };
-        let Some(path) = first_positional_arg(&args)
-            .and_then(|arg| literal_or_const(&arg, source, const_map))
+        let Some(path) =
+            first_positional_arg(&args).and_then(|arg| literal_or_const(&arg, source, const_map))
         else {
             continue;
         };
@@ -3073,9 +3086,7 @@ fn go_receiver_type_name(receiver: &Node, source: &str) -> Option<String> {
     while ty.kind() == "pointer_type" {
         ty = last_named_child(&ty)?;
     }
-    ty.safe_text(source)
-        .ok()
-        .and_then(normalize_reference_name)
+    ty.safe_text(source).ok().and_then(normalize_reference_name)
 }
 
 /// Collect the names of anonymously-embedded fields in a Go struct type.
@@ -3106,11 +3117,7 @@ fn go_embedded_type_names(struct_type: &Node, source: &str) -> Vec<String> {
             };
             ty = inner;
         }
-        if let Some(name) = ty
-            .safe_text(source)
-            .ok()
-            .and_then(normalize_reference_name)
-        {
+        if let Some(name) = ty.safe_text(source).ok().and_then(normalize_reference_name) {
             names.push(name);
         }
     }
@@ -3317,10 +3324,7 @@ fn receiver_is_self(receiver: &Node, source: &str) -> bool {
     matches!(
         receiver.kind(),
         "identifier" | "self" | "this" | "shorthand_property_identifier"
-    ) && matches!(
-        receiver.safe_text(source),
-        Ok("self") | Ok("this")
-    )
+    ) && matches!(receiver.safe_text(source), Ok("self") | Ok("this"))
 }
 
 /// Evaluate a receiver node to a `TypeRep`: `self`/`this` → the nearest enclosing
@@ -3345,10 +3349,7 @@ fn eval_receiver_type_rep(
         // Minor fix: a `this` whose nearest enclosing function is a nested NON-arrow
         // `function` is rebound at runtime — it is NOT the class instance. Type it
         // `Unknown` rather than guessing the class.
-        if text == "this"
-            && is_ts_family(language)
-            && this_rebound_by_plain_function(receiver)
-        {
+        if text == "this" && is_ts_family(language) && this_rebound_by_plain_function(receiver) {
             return TypeRep::Unknown;
         }
         return nearest_type_qn(&state.scope)
@@ -3494,9 +3495,7 @@ fn constructor_type_name(
 
 /// The cleaned base type name of a node's source text (`pkg.Foo`/`a::B` → `Foo`/`B`).
 fn node_clean_type_name(node: &Node, source: &str) -> Option<String> {
-    node.safe_text(source)
-        .ok()
-        .and_then(clean_type_name)
+    node.safe_text(source).ok().and_then(clean_type_name)
 }
 
 /// Record params + constructor-bound locals (and Unknown-clearing rebinds) for a
@@ -3654,7 +3653,9 @@ fn rust_record_var_types(
             // Unknown (FIX 1).
             let rep = node
                 .child_by_field_name("value")
-                .and_then(|value| constructor_type_name(&value, Language::Rust, source, class_names))
+                .and_then(|value| {
+                    constructor_type_name(&value, Language::Rust, source, class_names)
+                })
                 .map(TypeRep::Named)
                 .unwrap_or(TypeRep::Unknown);
             frame.bind(var_name, rep);
@@ -3672,7 +3673,9 @@ fn rust_record_var_types(
             };
             let rep = node
                 .child_by_field_name("right")
-                .and_then(|right| constructor_type_name(&right, Language::Rust, source, class_names))
+                .and_then(|right| {
+                    constructor_type_name(&right, Language::Rust, source, class_names)
+                })
                 .map(TypeRep::Named)
                 .unwrap_or(TypeRep::Unknown);
             frame.bind(var_name, rep);
@@ -3692,8 +3695,13 @@ fn bind_pattern_unknown(node: &Node, source: &str, frame: &mut VarFrame) {
                 frame.shadow(name);
             }
         }
-        "pattern_list" | "tuple_pattern" | "list_pattern" | "tuple" | "list"
-        | "as_pattern_target" | "parenthesized_expression" => {
+        "pattern_list"
+        | "tuple_pattern"
+        | "list_pattern"
+        | "tuple"
+        | "list"
+        | "as_pattern_target"
+        | "parenthesized_expression" => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
                 bind_pattern_unknown(&child, source, frame);
@@ -3795,9 +3803,13 @@ fn clean_rust_doc_line(text: &str) -> String {
 /// prefix and the surrounding quote markers.
 fn decode_python_string(text: &str) -> String {
     let s = text.trim();
-    let s = s.trim_start_matches(|c: char| matches!(c, 'r' | 'R' | 'b' | 'B' | 'f' | 'F' | 'u' | 'U'));
+    let s =
+        s.trim_start_matches(|c: char| matches!(c, 'r' | 'R' | 'b' | 'B' | 'f' | 'F' | 'u' | 'U'));
     for quote in ["\"\"\"", "'''", "\"", "'"] {
-        if let Some(inner) = s.strip_prefix(quote).and_then(|rest| rest.strip_suffix(quote)) {
+        if let Some(inner) = s
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+        {
             return inner.trim().to_string();
         }
     }
@@ -4079,10 +4091,9 @@ fn extract_relationship_target_name(
 
 fn extract_callable_name(node: &Node, source: &str) -> Option<String> {
     match node.kind() {
-        "identifier" | "property_identifier" | "field_identifier" | "type_identifier" => node
-            .safe_text(source)
-            .ok()
-            .map(|s| s.to_string()),
+        "identifier" | "property_identifier" | "field_identifier" | "type_identifier" => {
+            node.safe_text(source).ok().map(|s| s.to_string())
+        }
         "member_expression"
         | "member_access_expression"
         | "field_expression"
@@ -4183,10 +4194,7 @@ fn extract_env_key(
                     return None;
                 }
                 let property = node.child_by_field_name("property")?;
-                property
-                    .safe_text(source)
-                    .ok()
-                    .map(|s| s.to_string())
+                property.safe_text(source).ok().map(|s| s.to_string())
             }
             "subscript_expression" => {
                 let object = node.child_by_field_name("object")?;
@@ -4412,10 +4420,7 @@ fn string_literal_value(node: &Node, source: &str) -> Option<String> {
             child.kind(),
             "string_content" | "string_fragment" | "interpreted_string_literal_content"
         ) {
-            return child
-                .safe_text(source)
-                .ok()
-                .map(|s| s.to_string());
+            return child.safe_text(source).ok().map(|s| s.to_string());
         }
     }
     // Fallback (e.g. an empty string with no content child): strip one matching
@@ -4788,7 +4793,9 @@ fn clean_type_name(raw: &str) -> Option<String> {
 
     // Drop any generic argument list, slice/array brackets, and option marker.
     let value = value.split('<').next().unwrap_or(value);
-    let value = value.trim_matches(|c| matches!(c, '[' | ']' | '?' | '(' | ')')).trim();
+    let value = value
+        .trim_matches(|c| matches!(c, '[' | ']' | '?' | '(' | ')'))
+        .trim();
 
     // Keep the final path segment of a qualified name.
     let value = value.rsplit("::").next().unwrap_or(value);
@@ -4828,10 +4835,48 @@ fn is_builtin_type(language: Language, name: &str) -> bool {
 /// yields `Widget` and `&dyn Fn(In) -> Out` still yields `In`/`Out` while the
 /// `Fn`/`FnMut`/`FnOnce` trait itself is noise.
 static RUST_BUILTIN_TYPES: &[&str] = &[
-    "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize", "f32",
-    "f64", "bool", "char", "str", "String", "Self", "Vec", "Option", "Result", "Box", "Rc", "Arc",
-    "Weak", "Cell", "RefCell", "Mutex", "RwLock", "Cow", "Pin", "HashMap", "HashSet", "BTreeMap",
-    "BTreeSet", "VecDeque", "BinaryHeap", "LinkedList", "Fn", "FnMut", "FnOnce",
+    "i8",
+    "i16",
+    "i32",
+    "i64",
+    "i128",
+    "isize",
+    "u8",
+    "u16",
+    "u32",
+    "u64",
+    "u128",
+    "usize",
+    "f32",
+    "f64",
+    "bool",
+    "char",
+    "str",
+    "String",
+    "Self",
+    "Vec",
+    "Option",
+    "Result",
+    "Box",
+    "Rc",
+    "Arc",
+    "Weak",
+    "Cell",
+    "RefCell",
+    "Mutex",
+    "RwLock",
+    "Cow",
+    "Pin",
+    "HashMap",
+    "HashSet",
+    "BTreeMap",
+    "BTreeSet",
+    "VecDeque",
+    "BinaryHeap",
+    "LinkedList",
+    "Fn",
+    "FnMut",
+    "FnOnce",
 ];
 
 /// TypeScript primitive/utility types + global container generics (their inner
@@ -4954,11 +4999,7 @@ fn resolve_enclosing_scope<'a>(scope: &'a [Scope], range: &Range) -> Option<&'a 
                 && starts_before_or_at(range.end, frame.range.end)
         })
         .min_by_key(|frame| {
-            let line_span = frame
-                .range
-                .end
-                .line
-                .saturating_sub(frame.range.start.line);
+            let line_span = frame.range.end.line.saturating_sub(frame.range.start.line);
             let char_span = frame
                 .range
                 .end
@@ -5451,7 +5492,8 @@ func (s *Server) Handle() error {
         );
 
         // Python: a user-defined `getenv` shadow called bare is NOT `os.getenv`.
-        let py = "def getenv(name):\n    return name\ndef load():\n    return getenv(\"NOT_ENV\")\n";
+        let py =
+            "def getenv(name):\n    return name\ndef load():\n    return getenv(\"NOT_ENV\")\n";
         assert!(
             reads_env_targets(py, Language::Python, "m.py", "load").is_empty(),
             "user-defined getenv(...) must not emit reads_env"
@@ -5516,7 +5558,8 @@ func (s *Server) Handle() error {
         );
 
         // A MODULE-level const DOES substitute correctly.
-        let rust_mod = "const KEY: &str = \"REAL_KEY\";\nfn a() {\n    let _ = std::env::var(KEY);\n}\n";
+        let rust_mod =
+            "const KEY: &str = \"REAL_KEY\";\nfn a() {\n    let _ = std::env::var(KEY);\n}\n";
         assert_eq!(
             reads_env_targets(rust_mod, Language::Rust, "lib.rs", "a"),
             vec!["REAL_KEY".to_string()]
@@ -5631,7 +5674,8 @@ fn generic<T, K, V>(a: T, m: K, cfg: Config, f: &dyn Fn(In) -> Out) -> V {
         assert_eq!(ts_targets, vec!["Config".to_string()], "ts: {ts_targets:?}");
 
         // Go `[T any, K comparable]` declared params excluded; real `Config` kept.
-        let go = "package main\nfunc Gen[T any, K comparable](a T, c Config) K { var z K; return z }";
+        let go =
+            "package main\nfunc Gen[T any, K comparable](a T, c Config) K { var z K; return z }";
         let go_targets = uses_type_targets(go, Language::Go, "m.go", "Gen");
         assert_eq!(go_targets, vec!["Config".to_string()], "go: {go_targets:?}");
 
@@ -5672,7 +5716,10 @@ def f(c: Config, n: int, w: typing.Optional[Widget]) -> str:
         assert!(!targets.contains(&"int".to_string()), "got {targets:?}");
         assert!(!targets.contains(&"str".to_string()), "got {targets:?}");
         assert!(!targets.contains(&"typing".to_string()), "got {targets:?}");
-        assert!(!targets.contains(&"Optional".to_string()), "got {targets:?}");
+        assert!(
+            !targets.contains(&"Optional".to_string()),
+            "got {targets:?}"
+        );
     }
 
     #[test]

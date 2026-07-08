@@ -16,7 +16,15 @@
 /// Files whose whole content is key material / credentials and therefore have no
 /// useful structural anchors. Matched case-insensitively against the file name.
 const SECRET_FILE_EXTENSIONS: &[&str] = &[
-    ".pem", ".key", ".p12", ".pfx", ".keystore", ".jks", ".ppk", ".asc", ".gpg",
+    ".pem",
+    ".key",
+    ".p12",
+    ".pfx",
+    ".keystore",
+    ".jks",
+    ".ppk",
+    ".asc",
+    ".gpg",
 ];
 
 /// Exact secret file names (SSH keys, package-manager auth, etc.).
@@ -46,23 +54,42 @@ pub fn is_secret_file(path: &str) -> bool {
     if lower.ends_with(".pub") {
         return false;
     }
-    SECRET_FILE_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
+    SECRET_FILE_EXTENSIONS
+        .iter()
+        .any(|ext| lower.ends_with(ext))
 }
 
 /// Credential prefixes that identify a token regardless of entropy (they can be
 /// shorter or lower-entropy than the generic rule would catch). Case-sensitive:
 /// these tokens are emitted verbatim by the tools that mint them.
 const SECRET_PREFIXES: &[&str] = &[
-    "AKIA", "ASIA", // AWS access key id
-    "AIza",         // Google API key
-    "ya29.",        // Google OAuth token
-    "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", // GitHub
-    "glpat-",       // GitLab
-    "xoxb-", "xoxp-", "xoxa-", "xoxr-", "xoxs-", // Slack
-    "sk_live_", "sk_test_", "ps_live_", "ps_test_", "pk_live_", "rk_live_", "sk-", // Stripe / OpenAI-style
-    "shpat_", "shpss_", // Shopify
-    "eyJ",          // JWT (base64 of `{"`)
-    "-----BEGIN",   // PEM block header
+    "AKIA",
+    "ASIA",  // AWS access key id
+    "AIza",  // Google API key
+    "ya29.", // Google OAuth token
+    "ghp_",
+    "gho_",
+    "ghu_",
+    "ghs_",
+    "ghr_",
+    "github_pat_", // GitHub
+    "glpat-",      // GitLab
+    "xoxb-",
+    "xoxp-",
+    "xoxa-",
+    "xoxr-",
+    "xoxs-", // Slack
+    "sk_live_",
+    "sk_test_",
+    "ps_live_",
+    "ps_test_",
+    "pk_live_",
+    "rk_live_",
+    "sk-", // Stripe / OpenAI-style
+    "shpat_",
+    "shpss_",     // Shopify
+    "eyJ",        // JWT (base64 of `{"`)
+    "-----BEGIN", // PEM block header
 ];
 
 const REDACTION: &str = "<redacted>";
@@ -111,7 +138,10 @@ fn looks_secret(token: &str) -> bool {
     if token.len() < 8 {
         return false;
     }
-    if SECRET_PREFIXES.iter().any(|prefix| token.starts_with(prefix)) {
+    if SECRET_PREFIXES
+        .iter()
+        .any(|prefix| token.starts_with(prefix))
+    {
         return true;
     }
     generic_high_entropy_secret(token)
