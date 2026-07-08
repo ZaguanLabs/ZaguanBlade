@@ -1623,7 +1623,6 @@ const AppLayoutInner: React.FC = () => {
                                     onAcceptAllChanges={acceptAllChanges}
                                     onRejectAllChanges={rejectAllChanges}
                                     toolActivity={chat.toolActivity}
-                                    cognitiveInterrupt={chat.cognitiveInterrupt}
                                     chatActivities={chat.chatActivities}
                                     activeTodos={chat.activeTodos}
                                     queuedRequests={chat.messageQueue}
