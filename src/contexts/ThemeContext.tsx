@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useOptionalStartupBootstrap } from './StartupBootstrapContext';
@@ -56,7 +56,12 @@ export const ThemeProvider: React.FC<React.PropsWithChildren> = ({ children }) =
         };
     }, [bootstrap]);
 
-    useEffect(() => {
+    // Use useLayoutEffect so the document CSS variables are updated synchronously
+    // before the browser paints and before any child passive effects (e.g. the
+    // Terminal component reading getComputedStyle) run. With useEffect, child
+    // effects fire before parent effects, so the Terminal would read stale theme
+    // tokens on theme change.
+    useLayoutEffect(() => {
         applyThemeToDocument(themeId);
     }, [themeId]);
 

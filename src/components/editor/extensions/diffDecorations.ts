@@ -178,7 +178,6 @@ function computeCharDiffs(oldStr: string, newStr: string): { oldSpans: CharDiff[
 class RemovedLineWidget extends WidgetType {
     constructor(
         private readonly content: string,
-        private readonly oldLineNum: number | null,
         private readonly charHighlights: CharDiff[],
     ) {
         super();
@@ -187,12 +186,6 @@ class RemovedLineWidget extends WidgetType {
     toDOM(): HTMLElement {
         const wrapper = document.createElement("div");
         wrapper.className = "cm-diff-removed-widget";
-
-        // Line number gutter
-        const gutter = document.createElement("span");
-        gutter.className = "cm-diff-removed-gutter";
-        gutter.textContent = this.oldLineNum != null ? String(this.oldLineNum) : "";
-        wrapper.appendChild(gutter);
 
         // Minus sign
         const sign = document.createElement("span");
@@ -232,7 +225,6 @@ class RemovedLineWidget extends WidgetType {
 
     eq(other: RemovedLineWidget): boolean {
         return this.content === other.content
-            && this.oldLineNum === other.oldLineNum
             && JSON.stringify(this.charHighlights) === JSON.stringify(other.charHighlights);
     }
 
@@ -248,7 +240,6 @@ class RemovedLineWidget extends WidgetType {
 class RemovedBlockWidget extends WidgetType {
     constructor(
         private readonly count: number,
-        private readonly firstOldLineNum: number | null,
         private readonly preview: string,
     ) {
         super();
@@ -257,11 +248,6 @@ class RemovedBlockWidget extends WidgetType {
     toDOM(): HTMLElement {
         const wrapper = document.createElement("div");
         wrapper.className = "cm-diff-removed-block-widget";
-
-        const gutter = document.createElement("span");
-        gutter.className = "cm-diff-removed-gutter";
-        gutter.textContent = this.firstOldLineNum != null ? String(this.firstOldLineNum) : "";
-        wrapper.appendChild(gutter);
 
         const sign = document.createElement("span");
         sign.className = "cm-diff-removed-sign";
@@ -287,7 +273,6 @@ class RemovedBlockWidget extends WidgetType {
 
     eq(other: RemovedBlockWidget): boolean {
         return this.count === other.count
-            && this.firstOldLineNum === other.firstOldLineNum
             && this.preview === other.preview;
     }
 
@@ -472,7 +457,6 @@ function buildDiffDecorations(state: { doc: { length: number; lines: number; lin
                     const widget = Decoration.widget({
                         widget: new RemovedBlockWidget(
                             removedLines.length,
-                            removedLines[0]?.oldLineNum ?? null,
                             preview,
                         ),
                         block: true,
@@ -525,7 +509,7 @@ function buildDiffDecorations(state: { doc: { length: number; lines: number; lin
                     from: pos,
                     to: pos,
                     deco: Decoration.widget({
-                        widget: new RemovedLineWidget(dl.content, dl.oldLineNum, charHighlights),
+                        widget: new RemovedLineWidget(dl.content, charHighlights),
                         block: true,
                         side: -1, // Place before the line
                     }),
@@ -639,18 +623,6 @@ export const diffTheme = EditorView.baseTheme({
         minHeight: "1.4em",
         padding: "0",
         color: "var(--editor-diff-removed-fg, rgba(228, 228, 231, 0.78))",
-        userSelect: "none",
-    },
-
-    // Gutter area in removed line widget
-    ".cm-diff-removed-gutter": {
-        display: "inline-block",
-        width: "3.5em",
-        textAlign: "right",
-        paddingRight: "8px",
-        color: "var(--editor-diff-removed-gutter-fg, rgba(252, 165, 165, 0.76))",
-        fontSize: "0.85em",
-        flexShrink: "0",
         userSelect: "none",
     },
 
