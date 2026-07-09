@@ -251,12 +251,6 @@
       "noOutput": "No output"
     },
     "implementPlanMessage": "Implement this plan in the current workspace.",
-    "cognitiveInterrupt": {
-      "toolPaused": "{{toolName}} paused until diagnostic evidence is gathered",
-      "evidenceGathered": "Diagnostic evidence gathered",
-      "editPaused": "Edit paused",
-      "title": "Cognitive Interrupt"
-    },
     "workLog": {
       "toolCall": "Tool call",
       "runCommand": "Run command",

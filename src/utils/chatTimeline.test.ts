@@ -396,39 +396,6 @@ test('deriveChatProjection merges explicit activity work entries', () => {
     assert.equal(projection.workEntriesByMessageId.get('assistant-activity')?.[0]?.detail, 'src/**/*.ts');
 });
 
-test('deriveChatProjection maps cognitive interrupt activity to calm work entry', () => {
-    const message = makeAssistantMessage({
-        id: 'assistant-interrupt',
-        content: 'Reassessing',
-    });
-    const activity: ChatActivity = {
-        id: 'cognitive-interrupt:patch_failure_repair',
-        kind: 'cognitive_interrupt',
-        interrupt: {
-            state: 'blocked',
-            level: 'hard',
-            frame: 'patch_failure_repair',
-            reason: 'same_failure_after_multiple_corrections',
-            next_action_type: 'diagnostic',
-            summary: 'Corrective action blocked until diagnostic evidence is gathered',
-            tool_name: 'apply_patch',
-            failure_count: 2,
-        },
-        messageId: 'assistant-interrupt',
-        status: 'executing',
-    };
-
-    const projection = deriveChatProjection([message], [activity]);
-
-    assert.equal(projection.workEntries.length, 1);
-    assert.equal(projection.workEntries[0]?.label, 'Edit paused');
-    assert.equal(
-        projection.workEntries[0]?.detail,
-        'apply_patch paused until diagnostic evidence is gathered',
-    );
-    assert.equal(projection.workEntries[0]?.tone, 'info');
-});
-
 test('deriveChatProjection avoids duplicating activity entries for known tool calls', () => {
     const message = makeAssistantMessage({
         id: 'assistant-activity-dedupe',

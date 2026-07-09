@@ -1,5 +1,5 @@
 import i18n from '../i18n';
-import type { ChatMessage as ChatMessageType, CognitiveInterruptState, CommandExecution, HookApprovalRequest, MessageBlock, ToolCall } from '../types/chat';
+import type { ChatMessage as ChatMessageType, CommandExecution, HookApprovalRequest, MessageBlock, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
 
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 10;
@@ -48,9 +48,7 @@ export interface ChatWorkEntry {
     status?: ToolCall['status'];
 }
 
-export type ChatActivity =
-    | ToolChatActivity
-    | CognitiveInterruptChatActivity;
+export type ChatActivity = ToolChatActivity;
 
 export interface ToolChatActivity {
     id: string;
@@ -62,17 +60,6 @@ export interface ToolChatActivity {
     filePath?: string;
     detail?: string;
     command?: string;
-    status?: ToolCall['status'];
-    startedAt?: number;
-    updatedAt?: number;
-}
-
-export interface CognitiveInterruptChatActivity {
-    id: string;
-    kind: 'cognitive_interrupt';
-    interrupt: CognitiveInterruptState;
-    messageId?: string;
-    detail?: string;
     status?: ToolCall['status'];
     startedAt?: number;
     updatedAt?: number;
@@ -418,10 +405,6 @@ function findActivityMessageId(activity: ChatActivity, messages: ChatMessageType
     if (activity.messageId) {
         return activity.messageId;
     }
-    if (activity.kind === 'cognitive_interrupt') {
-        const lastAssistant = [...messages].reverse().find((message) => message.role === 'Assistant' && message.id);
-        return lastAssistant?.id ?? null;
-    }
     if (activity.toolCallId) {
         const owner = messages.find((message) => message.tool_calls?.some((toolCall) => toolCall.id === activity.toolCallId));
         if (owner?.id) {
@@ -433,18 +416,6 @@ function findActivityMessageId(activity: ChatActivity, messages: ChatMessageType
 }
 
 function deriveActivityWorkEntry(activity: ChatActivity, messageId: string): ChatWorkEntry {
-    if (activity.kind === 'cognitive_interrupt') {
-        return {
-            id: `activity:${activity.id}`,
-            messageId,
-            source: 'activity',
-            label: cognitiveInterruptLabel(activity.interrupt),
-            tone: 'info',
-            detail: cognitiveInterruptDetail(activity.interrupt),
-            status: activity.status,
-        };
-    }
-
     const command = activity.command;
     const detail = command ?? activity.detail ?? activity.filePath ?? activity.action;
     const tone = activity.status === 'error' || activity.status === 'skipped' ? 'error' : 'info';
@@ -459,26 +430,6 @@ function deriveActivityWorkEntry(activity: ChatActivity, messageId: string): Cha
         ...(activity.toolCallId ? { toolCallId: activity.toolCallId } : {}),
         ...(activity.status ? { status: activity.status } : {}),
     };
-}
-
-function cognitiveInterruptLabel(interrupt: CognitiveInterruptState): string {
-    if (interrupt.state === 'cleared') {
-        return i18n.t('chat.cognitiveInterrupt.evidenceGathered', { defaultValue: 'Diagnostic evidence gathered' });
-    }
-    if (interrupt.state === 'blocked') {
-        return i18n.t('chat.cognitiveInterrupt.editPaused', { defaultValue: 'Edit paused' });
-    }
-    return i18n.t('chat.cognitiveInterrupt.title', { defaultValue: 'Cognitive Interrupt' });
-}
-
-function cognitiveInterruptDetail(interrupt: CognitiveInterruptState): string {
-    if (interrupt.state === 'blocked' && interrupt.tool_name) {
-        return i18n.t('chat.cognitiveInterrupt.toolPaused', {
-            defaultValue: '{{toolName}} paused until diagnostic evidence is gathered',
-            toolName: interrupt.tool_name,
-        });
-    }
-    return interrupt.summary;
 }
 
 export function deriveChatWorkEntries(messages: ChatMessageType[]): ChatWorkEntry[] {

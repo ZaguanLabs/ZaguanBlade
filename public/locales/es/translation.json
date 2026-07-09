@@ -251,12 +251,6 @@
       "noOutput": "Sin salida"
     },
     "implementPlanMessage": "Implementa este plan en el espacio de trabajo actual.",
-    "cognitiveInterrupt": {
-      "toolPaused": "{{toolName}} en pausa hasta recopilar evidencia de diagnóstico",
-      "evidenceGathered": "Evidencia de diagnóstico recopilada",
-      "editPaused": "Edición en pausa",
-      "title": "Interrupción cognitiva"
-    },
     "workLog": {
       "toolCall": "Llamada a herramienta",
       "runCommand": "Ejecutar comando",

@@ -70,18 +70,6 @@ export interface ToolActivityState {
     lastChunkAt: number;
 }
 
-export interface CognitiveInterruptState {
-    state: 'active' | 'blocked' | 'cleared' | string;
-    level?: string;
-    frame?: string;
-    reason?: string;
-    next_action_type?: string;
-    summary: string;
-    tool_name?: string;
-    cleared_by_tool?: string;
-    failure_count?: number;
-}
-
 export interface HookApprovalRequest {
     sessionId: string;
     approvalId: string;

@@ -161,7 +161,6 @@ function useNoopChat() {
         setConversation: setMessages,
         loadConversation,
         toolActivity: null,
-        cognitiveInterrupt: null,
         chatActivities: [],
         activeTodos,
         setActiveTodos,
