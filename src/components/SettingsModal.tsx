@@ -50,7 +50,6 @@ interface SettingsState {
         chatFontSize: number;
     };
     account: {
-        bladeUrl: string;
         apiKey: string;
         userId: string;
         email: string;
@@ -98,7 +97,6 @@ const defaultSettings: SettingsState = {
         chatFontSize: DEFAULT_CHAT_FONT_SIZE,
     },
     account: {
-        bladeUrl: '',
         apiKey: '',
         userId: '',
         email: '',
@@ -134,7 +132,6 @@ function backendRemoteToFrontend(backend: RemoteAiConfig): Pick<SettingsState, '
             chatFontSize: Math.max(MIN_CONTENT_FONT_SIZE, Math.min(MAX_CONTENT_FONT_SIZE, Math.round(backend.chat_font_size || DEFAULT_CHAT_FONT_SIZE))),
         },
         account: {
-            bladeUrl: '', // Always empty, internal only
             apiKey: backend.api_key,
             userId: backend.user_id,
             email: backend.user_email,
@@ -159,7 +156,6 @@ function backendLocalToFrontend(backend: LocalAiConfig): Pick<SettingsState, 'lo
 
 function frontendRemoteToBackend(frontend: SettingsState): RemoteAiConfig {
     return {
-        blade_url: '', // Frontend does not set this
         api_key: frontend.account.apiKey,
         user_id: frontend.account.userId,
         user_email: frontend.account.email,
@@ -390,8 +386,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                     remoteSettings.api_key !== previousRemoteSettings.api_key
                     || remoteSettings.user_id !== previousRemoteSettings.user_id
                     || remoteSettings.user_email !== previousRemoteSettings.user_email
-                    || remoteSettings.tier !== previousRemoteSettings.tier
-                    || remoteSettings.blade_url !== previousRemoteSettings.blade_url;
+                    || remoteSettings.tier !== previousRemoteSettings.tier;
                 const remoteConfigurationChanged =
                     remoteSettings.markdown_view !== previousRemoteSettings.markdown_view
                     || remoteSettings.editor_font_size !== previousRemoteSettings.editor_font_size

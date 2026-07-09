@@ -12,13 +12,9 @@ pub async fn save_remote_ai_settings(
     settings: RemoteAiConfig,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    // Enforce hardcoded Blade URL for remote flow.
-    let mut safe_settings = settings;
-    safe_settings.blade_url = config::default_blade_url();
-
     {
         let mut cfg = state.config.lock().unwrap();
-        cfg.apply_remote_config(&safe_settings);
+        cfg.apply_remote_config(&settings);
     }
 
     let path = config::default_api_config_path();
@@ -26,7 +22,7 @@ pub async fn save_remote_ai_settings(
         if let Err(e) = config::ensure_global_prompts_dir() {
             eprintln!("[CONFIG] Failed to ensure global prompts directory: {}", e);
         }
-        config::save_remote_ai_config(&path, &safe_settings)
+        config::save_remote_ai_config(&path, &settings)
     })
     .await
     .map_err(|e| format!("save remote ai settings task failed: {}", e))??;
@@ -42,16 +38,13 @@ pub async fn save_remote_ai_settings(
         Some(next_settings.user_id.clone())
     };
     state.warmup_client.update_credentials(
-        next_settings.blade_url.clone(),
+        config::default_blade_url(),
         next_settings.api_key.clone(),
         next_settings.user_id.clone(),
     );
     state
         .ws_connection
-        .update_credentials(
-            next_settings.blade_url.clone(),
-            next_settings.api_key.clone(),
-        )
+        .update_credentials(config::default_blade_url(), next_settings.api_key.clone())
         .await;
     let mut user_id = state
         .user_id

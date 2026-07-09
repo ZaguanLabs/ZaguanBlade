@@ -46,7 +46,7 @@ pub async fn augment_batch_with_validation_feedback<R: Runtime>(
     };
 
     let config = state.config.lock().unwrap().clone();
-    if config.api_key.trim().is_empty() || config.blade_url.trim().is_empty() {
+    if config.api_key.trim().is_empty() {
         return;
     }
 

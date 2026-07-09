@@ -91,10 +91,10 @@ pub async fn sign_out_zaguan(
 
     state
         .warmup_client
-        .update_credentials(remote.blade_url.clone(), String::new(), String::new());
+        .update_credentials(config::default_blade_url(), String::new(), String::new());
     state
         .ws_connection
-        .update_credentials(remote.blade_url, String::new())
+        .update_credentials(config::default_blade_url(), String::new())
         .await;
 
     if let Ok(mut user_id) = state.user_id.lock() {
@@ -262,7 +262,6 @@ async fn persist_approved_login(
             .config
             .lock()
             .map_err(|error| format!("Failed to lock settings: {error}"))?;
-        cfg.blade_url = config::default_blade_url();
         cfg.api_key = approved.api_key.clone();
         cfg.user_id = approved.user_id.clone();
         cfg.user_email = approved.email.clone();
@@ -282,13 +281,13 @@ async fn persist_approved_login(
     .map_err(|error| format!("save remote ai settings task failed: {error}"))??;
 
     state.warmup_client.update_credentials(
-        remote.blade_url.clone(),
+        config::default_blade_url(),
         approved.api_key.clone(),
         approved.user_id.clone(),
     );
     state
         .ws_connection
-        .update_credentials(remote.blade_url.clone(), approved.api_key)
+        .update_credentials(config::default_blade_url(), approved.api_key)
         .await;
 
     if let Ok(mut user_id) = state.user_id.lock() {

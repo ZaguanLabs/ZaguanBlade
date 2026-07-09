@@ -972,7 +972,7 @@ impl ChatManager {
         }
 
         // Create new WebSocket client for this conversation
-        let blade_url = api_config.blade_url.clone();
+        let blade_url = crate::config::default_blade_url();
         let api_key = api_config.api_key.clone();
         // eprintln!("[BLADE WS] Connecting to: {}", blade_url);
         // eprintln!("[BLADE WS] Sending message: {}", user_message);

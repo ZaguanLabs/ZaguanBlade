@@ -1,5 +1,4 @@
 export interface RemoteAiConfig {
-    blade_url: string;
     api_key: string;
     user_id: string;
     user_email: string;

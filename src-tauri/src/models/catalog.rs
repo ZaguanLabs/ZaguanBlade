@@ -5,7 +5,8 @@ pub async fn list_all_models(config: &ApiConfig) -> Vec<ModelInfo> {
     let mut models = if config.api_key.trim().is_empty() {
         Vec::new()
     } else {
-        crate::models::registry::get_models(&config.blade_url, &config.api_key).await
+        crate::models::registry::get_models(&crate::config::default_blade_url(), &config.api_key)
+            .await
     };
 
     if config.ollama_enabled {

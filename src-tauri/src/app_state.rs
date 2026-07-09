@@ -98,15 +98,9 @@ impl AppState {
             eprintln!("[CONFIG] Failed to ensure global prompts directory: {}", e);
         }
 
-        // Fallback or override logic:
-        // If config.blade_url is empty, use default or check environment variable.
-        if config.blade_url.trim().is_empty() {
-            if let Ok(url) = std::env::var("BLADE_URL") {
-                config.blade_url = url;
-            } else {
-                config.blade_url = config::default_blade_url();
-            }
-        }
+        // Blade URL is never read from config: the hardcoded endpoints in
+        // blade_endpoint.rs are the only source of truth.
+        let blade_url = config::default_blade_url();
 
         // Fallback for api_key from environment variable
         if config.api_key.trim().is_empty() {
@@ -136,14 +130,14 @@ impl AppState {
 
         // Initialize warmup client with config values
         let warmup_client = warmup::WarmupClient::new(
-            config.blade_url.clone(),
+            blade_url.clone(),
             config.api_key.clone(),
             user_id.clone(),
         );
 
         // Initialize WebSocket connection manager before config is moved
         let ws_connection = Arc::new(WsConnectionManager::new(
-            config.blade_url.clone(),
+            blade_url,
             config.api_key.clone(),
         ));
 

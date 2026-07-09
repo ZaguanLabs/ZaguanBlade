@@ -5,8 +5,6 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize, Clone)]
 pub struct ApiConfig {
-    #[serde(default = "default_blade_url")]
-    pub blade_url: String,
     #[serde(default)]
     pub api_key: String,
     #[serde(default)]
@@ -45,8 +43,6 @@ pub struct ApiConfig {
 
 #[derive(Default, Serialize, Deserialize, Clone)]
 pub struct RemoteAiConfig {
-    #[serde(default = "default_blade_url")]
-    pub blade_url: String,
     #[serde(default)]
     pub api_key: String,
     #[serde(default)]
@@ -90,7 +86,6 @@ pub struct LocalAiConfig {
 impl ApiConfig {
     pub fn remote_config(&self) -> RemoteAiConfig {
         RemoteAiConfig {
-            blade_url: self.blade_url.clone(),
             api_key: self.api_key.clone(),
             user_id: self.user_id.clone(),
             user_email: self.user_email.clone(),
@@ -117,7 +112,6 @@ impl ApiConfig {
     }
 
     pub fn apply_remote_config(&mut self, remote: &RemoteAiConfig) {
-        self.blade_url = remote.blade_url.clone();
         self.api_key = remote.api_key.clone();
         self.user_id = remote.user_id.clone();
         self.user_email = remote.user_email.clone();
