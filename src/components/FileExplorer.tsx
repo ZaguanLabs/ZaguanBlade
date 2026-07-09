@@ -539,6 +539,15 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
 
         indent: 12,
         canReorder: true,
+        // WebKit (WebKitGTK on Linux) silently aborts an HTML5 drag whose
+        // dragstart sets no DataTransfer data, so dragover/drop never fire.
+        // headless-tree only calls dataTransfer.setData() when
+        // createForeignDragObject is configured.
+        createForeignDragObject: (items) => ({
+            format: 'text/plain',
+            data: items.map((item) => item.getId()).join('\n'),
+            effectAllowed: 'move',
+        }),
         initialState: {
             expandedItems: workspaceRoot ? [workspaceRoot] : []
         },
