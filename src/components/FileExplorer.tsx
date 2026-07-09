@@ -6,8 +6,7 @@ import {
     asyncDataLoaderFeature,
     hotkeysCoreFeature,
     searchFeature,
-    renamingFeature,
-    dragAndDropFeature
+    renamingFeature
 } from '@headless-tree/core';
 import { BladeDispatcher } from '../services/blade';
 import { subscribeBladeNestedEventType } from '../services/bladeEvents';
@@ -142,32 +141,6 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             is_dir: true
         };
     }, [cacheEntry, roots]);
-
-    const resolveDropTargetFolder = useCallback((target: any) => {
-        if (!target || !('item' in target) || !target.item) {
-            return null;
-        }
-
-        const targetId = target.item.getId();
-        const currentWorkspaceRoot = getWorkspaceRoot();
-
-        if (targetId === TREE_ROOT_ID) {
-            return currentWorkspaceRoot;
-        }
-
-        if ('childIndex' in target) {
-            if (targetId === currentWorkspaceRoot) {
-                return currentWorkspaceRoot;
-            }
-            return targetId;
-        }
-
-        if (target.item.isFolder()) {
-            return targetId;
-        }
-
-        return getParentPath(targetId);
-    }, [getWorkspaceRoot]);
 
     const moveItemToFolder = useCallback(async (sourcePath: string, targetFolder: string) => {
         const sourceName = getBaseName(sourcePath);
@@ -538,16 +511,6 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
         isItemFolder: (item) => item.getItemData()?.is_dir || false,
 
         indent: 12,
-        canReorder: true,
-        // WebKit (WebKitGTK on Linux) silently aborts an HTML5 drag whose
-        // dragstart sets no DataTransfer data, so dragover/drop never fire.
-        // headless-tree only calls dataTransfer.setData() when
-        // createForeignDragObject is configured.
-        createForeignDragObject: (items) => ({
-            format: 'text/plain',
-            data: items.map((item) => item.getId()).join('\n'),
-            effectAllowed: 'move',
-        }),
         initialState: {
             expandedItems: workspaceRoot ? [workspaceRoot] : []
         },
@@ -557,8 +520,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
             selectionFeature,
             hotkeysCoreFeature,
             searchFeature,
-            renamingFeature,
-            dragAndDropFeature
+            renamingFeature
         ],
 
         onRename: async (item, newName) => {
@@ -586,26 +548,6 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                 console.debug('[Explorer] Renamed via inline:', oldPath, '->', newPath);
             } catch (err) {
                 console.error('[Explorer] Failed to rename:', err);
-            }
-        },
-
-        onDrop: async (items, target) => {
-            const targetFolder = resolveDropTargetFolder(target);
-            if (!targetFolder) {
-                return;
-            }
-
-            for (const item of items) {
-                const sourcePath = item.getId();
-                if (sourcePath === workspaceRoot || sourcePath === TREE_ROOT_ID) {
-                    continue;
-                }
-
-                try {
-                    await moveItemToFolder(sourcePath, targetFolder);
-                } catch (err) {
-                    console.error('[Explorer] Failed to move:', err);
-                }
             }
         },
 
@@ -676,6 +618,144 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
     // Store tree in a ref to avoid dependency issues
     const treeRef = React.useRef(tree);
     treeRef.current = tree;
+
+    // --- Pointer-based drag and drop ---
+    // HTML5 drag and drop is broken in WebKitGTK (Tauri on Linux): drags start
+    // but dragover/drop never fire inside the page (tauri-apps/tauri#6695,
+    // #12052 — upstream WebKit bug). We therefore implement moves with plain
+    // mouse events, which work in every webview. Items must NOT carry
+    // draggable=true: WebKitGTK's failed native-drag attempt would swallow the
+    // mousemove stream this relies on.
+    const [pointerDrag, setPointerDrag] = useState<{ path: string; name: string; isDir: boolean } | null>(null);
+    const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
+    const dropTargetPathRef = useRef<string | null>(null);
+    const dragGhostRef = useRef<HTMLDivElement>(null);
+    const lastPointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+    const suppressClickRef = useRef(false);
+    const hoverExpandRef = useRef<{ folder: string | null; timer: number | null }>({ folder: null, timer: null });
+
+    const setDropTarget = useCallback((folder: string | null) => {
+        if (dropTargetPathRef.current === folder) {
+            return;
+        }
+        dropTargetPathRef.current = folder;
+        setDropTargetPath(folder);
+    }, []);
+
+    const handleItemMouseDown = useCallback((e: React.MouseEvent, path: string, name: string, isDir: boolean, isRenaming: boolean) => {
+        if (e.button !== 0 || isRenaming || path === workspaceRoot || path === TREE_ROOT_ID) {
+            return;
+        }
+        if ((e.target as HTMLElement).closest('input')) {
+            return;
+        }
+
+        suppressClickRef.current = false;
+        const start = { x: e.clientX, y: e.clientY, path };
+        let dragging = false;
+
+        const resolveDropFolder = (x: number, y: number): string | null => {
+            const el = document.elementFromPoint(x, y);
+            const itemEl = el?.closest?.('[data-drop-path]') as HTMLElement | null;
+            if (!itemEl) {
+                return null;
+            }
+            const hoveredPath = itemEl.dataset.dropPath!;
+            const folder = itemEl.dataset.isDir === 'true' ? hoveredPath : getParentPath(hoveredPath);
+            // Never allow dropping an item onto itself or into its own subtree,
+            // and treat a same-parent drop as a no-target so it reads as a cancel.
+            if (folder === start.path || folder.startsWith(start.path + '/') || folder === getParentPath(start.path)) {
+                return null;
+            }
+            return folder;
+        };
+
+        const clearHoverExpand = () => {
+            if (hoverExpandRef.current.timer !== null) {
+                window.clearTimeout(hoverExpandRef.current.timer);
+            }
+            hoverExpandRef.current = { folder: null, timer: null };
+        };
+
+        const cleanup = () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+            window.removeEventListener('keydown', onKey);
+            clearHoverExpand();
+            document.body.style.cursor = '';
+            setPointerDrag(null);
+            setDropTarget(null);
+        };
+
+        const onMove = (ev: MouseEvent) => {
+            lastPointerRef.current = { x: ev.clientX, y: ev.clientY };
+
+            if (!dragging) {
+                if (Math.abs(ev.clientX - start.x) + Math.abs(ev.clientY - start.y) < 5) {
+                    return;
+                }
+                dragging = true;
+                document.body.style.cursor = 'grabbing';
+                setPointerDrag({ path, name, isDir });
+            }
+
+            const ghost = dragGhostRef.current;
+            if (ghost) {
+                ghost.style.transform = `translate(${ev.clientX + 12}px, ${ev.clientY + 8}px)`;
+            }
+
+            const folder = resolveDropFolder(ev.clientX, ev.clientY);
+            setDropTarget(folder);
+
+            // Auto-expand a collapsed folder after hovering it for a moment
+            if (hoverExpandRef.current.folder !== folder) {
+                clearHoverExpand();
+                if (folder) {
+                    hoverExpandRef.current = {
+                        folder,
+                        timer: window.setTimeout(() => {
+                            try {
+                                const folderItem = treeRef.current.getItemInstance(folder);
+                                if (folderItem && folderItem.isFolder() && !folderItem.isExpanded()) {
+                                    folderItem.expand();
+                                }
+                            } catch {
+                                // Folder not materialized in the tree yet; nothing to expand.
+                            }
+                        }, 700),
+                    };
+                }
+            }
+        };
+
+        const onUp = (ev: MouseEvent) => {
+            const folder = dragging ? resolveDropFolder(ev.clientX, ev.clientY) : null;
+            const wasDragging = dragging;
+            cleanup();
+            if (!wasDragging) {
+                return;
+            }
+            suppressClickRef.current = true;
+            if (folder) {
+                moveItemToFolder(path, folder).catch((err) => {
+                    console.error('[Explorer] Failed to move:', err);
+                });
+            }
+        };
+
+        const onKey = (ev: KeyboardEvent) => {
+            if (ev.key === 'Escape') {
+                if (dragging) {
+                    suppressClickRef.current = true;
+                }
+                cleanup();
+            }
+        };
+
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+        window.addEventListener('keydown', onKey);
+    }, [workspaceRoot, moveItemToFolder, setDropTarget]);
 
     React.useEffect(() => {
         if (!workspaceRoot) return;
@@ -882,6 +962,9 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                             <div
                                 {...item.getProps()}
                                 data-tree-item
+                                data-drop-path={item.getId()}
+                                data-is-dir={item.isFolder() ? 'true' : 'false'}
+                                onMouseDown={(e) => handleItemMouseDown(e, item.getId(), item.getItemName() || '', item.isFolder(), item.isRenaming?.() ?? false)}
                                 className={`group flex items-center gap-1.5 py-1 px-2 cursor-pointer relative
                                     ${isActiveFile
                                         ? 'bg-(--bg-selection) text-(--accent-secondary)'
@@ -890,12 +973,18 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                                         : 'text-(--fg-secondary) hover:bg-(--bg-surface-hover)'
                                     }
                                     ${item.isFocused() ? 'ring-1 ring-inset ring-(--border-focus)' : ''}
+                                    ${dropTargetPath === item.getId() ? 'ring-1 ring-inset ring-(--accent-ai) bg-(--bg-selection)/50' : ''}
                                 `}
                                 style={{ paddingLeft: `${(item.getItemMeta().level) * 12 + 8}px` }}
                                 onClick={(e) => {
+                                    // Swallow the click generated by releasing a pointer drag
+                                    if (suppressClickRef.current) {
+                                        suppressClickRef.current = false;
+                                        return;
+                                    }
                                     // Don't handle click if renaming
                                     if (item.isRenaming?.()) return;
-                                    
+
                                     if (item.isFolder()) {
                                         if (item.isExpanded()) {
                                             item.collapse();
@@ -990,20 +1079,24 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onFileSelect, active
                     );
                 })}
 
-                {/* Drag line for drag-and-drop */}
-                <div 
-                    style={tree.getDragLineStyle?.()} 
-                    className="h-0.5 bg-(--accent-ai) pointer-events-none relative"
-                >
-                    <div className="absolute left-0 top-[-3px] h-2 w-2 bg-(--bg-panel) border-2 border-(--accent-ai) rounded-full" />
-                </div>
-
                 {tree.getItems().length === 0 && (
                     <div role="status" aria-live="polite" className="p-4 text-(--fg-tertiary) italic">
                         {roots.length > 0 ? t('fileTree.loadingTree') : t('fileTree.waitingForWorkspace')}
                     </div>
                 )}
             </ScrollArea>
+
+            {/* Floating ghost following the cursor during a pointer drag */}
+            {pointerDrag && (
+                <div
+                    ref={dragGhostRef}
+                    className="fixed top-0 left-0 z-50 pointer-events-none flex items-center gap-1.5 px-2 py-1 rounded-[calc(var(--panel-radius)*0.4)] bg-(--bg-panel) border border-(--accent-ai) text-xs text-(--fg-primary) shadow-lg"
+                    style={{ transform: `translate(${lastPointerRef.current.x + 12}px, ${lastPointerRef.current.y + 8}px)` }}
+                >
+                    {getIcon(pointerDrag.name, pointerDrag.isDir, false)}
+                    <span className="truncate max-w-48">{pointerDrag.name}</span>
+                </div>
+            )}
 
             {/* Confirm Modal for Delete */}
             <ConfirmModal
