@@ -309,6 +309,21 @@ pub struct SymbolStore {
     conn: Mutex<Connection>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelationshipObservationKind {
+    SyntaxExtracted,
+    IndexStructural,
+}
+
+impl RelationshipObservationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SyntaxExtracted => "syntax_extracted",
+            Self::IndexStructural => "index_structural",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SymbolReference {
     pub source_symbol: Symbol,
@@ -317,6 +332,22 @@ pub struct SymbolReference {
     pub target_symbol_id: Option<String>,
     pub target_symbol: Option<Symbol>,
     pub line: u32,
+    pub observation_kind: RelationshipObservationKind,
+    pub resolution_strategy: Option<String>,
+    pub resolution_confidence: Option<f32>,
+    pub receiver_type: Option<String>,
+    pub receiver_is_self: bool,
+}
+
+struct StoredRelationshipReference {
+    source_symbol: Symbol,
+    relationship_type: String,
+    target_name: String,
+    target_symbol_id: Option<String>,
+    line: u32,
+    resolution_strategy: Option<String>,
+    resolution_confidence: Option<f32>,
+    metadata_json: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1491,7 +1522,8 @@ impl SymbolStore {
                 r#"
                 SELECT s.id, s.name, s.qualified_name, s.symbol_type, s.file_path, s.start_line, s.start_char,
                        s.end_line, s.end_char, s.byte_offset, s.byte_length, s.parent_id, s.docstring, s.signature,
-                       s.content_hash, r.relationship_type, r.target_name, r.target_symbol_id, r.line
+                       s.content_hash, r.relationship_type, r.target_name, r.target_symbol_id, r.line,
+                       r.resolution_strategy, r.confidence, r.metadata_json
                 FROM symbol_relationships r
                 JOIN symbols s ON s.id = r.source_symbol_id
                 WHERE r.target_name = ?1 AND r.relationship_type = ?2
@@ -1504,13 +1536,16 @@ impl SymbolStore {
                 .query_map(
                     params![target_name, relationship_type.to_string(), limit as i64],
                     |row| {
-                        Ok((
-                            row_to_symbol(row)?,
-                            row.get::<_, String>(15)?,
-                            row.get::<_, String>(16)?,
-                            row.get::<_, Option<String>>(17)?,
-                            row.get::<_, i64>(18)? as u32,
-                        ))
+                        Ok(StoredRelationshipReference {
+                            source_symbol: row_to_symbol(row)?,
+                            relationship_type: row.get(15)?,
+                            target_name: row.get(16)?,
+                            target_symbol_id: row.get(17)?,
+                            line: row.get::<_, i64>(18)? as u32,
+                            resolution_strategy: row.get(19)?,
+                            resolution_confidence: row.get(20)?,
+                            metadata_json: row.get(21)?,
+                        })
                     },
                 )?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -1533,7 +1568,8 @@ impl SymbolStore {
                 r#"
                 SELECT s.id, s.name, s.qualified_name, s.symbol_type, s.file_path, s.start_line, s.start_char,
                        s.end_line, s.end_char, s.byte_offset, s.byte_length, s.parent_id, s.docstring, s.signature,
-                       s.content_hash, r.relationship_type, r.target_name, r.target_symbol_id, r.line
+                       s.content_hash, r.relationship_type, r.target_name, r.target_symbol_id, r.line,
+                       r.resolution_strategy, r.confidence, r.metadata_json
                 FROM symbol_relationships r
                 JOIN symbols s ON s.id = r.source_symbol_id
                 WHERE r.target_symbol_id = ?1 AND r.relationship_type = ?2
@@ -1550,13 +1586,16 @@ impl SymbolStore {
                         limit as i64
                     ],
                     |row| {
-                        Ok((
-                            row_to_symbol(row)?,
-                            row.get::<_, String>(15)?,
-                            row.get::<_, String>(16)?,
-                            row.get::<_, Option<String>>(17)?,
-                            row.get::<_, i64>(18)? as u32,
-                        ))
+                        Ok(StoredRelationshipReference {
+                            source_symbol: row_to_symbol(row)?,
+                            relationship_type: row.get(15)?,
+                            target_name: row.get(16)?,
+                            target_symbol_id: row.get(17)?,
+                            line: row.get::<_, i64>(18)? as u32,
+                            resolution_strategy: row.get(19)?,
+                            resolution_confidence: row.get(20)?,
+                            metadata_json: row.get(21)?,
+                        })
                     },
                 )?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -1581,7 +1620,8 @@ impl SymbolStore {
             let conn = self.conn.lock().unwrap();
             let mut stmt = conn.prepare(
                 r#"
-                SELECT relationship_type, target_name, target_symbol_id, line
+                SELECT relationship_type, target_name, target_symbol_id, line,
+                       resolution_strategy, confidence, metadata_json
                 FROM symbol_relationships
                 WHERE source_symbol_id = ?1 AND relationship_type = ?2
                 ORDER BY line, target_name
@@ -1597,13 +1637,16 @@ impl SymbolStore {
                         limit as i64
                     ],
                     |row| {
-                        Ok((
-                            source_symbol.clone(),
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, Option<String>>(2)?,
-                            row.get::<_, i64>(3)? as u32,
-                        ))
+                        Ok(StoredRelationshipReference {
+                            source_symbol: source_symbol.clone(),
+                            relationship_type: row.get(0)?,
+                            target_name: row.get(1)?,
+                            target_symbol_id: row.get(2)?,
+                            line: row.get::<_, i64>(3)? as u32,
+                            resolution_strategy: row.get(4)?,
+                            resolution_confidence: row.get(5)?,
+                            metadata_json: row.get(6)?,
+                        })
                     },
                 )?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -2557,20 +2600,21 @@ impl SymbolStore {
 
     fn hydrate_symbol_references(
         &self,
-        rows: Vec<(Symbol, String, String, Option<String>, u32)>,
+        rows: Vec<StoredRelationshipReference>,
     ) -> Result<Vec<SymbolReference>, SymbolStoreError> {
         // M2.4 — hydrate target symbols with ONE batched lookup keyed on the
         // distinct target ids, instead of N+1 `get_symbol` round-trips (one per
         // edge). The map below is the JOIN, resolved in a single query.
         let target_symbols = self.get_symbols_by_ids(
             rows.iter()
-                .filter_map(|(_, _, _, target_symbol_id, _)| target_symbol_id.as_deref()),
+                .filter_map(|row| row.target_symbol_id.as_deref()),
         )?;
 
         let mut references = Vec::with_capacity(rows.len());
 
-        for (source_symbol, relationship_type, target_name, target_symbol_id, line) in rows {
-            let relationship_type = relationship_type
+        for row in rows {
+            let relationship_type = row
+                .relationship_type
                 .parse::<SymbolRelationshipType>()
                 .map_err(|error| {
                     SymbolStoreError::Io(std::io::Error::new(
@@ -2578,17 +2622,29 @@ impl SymbolStore {
                         error,
                     ))
                 })?;
-            let target_symbol = target_symbol_id
+            let target_symbol = row
+                .target_symbol_id
                 .as_deref()
                 .and_then(|id| target_symbols.get(id).cloned());
+            let (receiver_type, receiver_is_self) = row
+                .metadata_json
+                .as_deref()
+                .and_then(recv_meta_from_metadata)
+                .map(|(receiver_type, receiver_is_self)| (Some(receiver_type), receiver_is_self))
+                .unwrap_or((None, false));
 
             references.push(SymbolReference {
-                source_symbol,
+                source_symbol: row.source_symbol,
                 relationship_type,
-                target_name,
-                target_symbol_id,
+                target_name: row.target_name,
+                target_symbol_id: row.target_symbol_id,
                 target_symbol,
-                line,
+                line: row.line,
+                observation_kind: RelationshipObservationKind::SyntaxExtracted,
+                resolution_strategy: row.resolution_strategy,
+                resolution_confidence: row.resolution_confidence,
+                receiver_type,
+                receiver_is_self,
             });
         }
 
@@ -4125,7 +4181,10 @@ mod tests {
                     target_symbol_id: Some(helper.id.clone()),
                     relationship_type: SymbolRelationshipType::Call,
                     line: 3,
-                    ..Default::default()
+                    recv_type: Some("Helper".to_string()),
+                    recv_self: true,
+                    resolution_strategy: Some("receiver_type".to_string()),
+                    confidence: Some(0.8),
                 }],
             )
             .unwrap();
@@ -4146,6 +4205,13 @@ mod tests {
                 .map(|symbol| symbol.id.as_str()),
             Some(helper.id.as_str())
         );
+        assert_eq!(
+            incoming[0].resolution_strategy.as_deref(),
+            Some("receiver_type")
+        );
+        assert_eq!(incoming[0].resolution_confidence, Some(0.8));
+        assert_eq!(incoming[0].receiver_type.as_deref(), Some("Helper"));
+        assert!(incoming[0].receiver_is_self);
 
         let outgoing = store
             .get_relationship_edges_from_source(&caller.id, SymbolRelationshipType::Call, 10)
@@ -4162,6 +4228,15 @@ mod tests {
                 .as_ref()
                 .map(|symbol| symbol.id.as_str()),
             Some(helper.id.as_str())
+        );
+        assert_eq!(
+            outgoing[0].resolution_strategy.as_deref(),
+            Some("receiver_type")
+        );
+        assert_eq!(outgoing[0].resolution_confidence, Some(0.8));
+        assert_eq!(
+            outgoing[0].observation_kind,
+            RelationshipObservationKind::SyntaxExtracted
         );
     }
 

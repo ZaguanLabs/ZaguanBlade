@@ -13,9 +13,9 @@ use crate::buffer_snapshot::{BufferSnapshot, BufferSnapshotSource, BufferSnapsho
 use crate::gitignore_filter::GitignoreFilter;
 use crate::project_settings;
 use crate::symbol_index::{
-    FileIndexRecord, FileRelationshipRecord, RelationshipIntegrityStats, SearchQuery, SearchResult,
-    SemanticAnchor, SemanticAnchorResult, SymbolReference, SymbolStore,
-    UnresolvedRelationshipTarget,
+    FileIndexRecord, FileRelationshipRecord, RelationshipIntegrityStats,
+    RelationshipObservationKind, SearchQuery, SearchResult, SemanticAnchor, SemanticAnchorResult,
+    SymbolReference, SymbolStore, UnresolvedRelationshipTarget,
 };
 use crate::tree_sitter::{
     extract_symbol_relationships, extract_symbols, stable_symbol_id, Language, Position, Range,
@@ -4168,9 +4168,8 @@ impl LanguageService {
                 &receiver_index,
             )? {
                 relationship.target_symbol_id = Some(resolved.id);
-                // Only a receiver-type disambiguation carries an audit tag; plain
-                // same-file / imported-unique resolutions stay untagged exactly as
-                // before (the global-unique back-fill tags its own rows later).
+                // Every successful resolver path carries an audit tag. The
+                // global-unique and global receiver miners tag their own rows later.
                 if let Some(strategy) = resolved.strategy {
                     relationship.resolution_strategy = Some(strategy.to_string());
                     relationship.confidence = resolved.confidence;
@@ -4210,7 +4209,7 @@ impl LanguageService {
         self.collect_matching_symbols(file_symbols, reference_name, &mut same_file, &mut seen);
 
         if same_file.len() == 1 {
-            return Ok(Some(ResolvedTarget::plain(same_file[0].id.clone())));
+            return Ok(Some(ResolvedTarget::same_file(same_file[0].id.clone())));
         }
         if same_file.len() > 1 {
             // M5.1 ambiguity branch #1: narrow by receiver type before bailing.
@@ -4241,7 +4240,9 @@ impl LanguageService {
         }
 
         if imported_matches.len() == 1 {
-            return Ok(Some(ResolvedTarget::plain(imported_matches[0].id.clone())));
+            return Ok(Some(ResolvedTarget::imported(
+                imported_matches[0].id.clone(),
+            )));
         }
         if imported_matches.len() > 1 {
             // M5.1 ambiguity branch #2: narrow by receiver type before bailing.
@@ -4992,6 +4993,11 @@ impl LanguageService {
                                 depth: depth + 1,
                                 line: reference.line,
                                 resolved,
+                                observation_kind: reference.observation_kind,
+                                resolution_strategy: reference.resolution_strategy.clone(),
+                                resolution_confidence: reference.resolution_confidence,
+                                receiver_type: reference.receiver_type.clone(),
+                                receiver_is_self: reference.receiver_is_self,
                             });
                         }
 
@@ -5045,6 +5051,11 @@ impl LanguageService {
                                 depth: depth + 1,
                                 line: reference.line,
                                 resolved,
+                                observation_kind: reference.observation_kind,
+                                resolution_strategy: reference.resolution_strategy.clone(),
+                                resolution_confidence: reference.resolution_confidence,
+                                receiver_type: reference.receiver_type.clone(),
+                                receiver_is_self: reference.receiver_is_self,
                             });
                         }
 
@@ -5097,6 +5108,11 @@ impl LanguageService {
             target_symbol_id: Some(symbol.id.clone()),
             target_symbol: Some(symbol.clone()),
             line: symbol.range.start.line,
+            observation_kind: RelationshipObservationKind::IndexStructural,
+            resolution_strategy: Some("parent_id".to_string()),
+            resolution_confidence: Some(1.0),
+            receiver_type: None,
+            receiver_is_self: false,
         }])
     }
 
@@ -5121,6 +5137,11 @@ impl LanguageService {
                 target_symbol_id: Some(child.id.clone()),
                 target_symbol: Some(child.clone()),
                 line: child.range.start.line,
+                observation_kind: RelationshipObservationKind::IndexStructural,
+                resolution_strategy: Some("parent_id".to_string()),
+                resolution_confidence: Some(1.0),
+                receiver_type: None,
+                receiver_is_self: false,
             })
             .collect())
     }
@@ -5981,6 +6002,11 @@ pub struct SymbolTraceEdge {
     pub depth: usize,
     pub line: u32,
     pub resolved: bool,
+    pub observation_kind: RelationshipObservationKind,
+    pub resolution_strategy: Option<String>,
+    pub resolution_confidence: Option<f32>,
+    pub receiver_type: Option<String>,
+    pub receiver_is_self: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7506,10 +7532,9 @@ fn is_css_identifier_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_' || ch == '-'
 }
 
-/// M5.1 outcome of resolving one relationship target. `strategy`/`confidence`
-/// are `Some` ONLY for a receiver-type disambiguation (the auditable new path);
-/// plain same-file / imported-unique resolutions carry `None` so the stored row
-/// is byte-for-byte what today produces.
+/// Auditable outcome of resolving one relationship target. Every successful
+/// resolver path records its strategy and confidence so downstream graph tools
+/// can distinguish syntax evidence from target-identity certainty.
 struct ResolvedTarget {
     id: String,
     strategy: Option<&'static str>,
@@ -7517,11 +7542,19 @@ struct ResolvedTarget {
 }
 
 impl ResolvedTarget {
-    fn plain(id: String) -> Self {
+    fn same_file(id: String) -> Self {
         Self {
             id,
-            strategy: None,
-            confidence: None,
+            strategy: Some("same_file_unique"),
+            confidence: Some(1.0),
+        }
+    }
+
+    fn imported(id: String) -> Self {
+        Self {
+            id,
+            strategy: Some("imported_unique"),
+            confidence: Some(0.95),
         }
     }
 

@@ -1018,6 +1018,11 @@ mod tests {
             target_symbol_id: Some(target.id.clone()),
             target_symbol: Some(target),
             line: 2,
+            observation_kind: crate::symbol_index::RelationshipObservationKind::SyntaxExtracted,
+            resolution_strategy: Some("same_file_unique".to_string()),
+            resolution_confidence: Some(1.0),
+            receiver_type: None,
+            receiver_is_self: false,
         };
         let fallback = crate::symbol_index::SymbolReference {
             source_symbol: source,
@@ -1026,11 +1031,16 @@ mod tests {
             target_symbol_id: None,
             target_symbol: None,
             line: 2,
+            observation_kind: crate::symbol_index::RelationshipObservationKind::SyntaxExtracted,
+            resolution_strategy: None,
+            resolution_confidence: None,
+            receiver_type: None,
+            receiver_is_self: false,
         };
 
         assert_eq!(
             symbol_reference_resolution_json(&resolved)["strategy"],
-            "resolved_symbol_id"
+            "same_file_unique"
         );
         assert_eq!(
             symbol_reference_resolution_json(&resolved)["confidence"],
@@ -1038,11 +1048,11 @@ mod tests {
         );
         assert_eq!(
             symbol_reference_resolution_json(&fallback)["strategy"],
-            "name_fallback"
+            "unresolved"
         );
         assert_eq!(
             symbol_reference_resolution_json(&fallback)["confidence"],
-            "low"
+            "none"
         );
     }
 
@@ -1057,13 +1067,21 @@ mod tests {
             target_symbol_id: Some(target.id.clone()),
             target_symbol: Some(target),
             line: 2,
+            observation_kind: crate::symbol_index::RelationshipObservationKind::SyntaxExtracted,
+            resolution_strategy: Some("imported_unique".to_string()),
+            resolution_confidence: Some(0.95),
+            receiver_type: Some("Helper".to_string()),
+            receiver_is_self: false,
         };
 
         let connection = symbol_search_connection_json(&reference, "outgoing");
 
-        assert_eq!(connection["resolution"]["strategy"], "resolved_symbol_id");
+        assert_eq!(connection["resolution"]["strategy"], "imported_unique");
         assert_eq!(connection["resolution"]["confidence"], "high");
+        assert_eq!(connection["resolution"]["confidence_score"], 0.95);
+        assert_eq!(connection["resolution"]["receiver_type"], "Helper");
         assert_eq!(connection["resolution"]["resolved"], true);
+        assert_eq!(connection["observation"]["kind"], "syntax_extracted");
     }
 
     #[test]
@@ -3841,27 +3859,67 @@ fn semantic_anchor_result_to_json(
 fn symbol_reference_resolution_json(
     reference: &crate::symbol_index::SymbolReference,
 ) -> serde_json::Value {
-    let strategy = if reference.target_symbol_id.is_some() {
-        "resolved_symbol_id"
-    } else if reference.target_symbol.is_some() {
-        "hydrated_target_symbol"
-    } else if reference.relationship_type == crate::tree_sitter::SymbolRelationshipType::Import {
-        "resolved_file_path"
+    let resolved = reference.target_symbol_id.is_some()
+        || reference.target_symbol.is_some()
+        || reference.relationship_type == crate::tree_sitter::SymbolRelationshipType::Import;
+    relationship_resolution_json(
+        reference.resolution_strategy.as_deref(),
+        reference.resolution_confidence,
+        resolved,
+        reference.relationship_type,
+        reference.receiver_type.as_deref(),
+        reference.receiver_is_self,
+    )
+}
+
+fn relationship_resolution_json(
+    stored_strategy: Option<&str>,
+    stored_confidence: Option<f32>,
+    resolved: bool,
+    relationship_type: crate::tree_sitter::SymbolRelationshipType,
+    receiver_type: Option<&str>,
+    receiver_is_self: bool,
+) -> serde_json::Value {
+    let (strategy, confidence_score) = if let Some(strategy) = stored_strategy {
+        (strategy, stored_confidence)
+    } else if relationship_type == crate::tree_sitter::SymbolRelationshipType::Import {
+        ("resolved_file_path", Some(0.9))
+    } else if resolved {
+        // Pre-provenance index rows can still contain a resolved target id. Do not
+        // silently claim high confidence when the resolver strategy is unknown.
+        ("legacy_resolved", None)
     } else {
-        "name_fallback"
+        ("unresolved", None)
     };
-    let confidence = match strategy {
-        "resolved_symbol_id" | "hydrated_target_symbol" => "high",
-        "resolved_file_path" => "medium",
-        _ => "low",
+    let confidence = match confidence_score {
+        Some(score) if score >= 0.9 => "high",
+        Some(score) if score >= 0.7 => "medium",
+        Some(_) => "low",
+        None if resolved => "unknown",
+        None => "none",
     };
 
     serde_json::json!({
         "strategy": strategy,
         "confidence": confidence,
-        "resolved": reference.target_symbol_id.is_some()
-            || reference.target_symbol.is_some()
-            || reference.relationship_type == crate::tree_sitter::SymbolRelationshipType::Import,
+        "confidence_score": confidence_score,
+        "resolved": resolved,
+        "receiver_type": receiver_type,
+        "receiver_is_self": receiver_is_self,
+    })
+}
+
+fn relationship_observation_json(
+    observation_kind: crate::symbol_index::RelationshipObservationKind,
+    source_file: &str,
+    line: u32,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": observation_kind.as_str(),
+        "confidence": "high",
+        "confidence_score": 1.0,
+        "source_file": source_file,
+        "line": line,
     })
 }
 
@@ -3873,6 +3931,11 @@ fn symbol_reference_to_json(reference: &crate::symbol_index::SymbolReference) ->
         "target_symbol_id": reference.target_symbol_id,
         "target_symbol": reference.target_symbol.as_ref().map(symbol_to_json),
         "line": reference.line,
+        "observation": relationship_observation_json(
+            reference.observation_kind,
+            &reference.source_symbol.file_path,
+            reference.line,
+        ),
         "resolution": symbol_reference_resolution_json(reference),
     })
 }
@@ -3885,6 +3948,14 @@ fn symbol_trace_node_to_json(node: &crate::language_service::SymbolTraceNode) ->
 }
 
 fn symbol_trace_edge_to_json(edge: &crate::language_service::SymbolTraceEdge) -> serde_json::Value {
+    let resolution = relationship_resolution_json(
+        edge.resolution_strategy.as_deref(),
+        edge.resolution_confidence,
+        edge.resolved,
+        edge.relationship_type,
+        edge.receiver_type.as_deref(),
+        edge.receiver_is_self,
+    );
     serde_json::json!({
         "source_symbol": symbol_to_json(&edge.source_symbol),
         "target_symbol": edge.target_symbol.as_ref().map(symbol_to_json),
@@ -3894,6 +3965,12 @@ fn symbol_trace_edge_to_json(edge: &crate::language_service::SymbolTraceEdge) ->
         "depth": edge.depth,
         "line": edge.line,
         "resolved": edge.resolved,
+        "observation": relationship_observation_json(
+            edge.observation_kind,
+            &edge.source_symbol.file_path,
+            edge.line,
+        ),
+        "resolution": resolution,
     })
 }
 
@@ -4263,6 +4340,11 @@ fn symbol_search_connection_json(
         "target_name": &reference.target_name,
         "target_symbol_id": &reference.target_symbol_id,
         "line": reference.line,
+        "observation": relationship_observation_json(
+            reference.observation_kind,
+            &reference.source_symbol.file_path,
+            reference.line,
+        ),
         "resolution": symbol_reference_resolution_json(reference),
         "symbol": connected_symbol.map(|symbol| serde_json::json!({
             "id": &symbol.id,

@@ -430,6 +430,9 @@ Parameters:
 ### `symbol_references`
 
 Expands incoming and outgoing relationships for one symbol, or important symbols in a file.
+Each edge reports two independent evidence dimensions: `observation` describes how the
+relationship occurrence entered the index, while `resolution` reports the target-resolution
+strategy, numeric confidence, receiver-type context, and whether the target resolved.
 
 Parameters:
 
@@ -449,6 +452,7 @@ Relationship types include `call`, `import`, `export`, `extends`, `implements`, 
 ### `symbol_graph`
 
 Returns one-hop incoming and outgoing graph edges for one symbol.
+Edges include the same `observation` and `resolution` provenance as `symbol_references`.
 
 Parameters:
 
@@ -468,6 +472,8 @@ Relationship types include `call`, `import`, `export`, `extends`, `implements`, 
 ### `symbol_trace`
 
 Traces bounded multi-hop incoming and/or outgoing symbol relationships from one seed symbol. This is a structural index traversal, not a type-aware call graph. Responses include visited symbols, edges, hop depth, truncation status, and unresolved edge counts.
+Every returned edge preserves its observation source and target-resolution strategy/confidence;
+legacy resolved edges without stored provenance are explicitly labeled with unknown confidence.
 
 Parameters:
 
