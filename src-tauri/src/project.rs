@@ -3,14 +3,10 @@ use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
-/// ProjectManifest represents the .zblade/project.json file
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectManifest {
-    pub project_id: String,
-    pub created_at: String,
-    pub name: String,
-    pub version: String,
-    pub zblade_version: String,
+/// Stable workspace identity stored in `.zblade/project.json`.
+#[derive(Debug, Serialize, Deserialize)]
+struct ProjectManifest {
+    project_id: String,
 }
 
 /// Get or create the project manifest for a workspace
@@ -51,21 +47,11 @@ pub fn get_or_create_project_id(
 
     // Create new project
     let project_id = generate_project_id();
-    let project_name = workspace_root
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unnamed-project")
-        .to_string();
-
     let manifest = ProjectManifest {
         project_id: project_id.clone(),
-        created_at: chrono::Utc::now().to_rfc3339(),
-        name: project_name,
-        version: "1.0.0".to_string(),
-        zblade_version: env!("CARGO_PKG_VERSION").to_string(),
     };
 
-    eprintln!("Creating new project: {} ({})", manifest.name, project_id);
+    eprintln!("Creating new project: {}", project_id);
 
     // Create .zblade directory
     fs::create_dir_all(&zblade_dir)?;
@@ -142,9 +128,32 @@ mod tests {
 
         // Verify manifest content
         let manifest_content = fs::read_to_string(workspace.join(".zblade/project.json")).unwrap();
-        let manifest: ProjectManifest = serde_json::from_str(&manifest_content).unwrap();
-        assert_eq!(manifest.project_id, id1);
-        assert_eq!(manifest.version, "1.0.0");
+        let manifest: serde_json::Value = serde_json::from_str(&manifest_content).unwrap();
+        assert_eq!(manifest, serde_json::json!({ "project_id": id1 }));
+    }
+
+    #[test]
+    fn test_existing_legacy_manifest_keeps_project_id() {
+        let temp_dir = TempDir::new().unwrap();
+        let workspace = temp_dir.path();
+        let zblade_dir = workspace.join(".zblade");
+        fs::create_dir_all(&zblade_dir).unwrap();
+        fs::write(
+            zblade_dir.join("project.json"),
+            r#"{
+                "project_id": "proj_abc123def456",
+                "created_at": "2026-02-12T19:36:55Z",
+                "name": "legacy-project",
+                "version": "1.0.0",
+                "zblade_version": "0.1.0"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            get_existing_project_id(workspace),
+            Some("proj_abc123def456".to_string())
+        );
     }
 
     #[test]
