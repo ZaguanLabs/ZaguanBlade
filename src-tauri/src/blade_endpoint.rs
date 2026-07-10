@@ -30,7 +30,7 @@ lazy_static! {
 static PRIMARY_MONITOR_RUNNING: AtomicBool = AtomicBool::new(false);
 
 pub fn default_blade_url() -> String {
-    std::env::var("BLADE_URL").unwrap_or_else(|_| PRIMARY_BLADE_URL.to_string())
+    PRIMARY_BLADE_URL.to_string()
 }
 
 pub fn normalize_base_url(url: &str) -> String {
@@ -149,5 +149,15 @@ async fn primary_is_reachable(api_key: &str) -> bool {
     match request.send().await {
         Ok(response) => !response.status().is_server_error(),
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_blade_url_is_the_managed_primary() {
+        assert_eq!(default_blade_url(), PRIMARY_BLADE_URL);
     }
 }
