@@ -447,7 +447,8 @@ Parameters:
 | `limit` | integer | No |
 | `max_symbols` | integer | No |
 
-Relationship types include `call`, `import`, `export`, `extends`, `implements`, `contains`, and `usage`.
+Relationship types include `call`, `import`, `export`, `extends`, `implements`, `contains`,
+`usage`, `uses_type`, `reads_env`, and `handles`.
 
 ### `symbol_graph`
 
@@ -467,7 +468,8 @@ Parameters:
 | `kind` | string | No |
 | `limit` | integer | No |
 
-Relationship types include `call`, `import`, `export`, `extends`, `implements`, `contains`, and `usage`.
+Relationship types include `call`, `import`, `export`, `extends`, `implements`, `contains`,
+`usage`, `uses_type`, `reads_env`, and `handles`.
 
 ### `symbol_trace`
 
@@ -507,7 +509,10 @@ Parameters:
 
 ### `edit_impact`
 
-Analyzes likely impact before editing a file or symbol. Returns impacted files, likely tests, reference counts, risk, confidence, and suggested read ranges.
+Analyzes likely impact before editing a file or symbol. It follows bounded incoming relationship
+paths transitively and inspects direct outgoing dependencies. Results include the evidence path
+for each transitive hit, impacted files, likely tests, reference counts, risk, confidence, and
+suggested read ranges.
 
 Parameters:
 
@@ -519,6 +524,9 @@ Parameters:
 | `name` | string | No |
 | `limit` | integer | No |
 | `max_symbols` | integer | No |
+| `depth` / `max_depth` | integer | No; default `2`, cap `4` |
+| `edge_limit` | integer | No; default `160`, cap `400` |
+| `per_node_limit` | integer | No; default `16`, cap `50` |
 
 Requires either a target `path` or a symbol selector.
 

@@ -1008,6 +1008,70 @@ mod tests {
     }
 
     #[test]
+    fn transitive_impact_scoring_penalizes_depth_and_resolution_uncertainty() {
+        let source = test_symbol("caller", "caller", SymbolType::Function, 1, None);
+        let target = test_symbol("target", "target", SymbolType::Function, 3, None);
+        let direct = crate::language_service::SymbolTraceEdge {
+            source_symbol: source,
+            target_symbol: Some(target),
+            target_name: "target".to_string(),
+            relationship_type: crate::tree_sitter::SymbolRelationshipType::Call,
+            direction: crate::language_service::SymbolTraceDirection::Incoming,
+            depth: 1,
+            line: 2,
+            resolved: true,
+            observation_kind: crate::symbol_index::RelationshipObservationKind::SyntaxExtracted,
+            resolution_strategy: Some("same_file_unique".to_string()),
+            resolution_confidence: Some(1.0),
+            receiver_type: None,
+            receiver_is_self: false,
+        };
+        let mut transitive = direct.clone();
+        transitive.depth = 2;
+        transitive.resolution_strategy = Some("global_unique".to_string());
+        transitive.resolution_confidence = Some(0.5);
+
+        assert!(transitive_impact_score(&direct) > transitive_impact_score(&transitive));
+    }
+
+    #[test]
+    fn incoming_impact_path_reconstructs_each_hop_to_the_seed() {
+        let caller = test_symbol("caller", "caller", SymbolType::Function, 1, None);
+        let middle = test_symbol("middle", "middle", SymbolType::Function, 3, None);
+        let seed = test_symbol("seed", "seed", SymbolType::Function, 5, None);
+        let make_edge = |source: crate::tree_sitter::Symbol,
+                         target: crate::tree_sitter::Symbol,
+                         depth| crate::language_service::SymbolTraceEdge {
+            target_name: target.name.clone(),
+            source_symbol: source,
+            target_symbol: Some(target),
+            relationship_type: crate::tree_sitter::SymbolRelationshipType::Call,
+            direction: crate::language_service::SymbolTraceDirection::Incoming,
+            depth,
+            line: depth as u32,
+            resolved: true,
+            observation_kind: crate::symbol_index::RelationshipObservationKind::SyntaxExtracted,
+            resolution_strategy: Some("same_file_unique".to_string()),
+            resolution_confidence: Some(1.0),
+            receiver_type: None,
+            receiver_is_self: false,
+        };
+        let caller_edge = make_edge(caller.clone(), middle.clone(), 2);
+        let middle_edge = make_edge(middle.clone(), seed.clone(), 1);
+        let edge_by_source = HashMap::from([
+            (caller.id.clone(), caller_edge),
+            (middle.id.clone(), middle_edge),
+        ]);
+
+        let path = build_incoming_impact_path(&caller.id, &seed.id, &edge_by_source, 2);
+
+        assert_eq!(path.len(), 2);
+        assert_eq!(path[0]["from"]["name"], "caller");
+        assert_eq!(path[0]["to"]["name"], "middle");
+        assert_eq!(path[1]["to"]["name"], "seed");
+    }
+
+    #[test]
     fn symbol_reference_resolution_marks_resolved_and_fallback_confidence() {
         let source = test_symbol("caller", "caller", SymbolType::Function, 1, None);
         let target = test_symbol("helper", "helper", SymbolType::Function, 3, None);
@@ -4009,6 +4073,8 @@ fn relationship_type_values() -> Vec<crate::tree_sitter::SymbolRelationshipType>
         crate::tree_sitter::SymbolRelationshipType::Extends,
         crate::tree_sitter::SymbolRelationshipType::Implements,
         crate::tree_sitter::SymbolRelationshipType::Usage,
+        crate::tree_sitter::SymbolRelationshipType::UsesType,
+        crate::tree_sitter::SymbolRelationshipType::Handles,
     ]
 }
 
@@ -4071,6 +4137,119 @@ fn is_reference_expansion_symbol(symbol: &crate::tree_sitter::Symbol) -> bool {
             | crate::tree_sitter::SymbolType::Impl
             | crate::tree_sitter::SymbolType::Module
     )
+}
+
+#[derive(Default)]
+struct ImpactFileAccumulator {
+    score: u32,
+    reasons: Vec<String>,
+    suggested_ranges: Vec<serde_json::Value>,
+    evidence_paths: Vec<Vec<serde_json::Value>>,
+}
+
+impl ImpactFileAccumulator {
+    fn add_reason(&mut self, reason: String) {
+        if !self.reasons.iter().any(|existing| existing == &reason) {
+            self.reasons.push(reason);
+        }
+    }
+
+    fn add_range(&mut self, range: serde_json::Value) {
+        if self.suggested_ranges.len() < 6 {
+            self.suggested_ranges.push(range);
+        }
+    }
+
+    fn add_path(&mut self, path: Vec<serde_json::Value>) {
+        if !path.is_empty() && self.evidence_paths.len() < 4 {
+            self.evidence_paths.push(path);
+        }
+    }
+}
+
+fn impact_relationship_score(relationship_type: crate::tree_sitter::SymbolRelationshipType) -> u32 {
+    match relationship_type {
+        crate::tree_sitter::SymbolRelationshipType::Handles => 92,
+        crate::tree_sitter::SymbolRelationshipType::Extends
+        | crate::tree_sitter::SymbolRelationshipType::Implements => 88,
+        crate::tree_sitter::SymbolRelationshipType::Call => 84,
+        crate::tree_sitter::SymbolRelationshipType::Usage => 76,
+        crate::tree_sitter::SymbolRelationshipType::UsesType => 72,
+        crate::tree_sitter::SymbolRelationshipType::Export => 68,
+        crate::tree_sitter::SymbolRelationshipType::Import => 60,
+        crate::tree_sitter::SymbolRelationshipType::Contains
+        | crate::tree_sitter::SymbolRelationshipType::ReadsEnv => 48,
+    }
+}
+
+fn transitive_impact_score(edge: &crate::language_service::SymbolTraceEdge) -> u32 {
+    let confidence = edge
+        .resolution_confidence
+        .unwrap_or(if edge.resolved { 0.75 } else { 0.4 })
+        .clamp(0.0, 1.0);
+    let confidence_factor = 0.6 + (confidence * 0.4);
+    let depth_penalty = edge.depth.saturating_sub(1) as u32 * 12;
+    ((impact_relationship_score(edge.relationship_type) as f32 * confidence_factor).round() as u32)
+        .saturating_sub(depth_penalty)
+        .max(20)
+}
+
+fn compact_impact_hop_json(edge: &crate::language_service::SymbolTraceEdge) -> serde_json::Value {
+    serde_json::json!({
+        "from": {
+            "id": edge.source_symbol.id,
+            "name": edge.source_symbol.name,
+            "file_path": edge.source_symbol.file_path,
+        },
+        "to": edge.target_symbol.as_ref().map(|symbol| serde_json::json!({
+            "id": symbol.id,
+            "name": symbol.name,
+            "file_path": symbol.file_path,
+        })),
+        "relationship_type": edge.relationship_type.to_string(),
+        "line": edge.line,
+        "observation": relationship_observation_json(
+            edge.observation_kind,
+            &edge.source_symbol.file_path,
+            edge.line,
+        ),
+        "resolution": relationship_resolution_json(
+            edge.resolution_strategy.as_deref(),
+            edge.resolution_confidence,
+            edge.resolved,
+            edge.relationship_type,
+            edge.receiver_type.as_deref(),
+            edge.receiver_is_self,
+        ),
+    })
+}
+
+fn build_incoming_impact_path(
+    source_symbol_id: &str,
+    seed_symbol_id: &str,
+    edge_by_source: &HashMap<String, crate::language_service::SymbolTraceEdge>,
+    max_depth: usize,
+) -> Vec<serde_json::Value> {
+    let mut path = Vec::new();
+    let mut current = source_symbol_id;
+    let mut seen = HashSet::new();
+
+    while current != seed_symbol_id && path.len() < max_depth && seen.insert(current.to_string()) {
+        let Some(edge) = edge_by_source.get(current) else {
+            break;
+        };
+        let Some(target) = edge.target_symbol.as_ref() else {
+            break;
+        };
+        path.push(compact_impact_hop_json(edge));
+        current = &target.id;
+    }
+
+    if current == seed_symbol_id {
+        path
+    } else {
+        Vec::new()
+    }
 }
 
 fn is_probable_test_path(path: &str) -> bool {
@@ -4970,6 +5149,9 @@ fn edit_impact_tool<R: tauri::Runtime>(
     let started = Instant::now();
     let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
     let max_symbols = get_bounded_usize_arg(args, &["max_symbols"], 24, 100);
+    let max_depth = get_bounded_usize_arg(args, &["depth", "max_depth"], 2, 4);
+    let trace_edge_limit = get_bounded_usize_arg(args, &["edge_limit"], 160, 400);
+    let per_node_limit = get_bounded_usize_arg(args, &["per_node_limit"], 16, 50);
     let relationship_types = relationship_type_values();
     let explicit_symbol = get_str_arg(args, &["symbol_id", "id"]).is_some()
         || get_str_arg(args, &["name", "qualified_name"]).is_some();
@@ -5005,26 +5187,104 @@ fn edit_impact_tool<R: tauri::Runtime>(
         return ToolResult::err("no impact-analysis symbols found".to_string());
     }
 
-    let mut impacted = BTreeMap::<String, (u32, Vec<String>, Vec<serde_json::Value>)>::new();
+    let mut impacted = BTreeMap::<String, ImpactFileAccumulator>::new();
     let mut reference_count = 0usize;
+    let mut transitive_reference_count = 0usize;
+    let mut traced_edge_count = 0usize;
+    let mut trace_truncated = false;
+    let mut seen_reference_edges = HashSet::<(String, String, String, u32)>::new();
     let mut symbol_payloads = Vec::new();
 
     for symbol in &target_symbols {
-        impacted.entry(symbol.file_path.clone()).or_insert_with(|| {
-            (
-                90,
-                vec!["Direct edit target".to_string()],
-                vec![serde_json::json!({
-                    "start_line": symbol.range.start.line.saturating_add(1),
-                    "end_line": symbol.range.end.line.saturating_add(1),
-                    "reason": format!("Target symbol `{}`", symbol.name),
-                })],
-            )
-        });
+        let direct_target = impacted.entry(symbol.file_path.clone()).or_default();
+        direct_target.score = direct_target.score.max(100);
+        direct_target.add_reason("Direct edit target".to_string());
+        direct_target.add_range(serde_json::json!({
+            "start_line": symbol.range.start.line.saturating_add(1),
+            "end_line": symbol.range.end.line.saturating_add(1),
+            "reason": format!("Target symbol `{}`", symbol.name),
+        }));
 
         let mut incoming_count = 0usize;
+        let mut transitive_incoming_count = 0usize;
         let mut outgoing_count = 0usize;
         let mut relationship_counts = BTreeMap::<String, usize>::new();
+
+        let remaining_trace_edges = trace_edge_limit.saturating_sub(traced_edge_count);
+        if remaining_trace_edges > 0 {
+            let trace = match service.trace_symbol_graph(
+                symbol,
+                &relationship_types,
+                crate::language_service::SymbolTraceDirection::Incoming,
+                max_depth,
+                remaining_trace_edges.min(200),
+                per_node_limit,
+            ) {
+                Ok(trace) => Some(trace),
+                Err(_) => None,
+            };
+
+            if let Some(trace) = trace {
+                trace_truncated |= trace.truncated;
+                traced_edge_count = traced_edge_count.saturating_add(trace.edges.len());
+                let mut edge_by_source = HashMap::new();
+                for edge in &trace.edges {
+                    edge_by_source
+                        .entry(edge.source_symbol.id.clone())
+                        .or_insert_with(|| edge.clone());
+                }
+
+                for edge in &trace.edges {
+                    let target_id = edge
+                        .target_symbol
+                        .as_ref()
+                        .map(|target| target.id.clone())
+                        .unwrap_or_else(|| edge.target_name.clone());
+                    let key = (
+                        edge.source_symbol.id.clone(),
+                        target_id,
+                        edge.relationship_type.to_string(),
+                        edge.line,
+                    );
+                    if !seen_reference_edges.insert(key) {
+                        continue;
+                    }
+
+                    reference_count += 1;
+                    incoming_count += 1;
+                    if edge.depth > 1 {
+                        transitive_reference_count += 1;
+                        transitive_incoming_count += 1;
+                    }
+                    let relationship_name = edge.relationship_type.to_string();
+                    *relationship_counts
+                        .entry(relationship_name.clone())
+                        .or_default() += 1;
+
+                    let entry = impacted
+                        .entry(edge.source_symbol.file_path.clone())
+                        .or_default();
+                    entry.score = entry.score.max(transitive_impact_score(edge));
+                    entry.add_reason(format!(
+                        "Depth {} incoming {} path to `{}`",
+                        edge.depth, relationship_name, symbol.name
+                    ));
+                    entry.add_range(serde_json::json!({
+                        "start_line": edge.line.saturating_add(1).saturating_sub(8).max(1),
+                        "end_line": edge.line.saturating_add(1).saturating_add(24),
+                        "reason": format!("Depth {} {} impact path", edge.depth, relationship_name),
+                    }));
+                    entry.add_path(build_incoming_impact_path(
+                        &edge.source_symbol.id,
+                        &symbol.id,
+                        &edge_by_source,
+                        max_depth,
+                    ));
+                }
+            }
+        } else {
+            trace_truncated = true;
+        }
 
         for relationship in &relationship_types {
             let graph = match service.get_symbol_graph(symbol, *relationship, limit) {
@@ -5032,42 +5292,8 @@ fn edit_impact_tool<R: tauri::Runtime>(
                 Err(_) => continue,
             };
 
-            for reference in graph.incoming {
-                reference_count += 1;
-                incoming_count += 1;
-                let relationship_name = reference.relationship_type.to_string();
-                *relationship_counts
-                    .entry(relationship_name.clone())
-                    .or_default() += 1;
-                let entry = impacted
-                    .entry(reference.source_symbol.file_path.clone())
-                    .or_insert_with(|| (0, Vec::new(), Vec::new()));
-                entry.0 = entry.0.max(if reference.target_symbol_id.is_some() {
-                    78
-                } else {
-                    62
-                });
-                let reason = format!(
-                    "Incoming {} reference to `{}`",
-                    relationship_name, symbol.name
-                );
-                if !entry.1.iter().any(|existing| existing == &reason) {
-                    entry.1.push(reason);
-                }
-                entry.2.push(serde_json::json!({
-                    "start_line": reference.line.saturating_add(1).saturating_sub(8).max(1),
-                    "end_line": reference.line.saturating_add(1).saturating_add(24),
-                    "reason": format!("{} reference", relationship_name),
-                }));
-            }
-
             for reference in graph.outgoing {
-                reference_count += 1;
-                outgoing_count += 1;
                 let relationship_name = reference.relationship_type.to_string();
-                *relationship_counts
-                    .entry(relationship_name.clone())
-                    .or_default() += 1;
                 let related_path = reference
                     .target_symbol
                     .as_ref()
@@ -5083,27 +5309,49 @@ fn edit_impact_tool<R: tauri::Runtime>(
                 if related_path == symbol.file_path {
                     continue;
                 }
-                let entry = impacted
-                    .entry(related_path.clone())
-                    .or_insert_with(|| (0, Vec::new(), Vec::new()));
-                entry.0 = entry.0.max(if reference.target_symbol_id.is_some() {
-                    70
-                } else {
-                    56
-                });
-                let reason = format!(
+                let target_key = reference
+                    .target_symbol_id
+                    .clone()
+                    .unwrap_or_else(|| reference.target_name.clone());
+                let key = (
+                    reference.source_symbol.id.clone(),
+                    target_key,
+                    relationship_name.clone(),
+                    reference.line,
+                );
+                if !seen_reference_edges.insert(key) {
+                    continue;
+                }
+
+                reference_count += 1;
+                outgoing_count += 1;
+                *relationship_counts
+                    .entry(relationship_name.clone())
+                    .or_default() += 1;
+                let entry = impacted.entry(related_path.clone()).or_default();
+                let confidence = reference.resolution_confidence.unwrap_or(
+                    if reference.target_symbol_id.is_some() {
+                        0.75
+                    } else {
+                        0.4
+                    },
+                );
+                let score = ((impact_relationship_score(reference.relationship_type)
+                    .saturating_sub(10)) as f32
+                    * (0.6 + confidence.clamp(0.0, 1.0) * 0.4))
+                    .round() as u32;
+                entry.score = entry.score.max(score);
+                entry.add_reason(format!(
                     "Outgoing {} dependency from `{}`",
                     relationship_name, symbol.name
-                );
-                if !entry.1.iter().any(|existing| existing == &reason) {
-                    entry.1.push(reason);
-                }
+                ));
             }
         }
 
         symbol_payloads.push(serde_json::json!({
             "symbol": symbol_to_json(symbol),
             "incoming_count": incoming_count,
+            "transitive_incoming_count": transitive_incoming_count,
             "outgoing_count": outgoing_count,
             "relationship_counts": relationship_counts,
         }));
@@ -5111,13 +5359,13 @@ fn edit_impact_tool<R: tauri::Runtime>(
 
     let mut impacted_files = impacted
         .into_iter()
-        .map(|(path, (score, reasons, mut ranges))| {
-            ranges.truncate(6);
+        .map(|(path, impact)| {
             serde_json::json!({
                 "path": path,
-                "score": score,
-                "reasons": reasons,
-                "suggested_ranges": ranges,
+                "score": impact.score,
+                "reasons": impact.reasons,
+                "suggested_ranges": impact.suggested_ranges,
+                "evidence_paths": impact.evidence_paths,
             })
         })
         .collect::<Vec<_>>();
@@ -5142,9 +5390,11 @@ fn edit_impact_tool<R: tauri::Runtime>(
     let risk = impact_risk_level(impacted_files.len(), reference_count, likely_tests.len());
     let confidence = impact_confidence(index_fresh, target_symbols.len(), impacted_files.len());
     let recommended_next_steps = vec![
-        "Read suggested_ranges for high-score impacted files before editing".to_string(),
+        "Read evidence_paths and suggested_ranges for high-score impacted files before editing"
+            .to_string(),
         "Run or inspect likely_tests after the change".to_string(),
-        "Use symbol_references on high-risk symbols if the impact surface is unclear".to_string(),
+        "Increase depth only when the bounded impact paths leave the blast radius unclear"
+            .to_string(),
     ];
     let language_support_path = target_path.as_deref().or_else(|| {
         target_symbols
@@ -5163,6 +5413,9 @@ fn edit_impact_tool<R: tauri::Runtime>(
             "impacted_files": impacted_files,
             "likely_tests": likely_tests,
             "reference_count": reference_count,
+            "transitive_reference_count": transitive_reference_count,
+            "max_depth": max_depth,
+            "trace_truncated": trace_truncated,
             "recommended_next_steps": recommended_next_steps,
         },
         "_meta": {
@@ -5172,6 +5425,10 @@ fn edit_impact_tool<R: tauri::Runtime>(
             "index_health": health,
             "limit": limit,
             "max_symbols": max_symbols,
+            "max_depth": max_depth,
+            "edge_limit": trace_edge_limit,
+            "traced_edge_count": traced_edge_count,
+            "per_node_limit": per_node_limit,
             "relationship_types": relationship_types.iter().map(ToString::to_string).collect::<Vec<_>>(),
             "language_support": language_support_meta_json(language_support_path),
             "truncated_files": impacted_paths.len() >= limit,

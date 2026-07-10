@@ -183,7 +183,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "path": { "type": "string", "description": "File path for resolving by name, or file-wide expansion when no name is provided" },
                         "qualified_name": { "type": "string", "description": "Optional exact qualified name" },
                         "name": { "type": "string", "description": "Optional simple symbol name" },
-                        "relationship": { "type": "string", "description": "Optional single relationship type: call, import, export, extends, implements, contains, usage" },
+                        "relationship": { "type": "string", "description": "Optional single relationship type: call, import, export, extends, implements, contains, usage, uses_type, reads_env, or handles" },
                         "relationships": { "type": "array", "items": { "type": "string" }, "description": "Optional relationship type list" },
                         "limit": { "type": "integer", "description": "Optional max references per relationship type" },
                         "max_symbols": { "type": "integer", "description": "For file-wide expansion, maximum important symbols to expand" }
@@ -198,7 +198,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "edit_impact",
             "function": {
                 "name": "edit_impact",
-                "description": "Analyze likely edit impact before changing a file or symbol, including impacted files, related tests, reference counts, risk, confidence, suggested read ranges, and language_support metadata.",
+                "description": "Analyze likely edit impact before changing a file or symbol. Performs bounded transitive incoming traversal plus direct outgoing dependency analysis, returning evidence paths, impacted files, related tests, risk, confidence, suggested read ranges, and language_support metadata.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -208,7 +208,10 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "qualified_name": { "type": "string", "description": "Optional exact qualified name within path" },
                         "name": { "type": "string", "description": "Optional simple symbol name within path" },
                         "limit": { "type": "integer", "description": "Optional max impacted files and references per relationship" },
-                        "max_symbols": { "type": "integer", "description": "For file-wide impact, maximum important symbols to analyze" }
+                        "max_symbols": { "type": "integer", "description": "For file-wide impact, maximum important symbols to analyze" },
+                        "depth": { "type": "integer", "description": "Incoming impact traversal depth; defaults to 2 and is capped at 4" },
+                        "edge_limit": { "type": "integer", "description": "Total incoming traversal edge budget across target symbols; defaults to 160 and is capped at 400" },
+                        "per_node_limit": { "type": "integer", "description": "Per-node per-relationship expansion cap; defaults to 16 and is capped at 50" }
                     },
                     "required": [],
                     "additionalProperties": false
@@ -220,7 +223,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_graph",
             "function": {
                 "name": "symbol_graph",
-                "description": "Return incoming and outgoing graph edges for one symbol using the local code-intelligence index, including call, import, export, extends, implements, contains, and usage relationships. Returns language_support metadata for the seed file.",
+                "description": "Return incoming and outgoing graph edges for one symbol using the local code-intelligence index, including call, import, export, extends, implements, contains, usage, type-use, environment-read, and route-handler relationships. Returns language_support metadata for the seed file.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -229,7 +232,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "path": { "type": "string", "description": "Optional file path when resolving by name" },
                         "qualified_name": { "type": "string", "description": "Optional exact qualified name" },
                         "name": { "type": "string", "description": "Optional simple symbol name" },
-                        "relationship_type": { "type": "string", "description": "Optional edge kind: call, import, export, extends, implements, contains, or usage" },
+                        "relationship_type": { "type": "string", "description": "Optional edge kind: call, import, export, extends, implements, contains, usage, uses_type, reads_env, or handles" },
                         "limit": { "type": "integer", "description": "Optional max incoming/outgoing edges" }
                     },
                     "required": [],
@@ -443,7 +446,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "qualified_name": { "type": "string", "description": "Optional exact qualified name" },
                         "name": { "type": "string", "description": "Optional simple symbol name" },
                         "direction": { "type": "string", "description": "incoming, outgoing, or both; defaults to both" },
-                        "relationship_type": { "type": "string", "description": "Optional single edge kind: call, import, export, extends, implements, contains, or usage" },
+                        "relationship_type": { "type": "string", "description": "Optional single edge kind: call, import, export, extends, implements, contains, usage, uses_type, reads_env, or handles" },
                         "relationships": { "type": "array", "items": { "type": "string" }, "description": "Optional edge kind list" },
                         "depth": { "type": "integer", "description": "Optional traversal depth, capped at 4" },
                         "edge_limit": { "type": "integer", "description": "Optional total edge cap, capped at 200" },
