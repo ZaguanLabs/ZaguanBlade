@@ -10,7 +10,6 @@ use crate::warmup;
 use crate::workspace_manager::WorkspaceManager;
 use crate::worktree::WorktreeStore;
 use crate::ws_connection_manager::WsConnectionManager;
-use dotenvy::dotenv;
 use notify::RecommendedWatcher;
 use std::path::Path;
 use std::path::PathBuf;
@@ -87,9 +86,6 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(initial_path: Option<String>) -> Self {
-        // Load environment variables from .env file
-        dotenv().ok();
-
         // Load config from disk
         let config_path = config::default_api_config_path();
         let mut config = config::load_api_config(&config_path);
