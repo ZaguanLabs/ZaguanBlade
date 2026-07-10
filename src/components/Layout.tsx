@@ -1149,6 +1149,9 @@ const AppLayoutInner: React.FC = () => {
     };
 
     // Close the sidebar when clicking anywhere outside the sidebar panel and activity bar.
+    // Ignores clicks inside the context-menu portal so that right-click actions
+    // (e.g. creating a new file/folder) don't close the sidebar before the
+    // menu item's onClick fires.
     useEffect(() => {
         if (!isSidebarOpen) return;
         const handlePointerDown = (event: PointerEvent) => {
@@ -1156,6 +1159,7 @@ const AppLayoutInner: React.FC = () => {
             if (!target) return;
             if (sidebarRef.current?.contains(target)) return;
             if (activityBarRef.current?.contains(target)) return;
+            if (target instanceof Element && target.closest('[data-context-menu]')) return;
             setIsSidebarOpen(false);
         };
         document.addEventListener('pointerdown', handlePointerDown, true);

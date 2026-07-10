@@ -186,6 +186,7 @@ const ContextMenuPortal: React.FC = () => {
         <div
             ref={menuRef}
             role="menu"
+            data-context-menu
             tabIndex={-1}
             aria-label={t('contextMenu.label')}
             aria-activedescendant={activeDescendantId}
