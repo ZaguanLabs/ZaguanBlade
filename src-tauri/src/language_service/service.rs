@@ -5083,6 +5083,217 @@ impl LanguageService {
         })
     }
 
+    pub fn find_symbol_path(
+        &self,
+        source: &Symbol,
+        target: &Symbol,
+        relationship_types: &[SymbolRelationshipType],
+        direction: SymbolTraceDirection,
+        max_hops: usize,
+        edge_limit: usize,
+        per_node_limit: usize,
+        min_confidence: f32,
+    ) -> Result<SymbolPath, LanguageError> {
+        let max_hops = max_hops.clamp(1, 8);
+        let edge_limit = edge_limit.clamp(1, 500);
+        let per_node_limit = per_node_limit.clamp(1, 50);
+        let min_confidence = min_confidence.clamp(0.0, 1.0);
+        let mut frontier = vec![PathCandidate {
+            cost: 0,
+            symbol: source.clone(),
+            edges: Vec::new(),
+        }];
+        let mut best_cost = HashMap::from([(source.id.clone(), 0u32)]);
+        let mut seen_edges = HashSet::new();
+        let mut considered_edges = 0usize;
+        let mut truncated = false;
+
+        while !frontier.is_empty() {
+            let next_index = frontier
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, candidate)| (candidate.cost, candidate.edges.len()))
+                .map(|(index, _)| index)
+                .unwrap_or(0);
+            let candidate = frontier.swap_remove(next_index);
+
+            if candidate.symbol.id == target.id {
+                return Ok(SymbolPath {
+                    source: source.clone(),
+                    target: target.clone(),
+                    edges: candidate.edges,
+                    total_cost: candidate.cost,
+                    visited_nodes: best_cost.len(),
+                    considered_edges,
+                    truncated,
+                });
+            }
+            if candidate.edges.len() >= max_hops {
+                continue;
+            }
+            if candidate.cost
+                > best_cost
+                    .get(&candidate.symbol.id)
+                    .copied()
+                    .unwrap_or(u32::MAX)
+            {
+                continue;
+            }
+
+            for relationship_type in relationship_types {
+                if considered_edges >= edge_limit {
+                    truncated = true;
+                    break;
+                }
+                let graph =
+                    self.get_symbol_graph(&candidate.symbol, *relationship_type, per_node_limit)?;
+                if graph.incoming.len() >= per_node_limit || graph.outgoing.len() >= per_node_limit
+                {
+                    truncated = true;
+                }
+
+                if direction.includes_incoming() {
+                    for reference in graph.incoming {
+                        if considered_edges >= edge_limit {
+                            truncated = true;
+                            break;
+                        }
+                        considered_edges += 1;
+                        let resolved = Self::trace_reference_is_resolved(&reference);
+                        let confidence = Self::reference_effective_confidence(&reference, resolved);
+                        if confidence < min_confidence {
+                            continue;
+                        }
+                        let edge_key = (
+                            reference.source_symbol.id.clone(),
+                            candidate.symbol.id.clone(),
+                            reference.relationship_type,
+                            reference.line,
+                        );
+                        if !seen_edges.insert(edge_key) {
+                            continue;
+                        }
+                        let edge_cost = Self::symbol_path_edge_cost(
+                            reference.relationship_type,
+                            confidence,
+                            reference.observation_kind,
+                        );
+                        let total_cost = candidate.cost.saturating_add(edge_cost);
+                        let neighbor = reference.source_symbol.clone();
+                        if total_cost >= best_cost.get(&neighbor.id).copied().unwrap_or(u32::MAX) {
+                            continue;
+                        }
+                        best_cost.insert(neighbor.id.clone(), total_cost);
+                        let mut edges = candidate.edges.clone();
+                        edges.push(SymbolPathEdge::from_reference(
+                            &reference,
+                            Some(candidate.symbol.clone()),
+                            SymbolTraceDirection::Incoming,
+                            confidence,
+                            edge_cost,
+                        ));
+                        frontier.push(PathCandidate {
+                            cost: total_cost,
+                            symbol: neighbor,
+                            edges,
+                        });
+                    }
+                }
+
+                if direction.includes_outgoing() {
+                    for reference in graph.outgoing {
+                        if considered_edges >= edge_limit {
+                            truncated = true;
+                            break;
+                        }
+                        considered_edges += 1;
+                        let resolved = Self::trace_reference_is_resolved(&reference);
+                        let confidence = Self::reference_effective_confidence(&reference, resolved);
+                        if confidence < min_confidence {
+                            continue;
+                        }
+                        let Some(neighbor) = reference.target_symbol.clone() else {
+                            continue;
+                        };
+                        let edge_key = (
+                            reference.source_symbol.id.clone(),
+                            neighbor.id.clone(),
+                            reference.relationship_type,
+                            reference.line,
+                        );
+                        if !seen_edges.insert(edge_key) {
+                            continue;
+                        }
+                        let edge_cost = Self::symbol_path_edge_cost(
+                            reference.relationship_type,
+                            confidence,
+                            reference.observation_kind,
+                        );
+                        let total_cost = candidate.cost.saturating_add(edge_cost);
+                        if total_cost >= best_cost.get(&neighbor.id).copied().unwrap_or(u32::MAX) {
+                            continue;
+                        }
+                        best_cost.insert(neighbor.id.clone(), total_cost);
+                        let mut edges = candidate.edges.clone();
+                        edges.push(SymbolPathEdge::from_reference(
+                            &reference,
+                            Some(neighbor.clone()),
+                            SymbolTraceDirection::Outgoing,
+                            confidence,
+                            edge_cost,
+                        ));
+                        frontier.push(PathCandidate {
+                            cost: total_cost,
+                            symbol: neighbor,
+                            edges,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(SymbolPath {
+            source: source.clone(),
+            target: target.clone(),
+            edges: Vec::new(),
+            total_cost: 0,
+            visited_nodes: best_cost.len(),
+            considered_edges,
+            truncated,
+        })
+    }
+
+    fn reference_effective_confidence(reference: &SymbolReference, resolved: bool) -> f32 {
+        reference
+            .resolution_confidence
+            .unwrap_or(if resolved { 0.75 } else { 0.0 })
+            .clamp(0.0, 1.0)
+    }
+
+    fn symbol_path_edge_cost(
+        relationship_type: SymbolRelationshipType,
+        confidence: f32,
+        observation_kind: RelationshipObservationKind,
+    ) -> u32 {
+        let relation_cost = match relationship_type {
+            SymbolRelationshipType::Handles => 5,
+            SymbolRelationshipType::Extends | SymbolRelationshipType::Implements => 7,
+            SymbolRelationshipType::Call => 10,
+            SymbolRelationshipType::Usage => 12,
+            SymbolRelationshipType::UsesType => 14,
+            SymbolRelationshipType::Export => 16,
+            SymbolRelationshipType::Import => 18,
+            SymbolRelationshipType::Contains => 24,
+            SymbolRelationshipType::ReadsEnv => 30,
+        };
+        let confidence_penalty = ((1.0 - confidence.clamp(0.0, 1.0)) * 20.0).round() as u32;
+        let observation_penalty = match observation_kind {
+            RelationshipObservationKind::SyntaxExtracted => 0,
+            RelationshipObservationKind::IndexStructural => 6,
+        };
+        relation_cost + confidence_penalty + observation_penalty
+    }
+
     fn trace_reference_is_resolved(reference: &SymbolReference) -> bool {
         reference.target_symbol_id.is_some()
             || reference.target_symbol.is_some()
@@ -6007,6 +6218,66 @@ pub struct SymbolTraceEdge {
     pub resolution_confidence: Option<f32>,
     pub receiver_type: Option<String>,
     pub receiver_is_self: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SymbolPath {
+    pub source: Symbol,
+    pub target: Symbol,
+    pub edges: Vec<SymbolPathEdge>,
+    pub total_cost: u32,
+    pub visited_nodes: usize,
+    pub considered_edges: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SymbolPathEdge {
+    pub source_symbol: Symbol,
+    pub target_symbol: Option<Symbol>,
+    pub target_name: String,
+    pub relationship_type: SymbolRelationshipType,
+    pub traversal_direction: SymbolTraceDirection,
+    pub line: u32,
+    pub observation_kind: RelationshipObservationKind,
+    pub resolution_strategy: Option<String>,
+    pub resolution_confidence: Option<f32>,
+    pub receiver_type: Option<String>,
+    pub receiver_is_self: bool,
+    pub effective_confidence: f32,
+    pub cost: u32,
+}
+
+impl SymbolPathEdge {
+    fn from_reference(
+        reference: &SymbolReference,
+        target_symbol: Option<Symbol>,
+        traversal_direction: SymbolTraceDirection,
+        effective_confidence: f32,
+        cost: u32,
+    ) -> Self {
+        Self {
+            source_symbol: reference.source_symbol.clone(),
+            target_symbol,
+            target_name: reference.target_name.clone(),
+            relationship_type: reference.relationship_type,
+            traversal_direction,
+            line: reference.line,
+            observation_kind: reference.observation_kind,
+            resolution_strategy: reference.resolution_strategy.clone(),
+            resolution_confidence: reference.resolution_confidence,
+            receiver_type: reference.receiver_type.clone(),
+            receiver_is_self: reference.receiver_is_self,
+            effective_confidence,
+            cost,
+        }
+    }
+}
+
+struct PathCandidate {
+    cost: u32,
+    symbol: Symbol,
+    edges: Vec<SymbolPathEdge>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15678,6 +15949,74 @@ metadata:
                     == Some("leaf")
                 && edge.depth == 2
         }));
+    }
+
+    #[test]
+    fn symbol_path_finds_confidence_weighted_multihop_route() {
+        let (service, temp_dir) = create_test_service();
+
+        fs::write(
+            temp_dir.path().join("path.ts"),
+            "export function leaf() {}\nexport function middle() { leaf(); }\nexport function root() { middle(); }\n",
+        )
+        .unwrap();
+        service.index_file("path.ts").unwrap();
+        let symbols = service.get_file_symbols("path.ts").unwrap();
+        let root = symbols.iter().find(|symbol| symbol.name == "root").unwrap();
+        let leaf = symbols.iter().find(|symbol| symbol.name == "leaf").unwrap();
+
+        let path = service
+            .find_symbol_path(
+                root,
+                leaf,
+                &[SymbolRelationshipType::Call],
+                SymbolTraceDirection::Outgoing,
+                4,
+                40,
+                10,
+                0.5,
+            )
+            .unwrap();
+
+        assert_eq!(path.edges.len(), 2);
+        assert_eq!(path.edges[0].source_symbol.name, "root");
+        assert_eq!(
+            path.edges[0]
+                .target_symbol
+                .as_ref()
+                .map(|symbol| symbol.name.as_str()),
+            Some("middle")
+        );
+        assert_eq!(
+            path.edges[1]
+                .target_symbol
+                .as_ref()
+                .map(|symbol| symbol.name.as_str()),
+            Some("leaf")
+        );
+        assert!(path.total_cost > 0);
+    }
+
+    #[test]
+    fn symbol_path_cost_penalizes_uncertain_and_structural_edges() {
+        let exact_call = LanguageService::symbol_path_edge_cost(
+            SymbolRelationshipType::Call,
+            1.0,
+            RelationshipObservationKind::SyntaxExtracted,
+        );
+        let uncertain_call = LanguageService::symbol_path_edge_cost(
+            SymbolRelationshipType::Call,
+            0.5,
+            RelationshipObservationKind::SyntaxExtracted,
+        );
+        let structural = LanguageService::symbol_path_edge_cost(
+            SymbolRelationshipType::Contains,
+            1.0,
+            RelationshipObservationKind::IndexStructural,
+        );
+
+        assert!(exact_call < uncertain_call);
+        assert!(uncertain_call < structural);
     }
 
     #[test]

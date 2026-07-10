@@ -42,7 +42,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "fast_context",
             "function": {
                 "name": "fast_context",
-                "description": "Plan broad or uncertain code tasks before reading many files. Returns targeted symbol-aware context: structured project context, ranked primary files, enriched symbol and semantic-anchor metadata, language-support capability metadata, compact index schema summary, indexed Markdown sections, related files, optional impact hints, index health, confidence, suggested read ranges, and next steps. Legacy project-index Markdown is excluded unless explicitly requested for fallback compatibility.",
+                "description": "Plan broad or uncertain code tasks before reading many files. Returns targeted symbol-aware context: structured project context, a bounded confidence-filtered graph neighborhood, ranked primary files, enriched symbol and semantic-anchor metadata, language-support capability metadata, compact index schema summary, indexed Markdown sections, related files, optional impact hints, index health, confidence, suggested read ranges, and next steps. Legacy project-index Markdown is excluded unless explicitly requested for fallback compatibility.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -54,6 +54,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "include_tests": { "type": "boolean", "description": "Whether to include likely tests" },
                         "include_docs": { "type": "boolean", "description": "Whether to include related docs" },
                         "include_memory": { "type": "boolean", "description": "Whether to include local project memories" },
+                        "include_graph_context": { "type": "boolean", "description": "Whether to include a bounded connected symbol subgraph; defaults to true" },
                         "include_project_index_min": { "type": "boolean", "description": "Legacy fallback only. When true, include project_index_min Markdown if available. Defaults to false." }
                     },
                     "required": ["query"],
@@ -459,6 +460,64 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         serde_json::json!({
             "type": "function",
+            "name": "symbol_path",
+            "function": {
+                "name": "symbol_path",
+                "description": "Find the lowest-cost bounded path between two symbols. Path cost favors strong relationship types, syntax evidence, and high-confidence target resolution. Ambiguous endpoints are rejected instead of guessed.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "source": { "type": "string", "description": "Source symbol name or qualified name; use an explicit selector when ambiguous" },
+                        "source_symbol_id": { "type": "string", "description": "Exact source stable symbol ID" },
+                        "source_path": { "type": "string", "description": "Source file path used with source_name or source_qualified_name" },
+                        "source_name": { "type": "string", "description": "Source simple name within source_path" },
+                        "source_qualified_name": { "type": "string", "description": "Source qualified name within source_path" },
+                        "target": { "type": "string", "description": "Target symbol name or qualified name; use an explicit selector when ambiguous" },
+                        "target_symbol_id": { "type": "string", "description": "Exact target stable symbol ID" },
+                        "target_path": { "type": "string", "description": "Target file path used with target_name or target_qualified_name" },
+                        "target_name": { "type": "string", "description": "Target simple name within target_path" },
+                        "target_qualified_name": { "type": "string", "description": "Target qualified name within target_path" },
+                        "direction": { "type": "string", "description": "outgoing, incoming, or both; defaults to both" },
+                        "relationships": { "type": "array", "items": { "type": "string" }, "description": "Optional relationship kinds" },
+                        "max_hops": { "type": "integer", "description": "Maximum path length; defaults to 6 and is capped at 8" },
+                        "edge_limit": { "type": "integer", "description": "Search edge budget; defaults to 300 and is capped at 500" },
+                        "per_node_limit": { "type": "integer", "description": "Per-node expansion cap; defaults to 20 and is capped at 50" },
+                        "min_confidence": { "type": "number", "description": "Minimum effective edge confidence from 0 to 1; defaults to 0.5" }
+                    },
+                    "required": [],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
+            "name": "symbol_query",
+            "function": {
+                "name": "symbol_query",
+                "description": "Return a compact connected symbol subgraph for a natural-language code question. Uses ranked lexical seeds, bounded traversal, confidence filtering, and explicit node/edge/token budgets.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Codebase question or investigation task" },
+                        "direction": { "type": "string", "description": "incoming, outgoing, or both; defaults to both" },
+                        "relationships": { "type": "array", "items": { "type": "string" }, "description": "Optional relationship kinds" },
+                        "depth": { "type": "integer", "description": "Traversal depth; defaults to 2 and is capped at 4" },
+                        "max_seeds": { "type": "integer", "description": "Maximum ranked seed symbols; defaults to 3 and is capped at 5" },
+                        "node_limit": { "type": "integer", "description": "Maximum returned nodes before token-budget adjustment; capped at 200" },
+                        "edge_limit": { "type": "integer", "description": "Maximum returned edges before token-budget adjustment; capped at 300" },
+                        "per_node_limit": { "type": "integer", "description": "Per-node expansion cap; defaults to 16 and is capped at 50" },
+                        "min_confidence": { "type": "number", "description": "Minimum effective edge confidence from 0 to 1; defaults to 0.5" },
+                        "token_budget": { "type": "integer", "description": "Approximate output token budget; defaults to 2000, minimum 400, cap 8000" }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
             "name": "symbol_schema",
             "function": {
                 "name": "symbol_schema",
@@ -652,6 +711,18 @@ mod tests {
         assert!(names.contains(&"read_many_files"));
         assert!(names.contains(&"batch"));
         assert!(names.contains(&"codebase_investigator"));
+    }
+
+    #[test]
+    fn includes_confidence_aware_graph_navigation_definitions() {
+        let defs = get_tool_definitions();
+        let names = defs
+            .iter()
+            .filter_map(|value| value.get("name").and_then(|value| value.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"symbol_path"));
+        assert!(names.contains(&"symbol_query"));
     }
 
     #[test]

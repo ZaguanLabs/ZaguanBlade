@@ -171,7 +171,8 @@ fn zblade_workflow_guidance() -> &'static str {
 - For user requests that ask you to inspect, update, edit, fix, create, rename, delete, or run project files/commands, use the provided tools immediately. Do not answer only that you are ready or ask what to do next.
 - For file edits, first inspect the relevant file/context with tools, then call `apply_patch` or `write_file` with absolute paths.
 - For broad, ambiguous, multi-file, or unfamiliar tasks, call `fast_context` before reading many files or editing. Use its `confidence`, `index_health`, `project_context`, `suggested_ranges`, `enriched_files`, `related_files`, `related_docs`, and optional `impact` hints to plan the next reads.
-- If `fast_context` returns low confidence or stale/degraded index health, do a second targeted `symbol_search`, `symbol_related`, `semantic_anchor_search`, or read the suggested ranges before editing.
+- If `fast_context` returns low confidence or stale/degraded index health, do a second targeted `symbol_search`, `symbol_related`, `symbol_query`, `semantic_anchor_search`, or read the suggested ranges before editing.
+- Use `symbol_path` when a task depends on explaining the strongest indexed route between two known symbols; treat its confidence, provenance, and truncation metadata as part of the result.
 - Treat project-index tools as legacy fallback only; prefer `fast_context` for first-pass orientation.
 - Before larger edits, refactors, public API changes, or changes to files with likely callers, inspect `fast_context.impact`; call `edit_impact` on the target file or symbol when deeper blast-radius analysis is needed. Inspect impacted files and likely tests before applying patches.
 - Prefer reading only the suggested ranges first. Expand to full files only when the ranges are insufficient.

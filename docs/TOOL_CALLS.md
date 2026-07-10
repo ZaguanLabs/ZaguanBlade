@@ -330,7 +330,10 @@ These tools require the language service and local code index to be available.
 
 ### `fast_context`
 
-Plans broad or uncertain code tasks and returns targeted context, ranked files, symbol and semantic-anchor metadata, related files, index health, language-support metadata, a compact index schema summary, confidence, suggested ranges, and next steps.
+Plans broad or uncertain code tasks and returns targeted context, a bounded confidence-filtered
+symbol subgraph, ranked files, symbol and semantic-anchor metadata, related files, index health,
+language-support metadata, a compact index schema summary, confidence, suggested ranges, and next
+steps.
 
 Parameters:
 
@@ -343,6 +346,7 @@ Parameters:
 | `include_tests` | boolean | No |
 | `include_docs` | boolean | No |
 | `include_memory` | boolean | No |
+| `include_graph_context` | boolean | No; defaults to `true` |
 | `include_project_index_min` | boolean | No |
 
 ### `symbol_search`
@@ -493,7 +497,28 @@ Parameters:
 | `edge_limit` | integer | No, capped at `200`; alias `limit` |
 | `per_node_limit` | integer | No, capped at `50` |
 
-Relationship types include `call`, `import`, `export`, `extends`, `implements`, `contains`, and `usage`.
+Relationship types include `call`, `import`, `export`, `extends`, `implements`, `contains`,
+`usage`, `uses_type`, `reads_env`, and `handles`.
+
+### `symbol_path`
+
+Finds the lowest-cost bounded path between two symbols. Costs favor stronger relationship kinds,
+syntax-extracted observations, and confidently resolved targets. Ambiguous name-only endpoints are
+rejected with candidate guidance instead of being guessed.
+
+Endpoints can be provided as `source` / `target` search strings, stable IDs, or path-plus-name
+selectors. Optional controls include `direction`, `relationships`, `max_hops` (cap `8`),
+`edge_limit` (cap `500`), `per_node_limit` (cap `50`), and `min_confidence`.
+
+### `symbol_query`
+
+Returns a compact connected subgraph for a natural-language codebase question. It combines ranked
+lexical seeds with bounded graph traversal, filters low-confidence edges, and observes explicit
+node, edge, and approximate token budgets.
+
+Parameters include `query`, `direction`, `relationships`, `depth` (cap `4`), `max_seeds` (cap `5`),
+`node_limit` (cap `200`), `edge_limit` (cap `300`), `per_node_limit` (cap `50`),
+`min_confidence`, and `token_budget` (default `2000`, cap `8000`).
 
 ### `symbol_schema`
 

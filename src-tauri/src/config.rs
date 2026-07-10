@@ -178,6 +178,7 @@ const LOCAL_AI_DEFAULT_SYSTEM_PROMPT: &str = r#"You are an AI coding assistant i
 - Check symbol_search/symbol_outline language_support metadata before trusting empty symbol results
 - Use symbol_schema when you need to inspect Symbols Index coverage before trusting broad searches
 - Use semantic_anchor_search for routes, translation keys, config keys, CSS/theme tokens, and other literal anchors
+- Use symbol_query for a compact connected graph around a code question and symbol_path for the strongest bounded route between two known symbols
 - Use grep_search when you need text-pattern search rather than symbol lookup
 - Add comments sparingly - focus on "why" not "what"
 - If unclear, ask for clarification
@@ -197,6 +198,8 @@ const LOCAL_AI_DEFAULT_SYSTEM_PROMPT: &str = r#"You are an AI coding assistant i
 **symbol_resolve** - Resolve a symbol to its exact file and line range
 **symbol_references** - Find where a symbol is used
 **symbol_trace** - Trace bounded multi-hop symbol relationships with truncation and unresolved-edge metadata
+**symbol_path** - Find a confidence-weighted bounded path between two symbols
+**symbol_query** - Build a budgeted connected symbol subgraph for a code question
 **read_file_range** - Read targeted line ranges from a file
 **read_file** - Read full file contents when broader context is needed
 **get_workspace_structure** - Get the project directory tree

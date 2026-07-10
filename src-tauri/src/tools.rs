@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -46,6 +46,21 @@ fn get_bounded_usize_arg(
         }
     }
     default
+}
+
+fn get_bounded_f32_arg(
+    args: &HashMap<String, serde_json::Value>,
+    keys: &[&str],
+    default: f32,
+    min: f32,
+    max: f32,
+) -> f32 {
+    for key in keys {
+        if let Some(value) = args.get(*key).and_then(serde_json::Value::as_f64) {
+            return (value as f32).clamp(min, max);
+        }
+    }
+    default.clamp(min, max)
 }
 
 fn get_optional_bounded_usize_arg(
@@ -182,6 +197,8 @@ fn is_batch_read_only_tool(tool_name: &str) -> bool {
         | "edit_impact"
         | "symbol_graph"
         | "symbol_trace"
+        | "symbol_path"
+        | "symbol_query"
         | "symbol_schema"
         | "symbol_outline"
         | "read_file"
@@ -1069,6 +1086,54 @@ mod tests {
         assert_eq!(path[0]["from"]["name"], "caller");
         assert_eq!(path[0]["to"]["name"], "middle");
         assert_eq!(path[1]["to"]["name"], "seed");
+    }
+
+    #[test]
+    fn symbol_query_context_is_connected_confidence_filtered_and_budgeted() {
+        let temp_dir = tempdir().unwrap();
+        fs::write(
+            temp_dir.path().join("query.ts"),
+            "export function leaf() {}\nexport function middle() { leaf(); }\nexport function root() { middle(); }\n",
+        )
+        .unwrap();
+        let store = std::sync::Arc::new(
+            crate::symbol_index::SymbolStore::in_memory().expect("in-memory symbol store"),
+        );
+        let service =
+            crate::language_service::LanguageService::new(temp_dir.path().to_path_buf(), store)
+                .unwrap();
+        service.index_file("query.ts").unwrap();
+
+        let payload = build_symbol_query_context(
+            &service,
+            "root call flow",
+            &[crate::tree_sitter::SymbolRelationshipType::Call],
+            crate::language_service::SymbolTraceDirection::Outgoing,
+            2,
+            50,
+            50,
+            10,
+            1,
+            0.5,
+            1_000,
+        )
+        .unwrap();
+
+        assert_eq!(payload["summary"]["seed_count"], 1);
+        assert!(payload["summary"]["edge_count"].as_u64().unwrap_or(0) >= 1);
+        assert!(payload["summary"]["node_count"].as_u64().unwrap_or(0) >= 2);
+        assert!(
+            payload["summary"]["edge_count"].as_u64().unwrap_or(0)
+                <= payload["budget"]["edge_limit"].as_u64().unwrap_or(0)
+        );
+        assert!(payload["edges"]
+            .as_array()
+            .is_some_and(|edges| edges.iter().all(|edge| {
+                edge["resolution"]["confidence_score"]
+                    .as_f64()
+                    .unwrap_or(0.0)
+                    >= 0.5
+            })));
     }
 
     #[test]
@@ -2200,6 +2265,8 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "edit_impact" => edit_impact_tool(workspace_root, &args, app_handle),
         "symbol_graph" => symbol_graph_tool(workspace_root, &args, app_handle),
         "symbol_trace" => symbol_trace_tool(workspace_root, &args, app_handle),
+        "symbol_path" => symbol_path_tool(workspace_root, &args, app_handle),
+        "symbol_query" => symbol_query_tool(workspace_root, &args, app_handle),
         "symbol_schema" => symbol_schema_tool(&args, app_handle),
         "symbol_outline" => symbol_outline_tool(workspace_root, &args, app_handle),
         "read_file_range" => read_file_range(workspace_root, &args),
@@ -3103,6 +3170,28 @@ fn fast_context_tool(
         &request,
     );
     let mut payload = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
+    if get_bool_arg(args, &["include_graph_context"], true) {
+        payload["graph_context"] =
+            crate::context_pack::language_service_for_workspace(workspace_root)
+                .ok()
+                .and_then(|service| {
+                    build_symbol_query_context(
+                        &service,
+                        &request.query,
+                        &relationship_type_values(),
+                        crate::language_service::SymbolTraceDirection::Both,
+                        2,
+                        60,
+                        48,
+                        12,
+                        2,
+                        0.5,
+                        1_000,
+                    )
+                    .ok()
+                })
+                .unwrap_or(serde_json::Value::Null);
+    }
     payload["_meta"] = serde_json::json!({
         "tool": "fast_context",
         "language_support": language_support_meta_json(active_file.as_deref()),
@@ -4038,6 +4127,67 @@ fn symbol_trace_edge_to_json(edge: &crate::language_service::SymbolTraceEdge) ->
     })
 }
 
+fn symbol_path_edge_to_json(edge: &crate::language_service::SymbolPathEdge) -> serde_json::Value {
+    serde_json::json!({
+        "source_symbol": symbol_to_json(&edge.source_symbol),
+        "target_symbol": edge.target_symbol.as_ref().map(symbol_to_json),
+        "target_name": edge.target_name,
+        "relationship_type": edge.relationship_type.to_string(),
+        "traversal_direction": edge.traversal_direction.as_str(),
+        "line": edge.line,
+        "cost": edge.cost,
+        "effective_confidence": edge.effective_confidence,
+        "observation": relationship_observation_json(
+            edge.observation_kind,
+            &edge.source_symbol.file_path,
+            edge.line,
+        ),
+        "resolution": relationship_resolution_json(
+            edge.resolution_strategy.as_deref(),
+            edge.resolution_confidence,
+            edge.target_symbol.is_some(),
+            edge.relationship_type,
+            edge.receiver_type.as_deref(),
+            edge.receiver_is_self,
+        ),
+    })
+}
+
+fn symbol_query_edge_to_json(
+    edge: &crate::language_service::SymbolTraceEdge,
+    seed_id: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "seed_id": seed_id,
+        "source_symbol_id": edge.source_symbol.id,
+        "target_symbol_id": edge.target_symbol.as_ref().map(|symbol| symbol.id.as_str()),
+        "target_name": edge.target_name,
+        "relationship_type": edge.relationship_type.to_string(),
+        "traversal_direction": edge.direction.as_str(),
+        "depth": edge.depth,
+        "line": edge.line,
+        "observation": relationship_observation_json(
+            edge.observation_kind,
+            &edge.source_symbol.file_path,
+            edge.line,
+        ),
+        "resolution": relationship_resolution_json(
+            edge.resolution_strategy.as_deref(),
+            edge.resolution_confidence,
+            edge.resolved,
+            edge.relationship_type,
+            edge.receiver_type.as_deref(),
+            edge.receiver_is_self,
+        ),
+    })
+}
+
+fn trace_edge_effective_confidence(edge: &crate::language_service::SymbolTraceEdge) -> f32 {
+    edge.resolution_confidence
+        .unwrap_or(if edge.resolved { 0.75 } else { 0.0 })
+        .clamp(0.0, 1.0)
+}
+
 fn related_symbol_to_json(related: &crate::language_service::RelatedSymbol) -> serde_json::Value {
     serde_json::json!({
         "symbol": symbol_to_json(&related.symbol),
@@ -4387,6 +4537,77 @@ fn resolve_symbol_from_graph_args(
                 .map(|value| &symbol.name == value)
                 .unwrap_or(false)
     }))
+}
+
+fn resolve_symbol_path_endpoint(
+    workspace_root: &Path,
+    service: &crate::language_service::LanguageService,
+    args: &HashMap<String, serde_json::Value>,
+    prefix: &str,
+) -> Result<crate::tree_sitter::Symbol, String> {
+    let mut endpoint_args = HashMap::new();
+    for (suffix, generic) in [
+        ("symbol_id", "symbol_id"),
+        ("path", "path"),
+        ("file_path", "file_path"),
+        ("qualified_name", "qualified_name"),
+        ("name", "name"),
+    ] {
+        if let Some(value) = args.get(&format!("{prefix}_{suffix}")) {
+            endpoint_args.insert(generic.to_string(), value.clone());
+        }
+    }
+
+    if !endpoint_args.is_empty() {
+        return resolve_symbol_from_graph_args(workspace_root, service, &endpoint_args)?
+            .ok_or_else(|| format!("{prefix} symbol not found"));
+    }
+
+    let query = get_str_arg(args, &[prefix])
+        .ok_or_else(|| format!("symbol_path requires a {prefix} selector"))?;
+    let results = service
+        .search_symbols_filtered(&query, None, None, 8)
+        .map_err(|error| error.to_string())?;
+    if results.is_empty() {
+        return Err(format!("no {prefix} symbol matches `{query}`"));
+    }
+
+    let exact = results
+        .iter()
+        .filter(|result| {
+            result.symbol.name.eq_ignore_ascii_case(&query)
+                || result.symbol.qualified_name.eq_ignore_ascii_case(&query)
+        })
+        .collect::<Vec<_>>();
+    if exact.len() == 1 {
+        return Ok(exact[0].symbol.clone());
+    }
+
+    let ambiguous = if exact.len() > 1 {
+        exact
+    } else {
+        let runner_up_is_close = results
+            .get(1)
+            .is_some_and(|runner_up| (results[0].score - runner_up.score).abs() < 0.12);
+        if results.len() == 1 || !runner_up_is_close && results[0].score >= 0.8 {
+            return Ok(results[0].symbol.clone());
+        }
+        results.iter().collect::<Vec<_>>()
+    };
+    let candidates = ambiguous
+        .into_iter()
+        .take(5)
+        .map(|result| {
+            format!(
+                "{} ({}) in {}",
+                result.symbol.qualified_name, result.symbol.symbol_type, result.symbol.file_path
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "ambiguous {prefix} symbol `{query}`; use {prefix}_symbol_id or {prefix}_path with {prefix}_name. Candidates: {candidates}"
+    ))
 }
 
 fn compact_outline_nodes_for_parent(
@@ -5149,7 +5370,7 @@ fn edit_impact_tool<R: tauri::Runtime>(
     let started = Instant::now();
     let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
     let max_symbols = get_bounded_usize_arg(args, &["max_symbols"], 24, 100);
-    let max_depth = get_bounded_usize_arg(args, &["depth", "max_depth"], 2, 4);
+    let max_depth = get_bounded_usize_arg(args, &["depth", "max_depth"], 2, 4).max(1);
     let trace_edge_limit = get_bounded_usize_arg(args, &["edge_limit"], 160, 400);
     let per_node_limit = get_bounded_usize_arg(args, &["per_node_limit"], 16, 50);
     let relationship_types = relationship_type_values();
@@ -5541,6 +5762,369 @@ fn symbol_trace_tool<R: tauri::Runtime>(
             "edge_limit": edge_limit,
             "per_node_limit": per_node_limit,
         }
+    });
+    ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+struct SymbolQuerySeed {
+    symbol: crate::tree_sitter::Symbol,
+    score: f32,
+    matched_terms: BTreeSet<String>,
+}
+
+struct SymbolQueryNode {
+    symbol: crate::tree_sitter::Symbol,
+    depth: usize,
+    seed_ids: BTreeSet<String>,
+}
+
+fn collect_symbol_query_seeds(
+    service: &crate::language_service::LanguageService,
+    query: &str,
+    max_seeds: usize,
+) -> Result<Vec<SymbolQuerySeed>, String> {
+    let mut terms = vec![query.to_string()];
+    terms.extend(extract_objective_keywords(query));
+    terms.truncate(9);
+    let mut seeds = HashMap::<String, SymbolQuerySeed>::new();
+
+    for (term_index, term) in terms.iter().enumerate() {
+        let results = service
+            .search_symbols_filtered(term, None, None, max_seeds.saturating_mul(6).max(12))
+            .map_err(|error| error.to_string())?;
+        for result in results {
+            let exact = result.symbol.name.eq_ignore_ascii_case(term)
+                || result.symbol.qualified_name.eq_ignore_ascii_case(term);
+            let adjusted_score = (result.score
+                + if term_index == 0 { 0.08 } else { 0.0 }
+                + if exact { 0.2 } else { 0.0 })
+            .min(1.2);
+            let entry = seeds
+                .entry(result.symbol.id.clone())
+                .or_insert_with(|| SymbolQuerySeed {
+                    symbol: result.symbol.clone(),
+                    score: adjusted_score,
+                    matched_terms: BTreeSet::new(),
+                });
+            entry.score = entry.score.max(adjusted_score);
+            entry.matched_terms.insert(term.clone());
+        }
+    }
+
+    let mut seeds = seeds.into_values().collect::<Vec<_>>();
+    seeds.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| right.matched_terms.len().cmp(&left.matched_terms.len()))
+            .then_with(|| left.symbol.qualified_name.cmp(&right.symbol.qualified_name))
+    });
+    seeds.truncate(max_seeds);
+    Ok(seeds)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_symbol_query_context(
+    service: &crate::language_service::LanguageService,
+    query: &str,
+    relationships: &[crate::tree_sitter::SymbolRelationshipType],
+    direction: crate::language_service::SymbolTraceDirection,
+    max_depth: usize,
+    requested_edge_limit: usize,
+    requested_node_limit: usize,
+    per_node_limit: usize,
+    max_seeds: usize,
+    min_confidence: f32,
+    token_budget: usize,
+) -> Result<serde_json::Value, String> {
+    let seeds = collect_symbol_query_seeds(service, query, max_seeds)?;
+    let token_edge_limit = (token_budget / 100).max(1);
+    let token_node_limit = (token_budget / 90).max(max_seeds).max(1);
+    let edge_limit = requested_edge_limit.min(token_edge_limit).max(1);
+    let node_limit = requested_node_limit.min(token_node_limit).max(max_seeds);
+    let mut nodes = HashMap::<String, SymbolQueryNode>::new();
+    let mut accepted_edges = Vec::<(String, crate::language_service::SymbolTraceEdge)>::new();
+    let mut seen_edges = HashSet::new();
+    let mut examined_edges = 0usize;
+    let mut filtered_low_confidence = 0usize;
+    let mut truncated = false;
+
+    for seed in &seeds {
+        nodes
+            .entry(seed.symbol.id.clone())
+            .or_insert_with(|| SymbolQueryNode {
+                symbol: seed.symbol.clone(),
+                depth: 0,
+                seed_ids: BTreeSet::from([seed.symbol.id.clone()]),
+            })
+            .seed_ids
+            .insert(seed.symbol.id.clone());
+
+        let remaining_edges = edge_limit.saturating_sub(accepted_edges.len());
+        if remaining_edges == 0 {
+            truncated = true;
+            break;
+        }
+        let trace = service
+            .trace_symbol_graph(
+                &seed.symbol,
+                relationships,
+                direction,
+                max_depth,
+                remaining_edges.min(200),
+                per_node_limit,
+            )
+            .map_err(|error| error.to_string())?;
+        examined_edges = examined_edges.saturating_add(trace.edges.len());
+        truncated |= trace.truncated;
+        let mut reachable = HashSet::from([seed.symbol.id.clone()]);
+        let mut edges = trace.edges;
+        edges.sort_by_key(|edge| edge.depth);
+
+        for edge in edges {
+            if accepted_edges.len() >= edge_limit {
+                truncated = true;
+                break;
+            }
+            if trace_edge_effective_confidence(&edge) < min_confidence {
+                filtered_low_confidence += 1;
+                continue;
+            }
+
+            let next_symbol = match edge.direction {
+                crate::language_service::SymbolTraceDirection::Incoming => {
+                    let Some(target) = edge.target_symbol.as_ref() else {
+                        continue;
+                    };
+                    if !reachable.contains(&target.id) {
+                        continue;
+                    }
+                    edge.source_symbol.clone()
+                }
+                crate::language_service::SymbolTraceDirection::Outgoing => {
+                    if !reachable.contains(&edge.source_symbol.id) {
+                        continue;
+                    }
+                    let Some(target) = edge.target_symbol.clone() else {
+                        continue;
+                    };
+                    target
+                }
+                crate::language_service::SymbolTraceDirection::Both => continue,
+            };
+
+            if !nodes.contains_key(&next_symbol.id) && nodes.len() >= node_limit {
+                truncated = true;
+                continue;
+            }
+            let target_key = edge
+                .target_symbol
+                .as_ref()
+                .map(|target| target.id.clone())
+                .unwrap_or_else(|| edge.target_name.clone());
+            let edge_key = (
+                edge.source_symbol.id.clone(),
+                target_key,
+                edge.relationship_type,
+                edge.line,
+            );
+            reachable.insert(next_symbol.id.clone());
+            let node = nodes
+                .entry(next_symbol.id.clone())
+                .or_insert_with(|| SymbolQueryNode {
+                    symbol: next_symbol,
+                    depth: edge.depth,
+                    seed_ids: BTreeSet::new(),
+                });
+            node.depth = node.depth.min(edge.depth);
+            node.seed_ids.insert(seed.symbol.id.clone());
+            if seen_edges.insert(edge_key) {
+                accepted_edges.push((seed.symbol.id.clone(), edge));
+            }
+        }
+    }
+
+    let mut node_values = nodes.into_values().collect::<Vec<_>>();
+    node_values.sort_by(|left, right| {
+        left.depth
+            .cmp(&right.depth)
+            .then_with(|| left.symbol.qualified_name.cmp(&right.symbol.qualified_name))
+    });
+    let seed_values = seeds
+        .iter()
+        .map(|seed| {
+            serde_json::json!({
+                "symbol": symbol_to_json(&seed.symbol),
+                "score": seed.score,
+                "matched_terms": seed.matched_terms,
+            })
+        })
+        .collect::<Vec<_>>();
+    let node_values = node_values
+        .iter()
+        .map(|node| {
+            serde_json::json!({
+                "symbol": symbol_to_json(&node.symbol),
+                "depth": node.depth,
+                "seed_ids": node.seed_ids,
+            })
+        })
+        .collect::<Vec<_>>();
+    let edge_values = accepted_edges
+        .iter()
+        .map(|(seed_id, edge)| symbol_query_edge_to_json(edge, seed_id))
+        .collect::<Vec<_>>();
+
+    Ok(serde_json::json!({
+        "query": query,
+        "seeds": seed_values,
+        "nodes": node_values,
+        "edges": edge_values,
+        "summary": {
+            "seed_count": seeds.len(),
+            "node_count": node_values.len(),
+            "edge_count": edge_values.len(),
+            "examined_edge_count": examined_edges,
+            "filtered_low_confidence": filtered_low_confidence,
+            "truncated": truncated,
+        },
+        "budget": {
+            "token_budget": token_budget,
+            "node_limit": node_limit,
+            "edge_limit": edge_limit,
+        }
+    }))
+}
+
+fn symbol_path_tool<R: tauri::Runtime>(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
+    let service = match language_service_from_app_handle(app_handle) {
+        Ok(service) => service,
+        Err(err) => return ToolResult::err(err),
+    };
+    let source = match resolve_symbol_path_endpoint(workspace_root, &service, args, "source") {
+        Ok(symbol) => symbol,
+        Err(err) => return ToolResult::err(err),
+    };
+    let target = match resolve_symbol_path_endpoint(workspace_root, &service, args, "target") {
+        Ok(symbol) => symbol,
+        Err(err) => return ToolResult::err(err),
+    };
+    let relationships = match parse_relationship_types_arg(args) {
+        Ok(values) => values,
+        Err(err) => return ToolResult::err(err),
+    };
+    let direction = match parse_symbol_trace_direction_arg(args) {
+        Ok(direction) => direction,
+        Err(err) => return ToolResult::err(err),
+    };
+    let max_hops = get_bounded_usize_arg(args, &["max_hops", "depth"], 6, 8).max(1);
+    let edge_limit = get_bounded_usize_arg(args, &["edge_limit", "limit"], 300, 500).max(1);
+    let per_node_limit = get_bounded_usize_arg(args, &["per_node_limit"], 20, 50).max(1);
+    let min_confidence = get_bounded_f32_arg(args, &["min_confidence"], 0.5, 0.0, 1.0);
+    let started = Instant::now();
+    let path = match service.find_symbol_path(
+        &source,
+        &target,
+        &relationships,
+        direction,
+        max_hops,
+        edge_limit,
+        per_node_limit,
+        min_confidence,
+    ) {
+        Ok(path) => path,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+    let path_found = source.id == target.id || !path.edges.is_empty();
+    let payload = serde_json::json!({
+        "source": symbol_to_json(&path.source),
+        "target": symbol_to_json(&path.target),
+        "path_found": path_found,
+        "edges": path.edges.iter().map(symbol_path_edge_to_json).collect::<Vec<_>>(),
+        "summary": {
+            "hop_count": path.edges.len(),
+            "total_cost": path.total_cost,
+            "visited_node_count": path.visited_nodes,
+            "considered_edge_count": path.considered_edges,
+            "truncated": path.truncated,
+        },
+        "_meta": {
+            "tool": "symbol_path",
+            "source": "language_service",
+            "timing_ms": started.elapsed().as_millis(),
+            "index_health": service.index_health_snapshot(),
+            "source_language_support": language_support_for_path_json(&path.source.file_path),
+            "target_language_support": language_support_for_path_json(&path.target.file_path),
+            "direction": direction.as_str(),
+            "relationship_types": relationships.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "max_hops": max_hops,
+            "edge_limit": edge_limit,
+            "per_node_limit": per_node_limit,
+            "min_confidence": min_confidence,
+        }
+    });
+    ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+fn symbol_query_tool<R: tauri::Runtime>(
+    _workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
+    let Some(query) = get_str_arg(args, &["query", "question", "task"]) else {
+        return ToolResult::err("symbol_query requires 'query'");
+    };
+    let service = match language_service_from_app_handle(app_handle) {
+        Ok(service) => service,
+        Err(err) => return ToolResult::err(err),
+    };
+    let relationships = match parse_relationship_types_arg(args) {
+        Ok(values) => values,
+        Err(err) => return ToolResult::err(err),
+    };
+    let direction = match parse_symbol_trace_direction_arg(args) {
+        Ok(direction) => direction,
+        Err(err) => return ToolResult::err(err),
+    };
+    let max_depth = get_bounded_usize_arg(args, &["depth", "max_depth"], 2, 4).max(1);
+    let edge_limit = get_bounded_usize_arg(args, &["edge_limit", "limit"], 120, 300);
+    let node_limit = get_bounded_usize_arg(args, &["node_limit", "max_nodes"], 120, 200);
+    let per_node_limit = get_bounded_usize_arg(args, &["per_node_limit"], 16, 50);
+    let max_seeds = get_bounded_usize_arg(args, &["max_seeds"], 3, 5).max(1);
+    let min_confidence = get_bounded_f32_arg(args, &["min_confidence"], 0.5, 0.0, 1.0);
+    let token_budget = get_bounded_usize_arg(args, &["token_budget"], 2_000, 8_000).max(400);
+    let started = Instant::now();
+    let mut payload = match build_symbol_query_context(
+        &service,
+        &query,
+        &relationships,
+        direction,
+        max_depth,
+        edge_limit,
+        node_limit,
+        per_node_limit,
+        max_seeds,
+        min_confidence,
+        token_budget,
+    ) {
+        Ok(payload) => payload,
+        Err(err) => return ToolResult::err(err),
+    };
+    payload["_meta"] = serde_json::json!({
+        "tool": "symbol_query",
+        "source": "language_service",
+        "timing_ms": started.elapsed().as_millis(),
+        "index_health": service.index_health_snapshot(),
+        "direction": direction.as_str(),
+        "relationship_types": relationships.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "max_depth": max_depth,
+        "per_node_limit": per_node_limit,
+        "min_confidence": min_confidence,
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }

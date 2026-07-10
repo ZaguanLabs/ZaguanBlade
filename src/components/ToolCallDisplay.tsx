@@ -410,9 +410,16 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
             'fast_context': { key: 'toolCall.tools.fastContext', fallback: 'Planning Context' },
             'edit_impact': { key: 'toolCall.tools.editImpact', fallback: 'Analyzing Edit Impact' },
             'symbol_search': { key: 'toolCall.tools.symbolSearch', fallback: 'Searching Symbols' },
+            'semantic_anchor_search': { key: 'toolCall.tools.semanticAnchorSearch', fallback: 'Searching Semantic References' },
             'symbol_resolve': { key: 'toolCall.tools.symbolResolve', fallback: 'Resolving Symbol' },
+            'symbol_related': { key: 'toolCall.tools.symbolRelated', fallback: 'Finding Related Symbols' },
             'symbol_outline': { key: 'toolCall.tools.symbolOutline', fallback: 'Reading Symbol Outline' },
             'symbol_references': { key: 'toolCall.tools.symbolReferences', fallback: 'Finding Symbol References' },
+            'symbol_graph': { key: 'toolCall.tools.symbolGraph', fallback: 'Exploring Symbol Graph' },
+            'symbol_trace': { key: 'toolCall.tools.symbolTrace', fallback: 'Tracing Symbol Relationships' },
+            'symbol_path': { key: 'toolCall.tools.symbolPath', fallback: 'Finding Symbol Path' },
+            'symbol_query': { key: 'toolCall.tools.symbolQuery', fallback: 'Querying Symbol Graph' },
+            'symbol_schema': { key: 'toolCall.tools.symbolSchema', fallback: 'Checking Symbol Index' },
             'list_files': { key: 'toolCall.tools.listFiles', fallback: 'Listing Files' },
             'grep_search': { key: 'toolCall.tools.grepSearch', fallback: 'Searching Code' },
             'run_command': { key: 'toolCall.tools.runCommand', fallback: 'Running Command' },
@@ -442,8 +449,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
             'replace_file_content': { key: 'toolCall.tools.replaceFileContent', fallback: 'Replacing Content' },
             'write_to_file': { key: 'toolCall.tools.writeToFile', fallback: 'Writing to File' },
             'list_resources': { key: 'toolCall.tools.listResources', fallback: 'Listing Resources' },
-            'read_resource': { key: 'toolCall.tools.readResource', fallback: 'Reading Resource' },
-            'semantic_anchor_search': { key: 'toolCall.tools.semanticAnchorSearch', fallback: 'Searching Semantic Anchors' }
+            'read_resource': { key: 'toolCall.tools.readResource', fallback: 'Reading Resource' }
         };
         const mapped = nameMap[name];
         if (!mapped) return name;

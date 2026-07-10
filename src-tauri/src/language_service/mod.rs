@@ -16,5 +16,6 @@ pub use service::{
     extract_scanner_symbols, IndexDiscoverySnapshot, IndexHealthSnapshot, IndexHealthStatus,
     IndexLanguageCount, IndexSchemaCount, IndexSchemaLanguageCount, IndexSchemaSnapshot,
     IndexSchemaTotals, IndexSkipCount, IndexTimingSnapshot, LanguageService, RelatedSymbol,
-    SymbolGraph, SymbolTrace, SymbolTraceDirection, SymbolTraceEdge, SymbolTraceNode,
+    SymbolGraph, SymbolPath, SymbolPathEdge, SymbolTrace, SymbolTraceDirection, SymbolTraceEdge,
+    SymbolTraceNode,
 };
