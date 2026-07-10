@@ -419,6 +419,7 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
             'symbol_trace': { key: 'toolCall.tools.symbolTrace', fallback: 'Tracing Symbol Relationships' },
             'symbol_path': { key: 'toolCall.tools.symbolPath', fallback: 'Finding Symbol Path' },
             'symbol_query': { key: 'toolCall.tools.symbolQuery', fallback: 'Querying Symbol Graph' },
+            'symbol_architecture': { key: 'toolCall.tools.symbolArchitecture', fallback: 'Mapping Code Architecture' },
             'symbol_schema': { key: 'toolCall.tools.symbolSchema', fallback: 'Checking Symbol Index' },
             'list_files': { key: 'toolCall.tools.listFiles', fallback: 'Listing Files' },
             'grep_search': { key: 'toolCall.tools.grepSearch', fallback: 'Searching Code' },

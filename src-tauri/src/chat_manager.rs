@@ -173,6 +173,7 @@ fn zblade_workflow_guidance() -> &'static str {
 - For broad, ambiguous, multi-file, or unfamiliar tasks, call `fast_context` before reading many files or editing. Use its `confidence`, `index_health`, `project_context`, `graph_context`, `suggested_ranges`, `enriched_files`, `related_files`, `related_docs`, and optional `impact` hints to plan the next reads.
 - If `fast_context` returns low confidence or stale/degraded index health, do a second targeted `symbol_search`, `symbol_related`, `symbol_query`, `semantic_anchor_search`, or read the suggested ranges before editing.
 - Use `symbol_path` when a task depends on explaining the strongest indexed route between two known symbols; treat its confidence, provenance, and truncation metadata as part of the result.
+- Use `symbol_architecture` for subsystem boundaries, central modules, and cross-community bridge questions; treat inferred communities as graph-analysis hints rather than declared package ownership.
 - Treat rationale and design-document entries in `symbol_query.semantic_context` or `semantic_anchor_search` as located evidence; follow their owner/target symbol IDs and paths before relying on them.
 - Treat project-index tools as legacy fallback only; prefer `fast_context` for first-pass orientation.
 - Before larger edits, refactors, public API changes, or changes to files with likely callers, inspect `fast_context.impact`; call `edit_impact` on the target file or symbol when deeper blast-radius analysis is needed. Inspect impacted files and likely tests before applying patches.

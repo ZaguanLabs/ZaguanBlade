@@ -179,6 +179,7 @@ const LOCAL_AI_DEFAULT_SYSTEM_PROMPT: &str = r#"You are an AI coding assistant i
 - Use symbol_schema when you need to inspect Symbols Index coverage before trusting broad searches
 - Use semantic_anchor_search for rationale/design evidence, documentation links, routes, translation keys, config keys, CSS/theme tokens, and other semantic anchors
 - Use symbol_query for a compact connected graph around a code question and symbol_path for the strongest bounded route between two known symbols
+- Use symbol_architecture for a compressed module view with inferred communities, hubs, and cross-community bridges
 - Use grep_search when you need text-pattern search rather than symbol lookup
 - Add comments sparingly - focus on "why" not "what"
 - If unclear, ask for clarification
@@ -201,6 +202,7 @@ const LOCAL_AI_DEFAULT_SYSTEM_PROMPT: &str = r#"You are an AI coding assistant i
 **symbol_trace** - Trace bounded multi-hop symbol relationships with truncation and unresolved-edge metadata
 **symbol_path** - Find a confidence-weighted bounded path between two symbols
 **symbol_query** - Build a budgeted connected symbol subgraph for a code question
+**symbol_architecture** - Map confidence-weighted module communities, hubs, and bridges
 **read_file_range** - Read targeted line ranges from a file
 **read_file** - Read full file contents when broader context is needed
 **get_workspace_structure** - Get the project directory tree

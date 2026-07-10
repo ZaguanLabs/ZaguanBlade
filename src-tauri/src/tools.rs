@@ -199,6 +199,7 @@ fn is_batch_read_only_tool(tool_name: &str) -> bool {
         | "symbol_trace"
         | "symbol_path"
         | "symbol_query"
+        | "symbol_architecture"
         | "symbol_schema"
         | "symbol_outline"
         | "read_file"
@@ -2275,6 +2276,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "symbol_trace" => symbol_trace_tool(workspace_root, &args, app_handle),
         "symbol_path" => symbol_path_tool(workspace_root, &args, app_handle),
         "symbol_query" => symbol_query_tool(workspace_root, &args, app_handle),
+        "symbol_architecture" => symbol_architecture_tool(workspace_root, &args, app_handle),
         "symbol_schema" => symbol_schema_tool(&args, app_handle),
         "symbol_outline" => symbol_outline_tool(workspace_root, &args, app_handle),
         "read_file_range" => read_file_range(workspace_root, &args),
@@ -6158,6 +6160,74 @@ fn symbol_query_tool<R: tauri::Runtime>(
         "relationship_types": relationships.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "max_depth": max_depth,
         "per_node_limit": per_node_limit,
+        "min_confidence": min_confidence,
+    });
+    ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
+}
+
+fn symbol_architecture_tool<R: tauri::Runtime>(
+    workspace_root: &Path,
+    args: &HashMap<String, serde_json::Value>,
+    app_handle: Option<&tauri::AppHandle<R>>,
+) -> ToolResult {
+    let service = match language_service_from_app_handle(app_handle) {
+        Ok(service) => service,
+        Err(err) => return ToolResult::err(err),
+    };
+    let scope = match get_str_arg(args, &["scope", "path", "directory"]) {
+        Some(path) => match symbol_path_arg(workspace_root, &path) {
+            Ok(path) if path == "." || path.is_empty() => None,
+            Ok(path) => Some(path),
+            Err(err) => return ToolResult::err(err),
+        },
+        None => None,
+    };
+    let relationship_types = match parse_relationship_types_arg(args) {
+        Ok(relationship_types) => relationship_types,
+        Err(err) => return ToolResult::err(err),
+    };
+    let requested_max_modules =
+        get_bounded_usize_arg(args, &["max_modules", "module_limit"], 160, 1_000).max(2);
+    let requested_max_edges =
+        get_bounded_usize_arg(args, &["max_edges", "edge_limit"], 320, 2_000).max(1);
+    let requested_max_communities =
+        get_bounded_usize_arg(args, &["max_communities"], 20, 50).max(1);
+    let min_confidence = get_bounded_f32_arg(args, &["min_confidence"], 0.5, 0.0, 1.0);
+    let token_budget = get_bounded_usize_arg(args, &["token_budget"], 5_000, 12_000).max(1_000);
+    let max_modules = requested_max_modules.min((token_budget / 100).max(16));
+    let max_edges = requested_max_edges.min((token_budget / 140).max(20));
+    let max_communities = requested_max_communities.min((token_budget / 350).max(4));
+    let started = Instant::now();
+    let snapshot = match service.build_architecture_snapshot(
+        scope.as_deref(),
+        &relationship_types,
+        min_confidence,
+        max_modules,
+        max_edges,
+        max_communities,
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(err) => return ToolResult::err(err.to_string()),
+    };
+    let mut payload = serde_json::to_value(&snapshot).unwrap_or_else(|_| serde_json::json!({}));
+    payload["_meta"] = serde_json::json!({
+        "tool": "symbol_architecture",
+        "source": "language_service",
+        "timing_ms": started.elapsed().as_millis(),
+        "index_health": service.index_health_snapshot(),
+        "algorithm": "confidence_weighted_file_graph_with_deterministic_modularity_local_moving",
+        "relationship_types": relationship_types.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "token_budget": token_budget,
+        "requested_limits": {
+            "max_modules": requested_max_modules,
+            "max_edges": requested_max_edges,
+            "max_communities": requested_max_communities,
+        },
+        "applied_limits": {
+            "max_modules": max_modules,
+            "max_edges": max_edges,
+            "max_communities": max_communities,
+        },
         "min_confidence": min_confidence,
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())

@@ -428,6 +428,15 @@ pub struct FileRelationshipRecord {
     pub relationships: Vec<SymbolRelationship>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModuleRelationshipAggregate {
+    pub source_file_path: String,
+    pub target_file_path: String,
+    pub relationship_type: SymbolRelationshipType,
+    pub edge_count: usize,
+    pub average_confidence: f32,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RelationshipIntegrityStats {
     pub total_relationships: usize,
@@ -1742,6 +1751,112 @@ impl SymbolStore {
         Ok(targets)
     }
 
+    pub fn module_relationship_aggregates(
+        &self,
+        scope_path: Option<&str>,
+        relationship_types: &[SymbolRelationshipType],
+        min_confidence: f32,
+        limit: usize,
+    ) -> Result<Vec<ModuleRelationshipAggregate>, SymbolStoreError> {
+        if relationship_types.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut seen_types = HashSet::new();
+        let relationship_types = relationship_types
+            .iter()
+            .copied()
+            .filter(|relationship_type| seen_types.insert(*relationship_type))
+            .collect::<Vec<_>>();
+        let type_placeholders = std::iter::repeat("?")
+            .take(relationship_types.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut sql = format!(
+            r#"
+            SELECT relationship.source_file_path,
+                   target.file_path,
+                   relationship.relationship_type,
+                   COUNT(*) AS edge_count,
+                   AVG(COALESCE(
+                       relationship.confidence,
+                       CASE
+                           WHEN relationship.relationship_type IN ('import', 'export') THEN 0.75
+                           ELSE 0.5
+                       END
+                   )) AS average_confidence
+            FROM symbol_relationships AS relationship
+            JOIN symbols AS target ON target.id = relationship.target_symbol_id
+            WHERE relationship.relationship_type IN ({type_placeholders})
+              AND relationship.source_file_path != target.file_path
+              AND COALESCE(
+                    relationship.confidence,
+                    CASE
+                        WHEN relationship.relationship_type IN ('import', 'export') THEN 0.75
+                        ELSE 0.5
+                    END
+                  ) >= ?
+            "#,
+        );
+        let mut values = relationship_types
+            .iter()
+            .map(ToString::to_string)
+            .map(Value::Text)
+            .collect::<Vec<_>>();
+        values.push(Value::Real(min_confidence.clamp(0.0, 1.0) as f64));
+        if let Some(scope_path) = scope_path {
+            sql.push_str(
+                r#"
+                AND (relationship.source_file_path = ? OR relationship.source_file_path LIKE ?)
+                AND (target.file_path = ? OR target.file_path LIKE ?)
+                "#,
+            );
+            let scope = scope_path.trim_end_matches('/');
+            let like = format!("{scope}/%");
+            values.extend([
+                Value::Text(scope.to_string()),
+                Value::Text(like.clone()),
+                Value::Text(scope.to_string()),
+                Value::Text(like),
+            ]);
+        }
+        sql.push_str(
+            r#"
+            GROUP BY relationship.source_file_path, target.file_path,
+                     relationship.relationship_type
+            ORDER BY edge_count DESC, average_confidence DESC,
+                     relationship.source_file_path, target.file_path,
+                     relationship.relationship_type
+            LIMIT ?
+            "#,
+        );
+        values.push(Value::Integer(limit as i64));
+
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(params_from_iter(values), |row| {
+                let relationship_type = row
+                    .get::<_, String>(2)?
+                    .parse::<SymbolRelationshipType>()
+                    .map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, error)),
+                        )
+                    })?;
+                Ok(ModuleRelationshipAggregate {
+                    source_file_path: row.get(0)?,
+                    target_file_path: row.get(1)?,
+                    relationship_type,
+                    edge_count: row.get::<_, i64>(3)? as usize,
+                    average_confidence: row.get::<_, f64>(4)? as f32,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     pub fn find_references_to_target(
         &self,
         target_name: &str,
@@ -2246,6 +2361,40 @@ impl SymbolStore {
             .optional()?;
 
         Ok(record)
+    }
+
+    pub fn indexed_file_records_for_paths(
+        &self,
+        file_paths: &[String],
+    ) -> Result<HashMap<String, IndexedFileRecord>, SymbolStoreError> {
+        let unique_paths = file_paths.iter().cloned().collect::<BTreeSet<_>>();
+        if unique_paths.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut records = HashMap::with_capacity(unique_paths.len());
+        let unique_paths = unique_paths.into_iter().collect::<Vec<_>>();
+        for chunk in unique_paths.chunks(900) {
+            let placeholders = std::iter::repeat("?")
+                .take(chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let mut stmt = conn.prepare(&format!(
+                r#"
+                SELECT file_path, file_hash, indexed_at, symbol_count, file_size,
+                       line_count, modified_at, extractor_version
+                FROM indexed_files
+                WHERE file_path IN ({placeholders})
+                "#,
+            ))?;
+            let rows = stmt
+                .query_map(params_from_iter(chunk.iter()), indexed_file_record_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            for record in rows {
+                records.insert(record.file_path.clone(), record);
+            }
+        }
+        Ok(records)
     }
 
     pub fn list_all_indexed_files(&self) -> Result<Vec<IndexedFileRecord>, SymbolStoreError> {

@@ -842,6 +842,7 @@
       "symbolTrace": "Tracing Symbol Relationships",
       "symbolPath": "Finding Symbol Path",
       "symbolQuery": "Querying Symbol Graph",
+      "symbolArchitecture": "Mapping Code Architecture",
       "symbolSchema": "Checking Symbol Index",
       "listFiles": "Listing Files",
       "grepSearch": "Searching Code",

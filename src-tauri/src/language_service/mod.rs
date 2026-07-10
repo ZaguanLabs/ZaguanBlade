@@ -13,9 +13,10 @@ mod service;
 
 pub use handler::LanguageHandler;
 pub use service::{
-    extract_scanner_symbols, IndexDiscoverySnapshot, IndexHealthSnapshot, IndexHealthStatus,
-    IndexLanguageCount, IndexSchemaCount, IndexSchemaLanguageCount, IndexSchemaSnapshot,
-    IndexSchemaTotals, IndexSkipCount, IndexTimingSnapshot, LanguageService, RelatedSymbol,
-    SymbolGraph, SymbolPath, SymbolPathEdge, SymbolTrace, SymbolTraceDirection, SymbolTraceEdge,
-    SymbolTraceNode,
+    extract_scanner_symbols, ArchitectureBridgeModule, ArchitectureCommunity, ArchitectureEdge,
+    ArchitectureModule, ArchitectureSnapshot, IndexDiscoverySnapshot, IndexHealthSnapshot,
+    IndexHealthStatus, IndexLanguageCount, IndexSchemaCount, IndexSchemaLanguageCount,
+    IndexSchemaSnapshot, IndexSchemaTotals, IndexSkipCount, IndexTimingSnapshot, LanguageService,
+    RelatedSymbol, SymbolGraph, SymbolPath, SymbolPathEdge, SymbolTrace, SymbolTraceDirection,
+    SymbolTraceEdge, SymbolTraceNode,
 };

@@ -527,6 +527,21 @@ Parameters include `query`, `direction`, `relationships`, `depth` (cap `4`), `ma
 `node_limit` (cap `200`), `edge_limit` (cap `300`), `per_node_limit` (cap `50`),
 `min_confidence`, and `token_budget` (default `2000`, cap `8000`).
 
+### `symbol_architecture`
+
+Builds a compressed confidence-weighted file/module graph for the workspace or an optional scope.
+It aggregates resolved symbol edges between files, detects deterministic graph communities, and
+ranks central hubs, cross-community bridge modules, and bridge edges. Communities are inferred
+navigation/refactoring hints, not declared package boundaries. Candidate, output, confidence, and
+approximate token budgets are returned explicitly with truncation metadata.
+
+Parameters include `scope` (alias `path`; a file selects its containing directory),
+`relationship_type` or `relationships`,
+`min_confidence`, `max_modules` (default `160`, cap `1000`), `max_edges` (default `320`, cap
+`2000`), `max_communities` (default `20`, cap `50`), and `token_budget` (default `5000`, cap
+`12000`). Default relationship kinds exclude containment and environment-key edges to keep the
+architecture view focused on code dependencies.
+
 ### `symbol_schema`
 
 Returns compact Symbols Index coverage and schema counts. Use this before trusting broad searches, investigating empty search results, or deciding whether a language/file type has enough indexed coverage.

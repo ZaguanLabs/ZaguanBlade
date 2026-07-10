@@ -13,9 +13,10 @@ use crate::buffer_snapshot::{BufferSnapshot, BufferSnapshotSource, BufferSnapsho
 use crate::gitignore_filter::GitignoreFilter;
 use crate::project_settings;
 use crate::symbol_index::{
-    FileIndexRecord, FileRelationshipRecord, RelationshipIntegrityStats,
-    RelationshipObservationKind, SearchQuery, SearchResult, SemanticAnchor, SemanticAnchorResult,
-    SymbolReference, SymbolStore, UnresolvedRelationshipTarget,
+    FileIndexRecord, FileRelationshipRecord, ModuleRelationshipAggregate,
+    RelationshipIntegrityStats, RelationshipObservationKind, SearchQuery, SearchResult,
+    SemanticAnchor, SemanticAnchorResult, SymbolReference, SymbolStore,
+    UnresolvedRelationshipTarget,
 };
 use crate::tree_sitter::{
     extract_symbol_relationships, extract_symbols, stable_symbol_id, Language, Position, Range,
@@ -4908,6 +4909,388 @@ impl LanguageService {
         Ok(Some(output))
     }
 
+    pub fn build_architecture_snapshot(
+        &self,
+        scope_path: Option<&str>,
+        relationship_types: &[SymbolRelationshipType],
+        min_confidence: f32,
+        max_modules: usize,
+        max_edges: usize,
+        max_communities: usize,
+    ) -> Result<ArchitectureSnapshot, LanguageError> {
+        let max_modules = max_modules.clamp(2, 1_000);
+        let max_edges = max_edges.clamp(1, 2_000);
+        let max_communities = max_communities.clamp(1, 50);
+        let min_confidence = min_confidence.clamp(0.0, 1.0);
+        let mut normalized_scope = scope_path
+            .map(|scope| scope.replace('\\', "/"))
+            .map(|scope| scope.trim_matches('/').to_string())
+            .filter(|scope| !scope.is_empty() && scope != ".");
+        if let Some(scope) = normalized_scope.clone() {
+            let resolved = self.resolve_path(&scope);
+            if resolved.is_file() {
+                self.ensure_file_fresh(&scope)?;
+                normalized_scope = Path::new(&scope)
+                    .parent()
+                    .map(|path| path.to_string_lossy().replace('\\', "/"))
+                    .filter(|path| !path.is_empty() && path != ".");
+            } else {
+                self.ensure_scope_index_fresh(
+                    Some(&resolved),
+                    max_modules.saturating_mul(4).max(64),
+                )?;
+            }
+        }
+
+        let raw_limit = max_edges.saturating_mul(4).clamp(max_edges + 1, 5_000);
+        let mut aggregates = self.symbol_store.module_relationship_aggregates(
+            normalized_scope.as_deref(),
+            relationship_types,
+            min_confidence,
+            raw_limit.saturating_add(1),
+        )?;
+        let raw_aggregates_truncated = aggregates.len() > raw_limit;
+        aggregates.truncate(raw_limit);
+        let raw_aggregate_count = aggregates.len();
+
+        #[derive(Default)]
+        struct PairAccumulator {
+            relationship_counts: BTreeMap<String, usize>,
+            edge_count: usize,
+            confidence_sum: f32,
+            weight: f32,
+        }
+
+        let mut pairs = BTreeMap::<(String, String), PairAccumulator>::new();
+        for ModuleRelationshipAggregate {
+            source_file_path,
+            target_file_path,
+            relationship_type,
+            edge_count,
+            average_confidence,
+        } in aggregates
+        {
+            if source_file_path == target_file_path || edge_count == 0 {
+                continue;
+            }
+            let pair = pairs
+                .entry((source_file_path, target_file_path))
+                .or_default();
+            *pair
+                .relationship_counts
+                .entry(relationship_type.to_string())
+                .or_default() += edge_count;
+            pair.edge_count += edge_count;
+            pair.confidence_sum += average_confidence * edge_count as f32;
+            pair.weight += architecture_relationship_weight(relationship_type)
+                * average_confidence
+                * edge_count as f32;
+        }
+        let candidate_edge_count = pairs.len();
+        let mut candidate_degrees = HashMap::<String, f32>::new();
+        for ((source, target), pair) in &pairs {
+            *candidate_degrees.entry(source.clone()).or_default() += pair.weight;
+            *candidate_degrees.entry(target.clone()).or_default() += pair.weight;
+        }
+        let candidate_module_count = candidate_degrees.len();
+        let mut ranked_paths = candidate_degrees.into_iter().collect::<Vec<_>>();
+        ranked_paths.sort_by(|left, right| {
+            right
+                .1
+                .partial_cmp(&left.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        ranked_paths.truncate(max_modules);
+        let selected_paths = ranked_paths
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<HashSet<_>>();
+
+        let mut edges = pairs
+            .into_iter()
+            .filter(|((source, target), _)| {
+                selected_paths.contains(source) && selected_paths.contains(target)
+            })
+            .map(
+                |((source_file_path, target_file_path), pair)| ArchitectureEdge {
+                    source_file_path,
+                    target_file_path,
+                    relationship_counts: pair.relationship_counts,
+                    edge_count: pair.edge_count,
+                    average_confidence: rounded_architecture_value(
+                        pair.confidence_sum / pair.edge_count.max(1) as f32,
+                    ),
+                    weight: rounded_architecture_value(pair.weight),
+                },
+            )
+            .collect::<Vec<_>>();
+        edges.sort_by(|left, right| {
+            right
+                .weight
+                .partial_cmp(&left.weight)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| right.edge_count.cmp(&left.edge_count))
+                .then_with(|| left.source_file_path.cmp(&right.source_file_path))
+                .then_with(|| left.target_file_path.cmp(&right.target_file_path))
+        });
+        let edges_truncated = edges.len() > max_edges;
+        edges.truncate(max_edges);
+
+        #[derive(Default)]
+        struct ModuleAccumulator {
+            incoming_edge_count: usize,
+            outgoing_edge_count: usize,
+            weighted_degree: f32,
+            neighbors: HashSet<String>,
+        }
+
+        let mut module_stats = HashMap::<String, ModuleAccumulator>::new();
+        for edge in &edges {
+            let source = module_stats
+                .entry(edge.source_file_path.clone())
+                .or_default();
+            source.outgoing_edge_count += edge.edge_count;
+            source.weighted_degree += edge.weight;
+            source.neighbors.insert(edge.target_file_path.clone());
+
+            let target = module_stats
+                .entry(edge.target_file_path.clone())
+                .or_default();
+            target.incoming_edge_count += edge.edge_count;
+            target.weighted_degree += edge.weight;
+            target.neighbors.insert(edge.source_file_path.clone());
+        }
+        let mut module_paths = module_stats.keys().cloned().collect::<Vec<_>>();
+        module_paths.sort();
+        let labels = architecture_community_labels(&module_paths, &edges);
+
+        #[derive(Default)]
+        struct RawCommunity {
+            modules: Vec<String>,
+            internal_weight: f32,
+            cross_community_weight: f32,
+            relationship_counts: BTreeMap<String, usize>,
+        }
+
+        let mut raw_communities = HashMap::<usize, RawCommunity>::new();
+        for path in &module_paths {
+            raw_communities
+                .entry(labels.get(path).copied().unwrap_or_default())
+                .or_default()
+                .modules
+                .push(path.clone());
+        }
+        for edge in &edges {
+            let source_label = labels
+                .get(&edge.source_file_path)
+                .copied()
+                .unwrap_or_default();
+            let target_label = labels
+                .get(&edge.target_file_path)
+                .copied()
+                .unwrap_or_default();
+            if source_label == target_label {
+                let community = raw_communities.entry(source_label).or_default();
+                community.internal_weight += edge.weight;
+                for (relationship, count) in &edge.relationship_counts {
+                    *community
+                        .relationship_counts
+                        .entry(relationship.clone())
+                        .or_default() += *count;
+                }
+            } else {
+                raw_communities
+                    .entry(source_label)
+                    .or_default()
+                    .cross_community_weight += edge.weight;
+                raw_communities
+                    .entry(target_label)
+                    .or_default()
+                    .cross_community_weight += edge.weight;
+            }
+        }
+        for community in raw_communities.values_mut() {
+            community.modules.sort_by(|left, right| {
+                module_stats
+                    .get(right)
+                    .map(|stats| stats.weighted_degree)
+                    .unwrap_or_default()
+                    .partial_cmp(
+                        &module_stats
+                            .get(left)
+                            .map(|stats| stats.weighted_degree)
+                            .unwrap_or_default(),
+                    )
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| left.cmp(right))
+            });
+        }
+        let mut community_order = raw_communities.keys().copied().collect::<Vec<_>>();
+        community_order.sort_by(|left, right| {
+            let left_community = &raw_communities[left];
+            let right_community = &raw_communities[right];
+            right_community
+                .internal_weight
+                .partial_cmp(&left_community.internal_weight)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    right_community
+                        .modules
+                        .len()
+                        .cmp(&left_community.modules.len())
+                })
+                .then_with(|| {
+                    left_community
+                        .modules
+                        .first()
+                        .cmp(&right_community.modules.first())
+                })
+        });
+        let community_ids = community_order
+            .iter()
+            .enumerate()
+            .map(|(index, label)| (*label, format!("community-{}", index + 1)))
+            .collect::<HashMap<_, _>>();
+        let module_community_ids = labels
+            .iter()
+            .map(|(path, label)| {
+                (
+                    path.clone(),
+                    community_ids
+                        .get(label)
+                        .cloned()
+                        .unwrap_or_else(|| "community-unknown".to_string()),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        let metadata = self
+            .symbol_store
+            .indexed_file_records_for_paths(&module_paths)?;
+        let mut modules = module_stats
+            .into_iter()
+            .map(|(file_path, stats)| {
+                let record = metadata.get(&file_path);
+                ArchitectureModule {
+                    community_id: module_community_ids
+                        .get(&file_path)
+                        .cloned()
+                        .unwrap_or_else(|| "community-unknown".to_string()),
+                    symbol_count: record.map(|record| record.symbol_count).unwrap_or_default(),
+                    line_count: record.and_then(|record| record.line_count),
+                    incoming_edge_count: stats.incoming_edge_count,
+                    outgoing_edge_count: stats.outgoing_edge_count,
+                    weighted_degree: rounded_architecture_value(stats.weighted_degree),
+                    distinct_neighbors: stats.neighbors.len(),
+                    file_path,
+                }
+            })
+            .collect::<Vec<_>>();
+        modules.sort_by(|left, right| {
+            right
+                .weighted_degree
+                .partial_cmp(&left.weighted_degree)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| right.distinct_neighbors.cmp(&left.distinct_neighbors))
+                .then_with(|| left.file_path.cmp(&right.file_path))
+        });
+        let hubs = modules.iter().take(12).cloned().collect::<Vec<_>>();
+
+        let community_count = community_order.len();
+        let mut communities = community_order
+            .iter()
+            .filter_map(|label| {
+                let community = raw_communities.get(label)?;
+                Some(ArchitectureCommunity {
+                    id: community_ids.get(label)?.clone(),
+                    module_count: community.modules.len(),
+                    internal_weight: rounded_architecture_value(community.internal_weight),
+                    cross_community_weight: rounded_architecture_value(
+                        community.cross_community_weight,
+                    ),
+                    top_modules: community.modules.iter().take(8).cloned().collect(),
+                    relationship_counts: community.relationship_counts.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        communities.truncate(max_communities);
+
+        let mut bridge_edges = edges
+            .iter()
+            .filter(|edge| {
+                module_community_ids.get(&edge.source_file_path)
+                    != module_community_ids.get(&edge.target_file_path)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        bridge_edges.truncate(24);
+        let mut bridge_stats = HashMap::<String, (f32, HashSet<String>)>::new();
+        for edge in &edges {
+            let Some(source_community) = module_community_ids.get(&edge.source_file_path) else {
+                continue;
+            };
+            let Some(target_community) = module_community_ids.get(&edge.target_file_path) else {
+                continue;
+            };
+            if source_community == target_community {
+                continue;
+            }
+            let source = bridge_stats
+                .entry(edge.source_file_path.clone())
+                .or_default();
+            source.0 += edge.weight;
+            source.1.insert(target_community.clone());
+            let target = bridge_stats
+                .entry(edge.target_file_path.clone())
+                .or_default();
+            target.0 += edge.weight;
+            target.1.insert(source_community.clone());
+        }
+        let mut bridge_modules = bridge_stats
+            .into_iter()
+            .map(|(file_path, (cross_community_weight, communities))| {
+                let mut connected_communities = communities.into_iter().collect::<Vec<_>>();
+                connected_communities.sort();
+                ArchitectureBridgeModule {
+                    community_id: module_community_ids
+                        .get(&file_path)
+                        .cloned()
+                        .unwrap_or_else(|| "community-unknown".to_string()),
+                    file_path,
+                    cross_community_weight: rounded_architecture_value(cross_community_weight),
+                    connected_communities,
+                }
+            })
+            .collect::<Vec<_>>();
+        bridge_modules.sort_by(|left, right| {
+            right
+                .cross_community_weight
+                .partial_cmp(&left.cross_community_weight)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.file_path.cmp(&right.file_path))
+        });
+        bridge_modules.truncate(16);
+
+        Ok(ArchitectureSnapshot {
+            scope: normalized_scope,
+            modules,
+            edges,
+            communities,
+            hubs,
+            bridge_modules,
+            bridge_edges,
+            candidate_module_count,
+            candidate_edge_count,
+            raw_aggregate_count,
+            min_confidence,
+            truncated: raw_aggregates_truncated
+                || candidate_module_count > max_modules
+                || edges_truncated
+                || community_count > max_communities,
+        })
+    }
+
     pub fn get_symbol_graph(
         &self,
         symbol: &Symbol,
@@ -6255,6 +6638,166 @@ pub struct SymbolPath {
     pub visited_nodes: usize,
     pub considered_edges: usize,
     pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchitectureSnapshot {
+    pub scope: Option<String>,
+    pub modules: Vec<ArchitectureModule>,
+    pub edges: Vec<ArchitectureEdge>,
+    pub communities: Vec<ArchitectureCommunity>,
+    pub hubs: Vec<ArchitectureModule>,
+    pub bridge_modules: Vec<ArchitectureBridgeModule>,
+    pub bridge_edges: Vec<ArchitectureEdge>,
+    pub candidate_module_count: usize,
+    pub candidate_edge_count: usize,
+    pub raw_aggregate_count: usize,
+    pub min_confidence: f32,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchitectureModule {
+    pub file_path: String,
+    pub symbol_count: usize,
+    pub line_count: Option<usize>,
+    pub incoming_edge_count: usize,
+    pub outgoing_edge_count: usize,
+    pub weighted_degree: f32,
+    pub distinct_neighbors: usize,
+    pub community_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchitectureEdge {
+    pub source_file_path: String,
+    pub target_file_path: String,
+    pub relationship_counts: BTreeMap<String, usize>,
+    pub edge_count: usize,
+    pub average_confidence: f32,
+    pub weight: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchitectureCommunity {
+    pub id: String,
+    pub module_count: usize,
+    pub internal_weight: f32,
+    pub cross_community_weight: f32,
+    pub top_modules: Vec<String>,
+    pub relationship_counts: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchitectureBridgeModule {
+    pub file_path: String,
+    pub community_id: String,
+    pub cross_community_weight: f32,
+    pub connected_communities: Vec<String>,
+}
+
+fn architecture_relationship_weight(relationship_type: SymbolRelationshipType) -> f32 {
+    match relationship_type {
+        SymbolRelationshipType::Handles => 1.5,
+        SymbolRelationshipType::Extends | SymbolRelationshipType::Implements => 1.4,
+        SymbolRelationshipType::Call => 1.25,
+        SymbolRelationshipType::Usage => 1.0,
+        SymbolRelationshipType::UsesType => 0.9,
+        SymbolRelationshipType::Import | SymbolRelationshipType::Export => 0.75,
+        SymbolRelationshipType::Contains => 0.4,
+        SymbolRelationshipType::ReadsEnv => 0.3,
+    }
+}
+
+fn rounded_architecture_value(value: f32) -> f32 {
+    (value * 1_000.0).round() / 1_000.0
+}
+
+fn architecture_community_labels(
+    module_paths: &[String],
+    edges: &[ArchitectureEdge],
+) -> HashMap<String, usize> {
+    let mut sorted_paths = module_paths.to_vec();
+    sorted_paths.sort();
+    let path_indexes = sorted_paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| (path.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    let mut undirected_weights = HashMap::<(usize, usize), f64>::new();
+    for edge in edges {
+        let (Some(&source), Some(&target)) = (
+            path_indexes.get(edge.source_file_path.as_str()),
+            path_indexes.get(edge.target_file_path.as_str()),
+        ) else {
+            continue;
+        };
+        if source == target {
+            continue;
+        }
+        let key = if source < target {
+            (source, target)
+        } else {
+            (target, source)
+        };
+        *undirected_weights.entry(key).or_default() += edge.weight as f64;
+    }
+
+    let mut adjacency = vec![Vec::<(usize, f64)>::new(); sorted_paths.len()];
+    for ((source, target), weight) in undirected_weights {
+        adjacency[source].push((target, weight));
+        adjacency[target].push((source, weight));
+    }
+    let degrees = adjacency
+        .iter()
+        .map(|neighbors| neighbors.iter().map(|(_, weight)| *weight).sum::<f64>())
+        .collect::<Vec<_>>();
+    let total_degree = degrees.iter().sum::<f64>();
+    let mut labels = (0..sorted_paths.len()).collect::<Vec<_>>();
+    if total_degree > f64::EPSILON {
+        let mut community_degrees = degrees.clone();
+        for _ in 0..12 {
+            let mut moved = false;
+            for node in 0..sorted_paths.len() {
+                let degree = degrees[node];
+                if degree <= f64::EPSILON {
+                    continue;
+                }
+                let current = labels[node];
+                community_degrees[current] = (community_degrees[current] - degree).max(0.0);
+                let mut weights_by_community = HashMap::<usize, f64>::new();
+                for (neighbor, weight) in &adjacency[node] {
+                    *weights_by_community.entry(labels[*neighbor]).or_default() += *weight;
+                }
+                weights_by_community.entry(current).or_default();
+
+                let mut best = current;
+                let mut best_score = f64::NEG_INFINITY;
+                for (candidate, internal_weight) in weights_by_community {
+                    let score =
+                        internal_weight - degree * community_degrees[candidate] / total_degree;
+                    if score > best_score + 1e-9
+                        || (score - best_score).abs() <= 1e-9 && candidate < best
+                    {
+                        best = candidate;
+                        best_score = score;
+                    }
+                }
+                labels[node] = best;
+                community_degrees[best] += degree;
+                moved |= best != current;
+            }
+            if !moved {
+                break;
+            }
+        }
+    }
+
+    sorted_paths
+        .into_iter()
+        .enumerate()
+        .map(|(index, path)| (path, labels[index]))
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -16843,6 +17386,88 @@ export function chooseTransport() {
 
         assert!(overview.contains("src/bootstrap.ts"));
         assert!(overview.contains("bootstrapApp (function)"));
+    }
+
+    #[test]
+    fn architecture_community_detection_separates_dense_clusters() {
+        let make_edge = |source: &str, target: &str, weight: f32| ArchitectureEdge {
+            source_file_path: source.to_string(),
+            target_file_path: target.to_string(),
+            relationship_counts: BTreeMap::from([("call".to_string(), 1)]),
+            edge_count: 1,
+            average_confidence: 1.0,
+            weight,
+        };
+        let paths = ["a", "b", "c", "d", "e", "f"]
+            .into_iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let edges = vec![
+            make_edge("a", "b", 5.0),
+            make_edge("a", "c", 5.0),
+            make_edge("b", "c", 5.0),
+            make_edge("d", "e", 5.0),
+            make_edge("d", "f", 5.0),
+            make_edge("e", "f", 5.0),
+            make_edge("c", "d", 0.1),
+        ];
+
+        let labels = architecture_community_labels(&paths, &edges);
+
+        assert_eq!(labels["a"], labels["b"]);
+        assert_eq!(labels["b"], labels["c"]);
+        assert_eq!(labels["d"], labels["e"]);
+        assert_eq!(labels["e"], labels["f"]);
+        assert_ne!(labels["c"], labels["d"]);
+    }
+
+    #[test]
+    fn architecture_snapshot_surfaces_hubs_communities_and_bridges() {
+        let (service, temp_dir) = create_test_service();
+        fs::create_dir_all(temp_dir.path().join("src/auth")).unwrap();
+        fs::create_dir_all(temp_dir.path().join("src/billing")).unwrap();
+        fs::write(
+            temp_dir.path().join("src/auth/session.ts"),
+            "export function createSession() { return 'session'; }\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/auth/login.ts"),
+            "import { createSession } from './session';\nexport function login() { return createSession(); }\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/billing/tax.ts"),
+            "export function calculateTax() { return 20; }\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/billing/invoice.ts"),
+            "import { calculateTax } from './tax';\nimport { createSession } from '../auth/session';\nexport function invoice() { createSession(); return calculateTax(); }\n",
+        )
+        .unwrap();
+
+        service.reconcile_index().unwrap();
+        let snapshot = service
+            .build_architecture_snapshot(
+                Some("src"),
+                &[SymbolRelationshipType::Call, SymbolRelationshipType::Import],
+                0.5,
+                20,
+                40,
+                10,
+            )
+            .unwrap();
+
+        assert!(snapshot.modules.len() >= 4);
+        assert!(!snapshot.hubs.is_empty());
+        assert!(snapshot.communities.len() >= 2);
+        assert!(!snapshot.bridge_edges.is_empty());
+        assert!(!snapshot.bridge_modules.is_empty());
+        assert!(snapshot.edges.iter().any(|edge| {
+            edge.source_file_path == "src/billing/invoice.ts"
+                && edge.target_file_path == "src/auth/session.ts"
+        }));
     }
 
     #[test]

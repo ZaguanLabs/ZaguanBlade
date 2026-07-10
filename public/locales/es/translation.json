@@ -838,6 +838,7 @@
       "symbolTrace": "Recorriendo relaciones del símbolo",
       "symbolPath": "Trazando la ruta entre símbolos",
       "symbolQuery": "Consultando el grafo de símbolos",
+      "symbolArchitecture": "Trazando la arquitectura del código",
       "symbolSchema": "Comprobando el índice de símbolos",
       "listFiles": "Listando archivos",
       "grepSearch": "Buscando en el código",

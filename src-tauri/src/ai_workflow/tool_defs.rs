@@ -518,6 +518,30 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         serde_json::json!({
             "type": "function",
+            "name": "symbol_architecture",
+            "function": {
+                "name": "symbol_architecture",
+                "description": "Build a compressed confidence-weighted file/module graph for a workspace or directory scope. Returns inferred communities, central hubs, cross-community bridge modules/edges, and bounded aggregate edges. Communities are deterministic graph-analysis hints, not declared package boundaries.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "scope": { "type": "string", "description": "Optional workspace-relative directory scope; a file selects its containing directory" },
+                        "relationship_type": { "type": "string", "description": "Optional single relationship kind" },
+                        "relationships": { "type": "array", "items": { "type": "string" }, "description": "Optional relationship kinds; defaults to code dependency edges and excludes containment/environment-key noise" },
+                        "min_confidence": { "type": "number", "description": "Minimum effective edge confidence from 0 to 1; defaults to 0.5" },
+                        "max_modules": { "type": "integer", "description": "Candidate module cap before token-budget adjustment; defaults to 160, capped at 1000" },
+                        "max_edges": { "type": "integer", "description": "Aggregate module-edge cap before token-budget adjustment; defaults to 320, capped at 2000" },
+                        "max_communities": { "type": "integer", "description": "Returned inferred-community cap; defaults to 20, capped at 50" },
+                        "token_budget": { "type": "integer", "description": "Approximate output token budget; defaults to 5000, minimum 1000, cap 12000" }
+                    },
+                    "required": [],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
             "name": "symbol_schema",
             "function": {
                 "name": "symbol_schema",
@@ -723,6 +747,7 @@ mod tests {
 
         assert!(names.contains(&"symbol_path"));
         assert!(names.contains(&"symbol_query"));
+        assert!(names.contains(&"symbol_architecture"));
     }
 
     #[test]
