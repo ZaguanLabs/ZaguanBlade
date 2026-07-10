@@ -32,8 +32,7 @@ import { useEditorActions } from "../contexts/EditorContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { useContextMenu, type ContextMenuItem } from "./ui/ContextMenu";
 import { Copy, Scissors, Clipboard, Undo2, Redo2, Search, Network } from "lucide-react";
-import { ZLPService } from "../services/zlp";
-import { StructureNode } from "../types/zlp";
+import { SymbolsIndexService, type InspectorSymbol } from "../services/symbolIndex";
 import { GraphInspector } from "./GraphInspector";
 import { normalizeEditorPath } from "../utils/editorBufferRegistry";
 
@@ -178,8 +177,8 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
     themeAppearanceRef.current = currentTheme.appearance;
     editorActionsRef.current = { setCursorPosition, setSelection, clearSelection };
 
-    // Call Graph Inspector State
-    const [inspectorData, setInspectorData] = React.useState<{ id: string; name: string } | null>(null);
+    // Local Symbols Index Graph Inspector State
+    const [inspectorData, setInspectorData] = React.useState<InspectorSymbol | null>(null);
 
 
     const languageRequestIdRef = useRef(0);
@@ -709,7 +708,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
             { id: 'div-3', label: '', divider: true },
             {
                 id: 'graph',
-                label: t('contextMenu.showCallGraph'),
+                label: t('contextMenu.showSymbolGraph'),
                 icon: <Network className="w-4 h-4" />,
                 onClick: async () => {
                     if (!filename) return;
@@ -717,34 +716,18 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
                     const line = view.state.doc.lineAt(pos);
 
                     try {
-                        const structure = await ZLPService.getStructure(filename, "");
-
-                        const findNode = (nodes: StructureNode[]): StructureNode | null => {
-                            for (const node of nodes) {
-                                // Structure ranges are 0-based in ZLP (usually)
-                                const startLine = node.range.start.line;
-                                const endLine = node.range.end.line;
-                                const currentLine0 = line.number - 1;
-
-                                if (currentLine0 >= startLine && currentLine0 <= endLine) {
-                                    if (node.children) {
-                                        const child = findNode(node.children);
-                                        if (child) return child;
-                                    }
-                                    return node;
-                                }
-                            }
-                            return null;
-                        };
-
-                        const node = findNode(structure);
-                        if (node) {
-                            setInspectorData({ id: node.name, name: node.name });
+                        const symbol = await SymbolsIndexService.resolveSymbolAt(
+                            filename,
+                            line.number - 1,
+                            pos - line.from,
+                        );
+                        if (symbol) {
+                            setInspectorData(symbol);
                         } else {
-                            console.warn("No symbol found at cursor for graph");
+                            console.warn("No indexed symbol found at cursor for graph");
                         }
                     } catch (e) {
-                        console.error("Failed to resolve symbol for graph", e);
+                        console.error("Failed to resolve local symbol for graph", e);
                     }
                 }
             }
@@ -759,9 +742,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
 
             {inspectorData && filename && (
                 <GraphInspector
-                    symbolId={inspectorData.id}
-                    symbolName={inspectorData.name}
-                    filePath={filename}
+                    symbol={inspectorData}
                     onClose={() => setInspectorData(null)}
                     onNavigate={(p, l, c) => {
                         if (onNavigate) onNavigate(p, l, c);

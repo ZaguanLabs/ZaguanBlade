@@ -11,5 +11,6 @@ pub mod settings_local_ai;
 pub mod settings_remote;
 pub mod sso;
 pub mod state;
+pub mod symbols;
 pub mod tools;
 pub mod uncommitted;

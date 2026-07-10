@@ -288,6 +288,9 @@ pub fn run() {
             // State (Headless Core)
             commands::state::bootstrap_state,
             commands::state::get_feature_flags,
+            // Local Symbols Index
+            commands::symbols::resolve_local_symbol_at,
+            commands::symbols::get_local_symbol_graph,
             // Git commands
             git::git_status_summary,
             git::git_status_files,

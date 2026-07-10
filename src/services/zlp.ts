@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import i18n from '../i18n';
 import { BladeDispatcher } from './blade';
 import { subscribeBladeNestedEventType } from './bladeEvents';
-import type { ZLPStructureResponse, ZLPValidationError, ZLPValidationResponse, ZLPGraphResponse, StructureNode } from '../types/zlp';
+import type { ZLPStructureResponse, ZLPValidationError, ZLPValidationResponse, StructureNode } from '../types/zlp';
 
 export class ZLPService {
     private static TIMEOUT_MS = 15000;
@@ -57,13 +57,6 @@ export class ZLPService {
         }
 
         return errors;
-    }
-
-    /**
-     * Get call graph for a symbol
-     */
-    static async getCallGraph(symbolId: string): Promise<ZLPGraphResponse> {
-        return this.send<ZLPGraphResponse>("zlp.graph", { symbol_id: symbolId, direction: "both", depth: 1 });
     }
 
     /**

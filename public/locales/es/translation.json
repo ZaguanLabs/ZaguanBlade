@@ -303,7 +303,7 @@
     "redo": "Rehacer",
     "find": "Buscar",
     "renameSymbol": "Renombrar símbolo",
-    "showCallGraph": "Mostrar grafo de llamadas",
+    "showSymbolGraph": "Mostrar grafo de símbolos",
     "label": "Menú contextual"
   },
   "terminal": {
@@ -1252,10 +1252,31 @@
     }
   },
   "graphInspector": {
-    "incomingCalls": "Llamadas entrantes",
-    "outgoingCalls": "Llamadas salientes",
-    "focus": "Centrar",
-    "noCallsFound": "No se han encontrado llamadas."
+    "title": "Grafo local de símbolos",
+    "direction": "Dirección del grafo",
+    "both": "Ambas",
+    "incoming": "Entrantes",
+    "outgoing": "Salientes",
+    "relationship": "Tipo de relación",
+    "allRelationships": "Relaciones de código",
+    "calls": "Llamadas",
+    "dependencies": "Dependencias",
+    "types": "Tipos",
+    "handlers": "Manejadores",
+    "structure": "Estructura",
+    "confidence": "Confianza mínima",
+    "anyConfidence": "Cualquier confianza",
+    "incomingRelationships": "Relaciones entrantes",
+    "outgoingRelationships": "Relaciones salientes",
+    "focus": "Símbolo central",
+    "structural": "estructural",
+    "syntax": "sintaxis",
+    "expand": "Explorar este símbolo",
+    "noRelationshipsFound": "No se han encontrado relaciones que coincidan.",
+    "loadFailed": "No se pudo cargar el grafo local de símbolos",
+    "truncated": "Este entorno se ha truncado por el límite de seguridad.",
+    "unresolved": "{{count}} relación sin resolver",
+    "unresolved_other": "{{count}} relaciones sin resolver"
   },
   "progress": {
     "planningNextStep": "Planificando el siguiente paso"

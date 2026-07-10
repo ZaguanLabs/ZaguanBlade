@@ -303,7 +303,7 @@
     "redo": "Redo",
     "find": "Find",
     "renameSymbol": "Rename Symbol",
-    "showCallGraph": "Show Call Graph",
+    "showSymbolGraph": "Show Symbol Graph",
     "label": "Context menu"
   },
   "terminal": {
@@ -1256,10 +1256,31 @@
     }
   },
   "graphInspector": {
-    "incomingCalls": "Incoming Calls",
-    "outgoingCalls": "Outgoing Calls",
+    "title": "Local Symbol Graph",
+    "direction": "Graph direction",
+    "both": "Both",
+    "incoming": "Incoming",
+    "outgoing": "Outgoing",
+    "relationship": "Relationship type",
+    "allRelationships": "Code relations",
+    "calls": "Calls",
+    "dependencies": "Dependencies",
+    "types": "Types",
+    "handlers": "Handlers",
+    "structure": "Structure",
+    "confidence": "Minimum confidence",
+    "anyConfidence": "Any confidence",
+    "incomingRelationships": "Incoming Relationships",
+    "outgoingRelationships": "Outgoing Relationships",
     "focus": "Focus",
-    "noCallsFound": "No calls found."
+    "structural": "structural",
+    "syntax": "syntax",
+    "expand": "Explore this symbol",
+    "noRelationshipsFound": "No matching relationships found.",
+    "loadFailed": "Failed to load the local symbol graph",
+    "truncated": "This neighborhood was truncated by the safety limit.",
+    "unresolved": "{{count}} unresolved edge",
+    "unresolved_other": "{{count}} unresolved edges"
   },
   "progress": {
     "planningNextStep": "Planning Next Step"

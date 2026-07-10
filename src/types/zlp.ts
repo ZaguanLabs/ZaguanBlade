@@ -30,24 +30,3 @@ export interface StructureNode {
 }
 
 export type ZLPStructureResponse = StructureNode[];
-
-// Graph (The "Architecture Map")
-export interface CallGraphNode {
-    id: string;
-    name: string;
-    kind: string;
-    file?: string;
-    line?: number;
-}
-
-export interface CallGraphEdge {
-    from: string; // Node ID
-    to: string;   // Node ID
-    kind: 'calls' | 'uses' | 'imports' | 'extends';
-}
-
-export interface ZLPGraphResponse {
-    nodes: CallGraphNode[];
-    edges: CallGraphEdge[];
-    root_id: string;
-}
