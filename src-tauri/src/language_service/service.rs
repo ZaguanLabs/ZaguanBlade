@@ -29,6 +29,10 @@ thread_local! {
 }
 
 const ANCHOR_ONLY_EXTRACTOR_VERSION: u32 = 1;
+// Stored extractor versions combine the language extractor with cross-language
+// semantic-anchor behavior, so a rationale/link extraction change invalidates
+// every affected file exactly once without rewriting each language capability.
+const SEMANTIC_CONTEXT_EXTRACTOR_VERSION: u32 = 2;
 
 /// Unified language service
 pub struct LanguageService {
@@ -1159,6 +1163,11 @@ impl LanguageService {
                     None
                 }
             })
+            .map(|base_version| {
+                base_version
+                    .saturating_mul(100)
+                    .saturating_add(SEMANTIC_CONTEXT_EXTRACTOR_VERSION)
+            })
     }
 
     pub fn audit_index_health(&self) -> Result<IndexHealthSnapshot, LanguageError> {
@@ -1620,6 +1629,7 @@ impl LanguageService {
                 // touches edges the prior two passes left NULL.
                 self.symbol_store
                     .mine_receiver_type_relationship_targets()?;
+                self.symbol_store.resolve_semantic_anchor_targets(None)?;
             }
         }
 
@@ -2268,18 +2278,19 @@ impl LanguageService {
         });
         if is_fresh {
             let mut db_write_ms = None;
+            let symbols = self.get_file_symbols_raw(file_path)?;
             if self
                 .symbol_store
                 .get_semantic_anchors_in_file(file_path, 1)?
                 .is_empty()
             {
-                let anchors = extract_semantic_anchors(file_path, &content);
+                let mut anchors = extract_semantic_anchors(file_path, &content);
+                attach_semantic_anchor_context(&mut anchors, &symbols);
                 let db_write_start = std::time::Instant::now();
                 self.symbol_store
                     .replace_semantic_anchors_for_file(file_path, &anchors)?;
                 db_write_ms = Some(db_write_start.elapsed().as_millis() as u64);
             }
-            let symbols = self.get_file_symbols_raw(file_path)?;
             self.update_index_timings(|timings| {
                 timings.last_file_path = Some(file_path.to_string());
                 timings.last_file_total_ms = Some(total_start.elapsed().as_millis() as u64);
@@ -2357,7 +2368,8 @@ impl LanguageService {
         )?;
 
         // Delete old symbols and insert new ones
-        let semantic_anchors = extract_semantic_anchors(file_path, &content);
+        let mut semantic_anchors = extract_semantic_anchors(file_path, &content);
+        attach_semantic_anchor_context(&mut semantic_anchors, &symbols);
         let relationship_ms = relationship_start.elapsed().as_millis() as u64;
 
         let db_write_start = std::time::Instant::now();
@@ -2372,6 +2384,8 @@ impl LanguageService {
             &semantic_anchors,
             &relationships,
         )?;
+        self.symbol_store
+            .resolve_semantic_anchor_targets(Some(file_path))?;
         // M2.4 — incremental single-file reindex resolves edges same-file/imported
         // only; the global-unique back-fill is deferred to the next full reindex
         // so its COUNT(*) stays truly global (not "unique among files seen so far").
@@ -2606,11 +2620,12 @@ impl LanguageService {
                 )
             };
         self.canonicalize_import_relationships(file_path, &mut relationships);
-        let anchors = if skip_extraction {
+        let mut anchors = if skip_extraction {
             Vec::new()
         } else {
             extract_semantic_anchors(file_path, &content)
         };
+        attach_semantic_anchor_context(&mut anchors, &symbols);
         let parse_extract_ms = parse_extract_start.elapsed().as_millis() as u64;
 
         let staged = StagedFileIndex {
@@ -2880,6 +2895,7 @@ impl LanguageService {
             // the GLOBAL receiver-type registry (runs after the back-fill).
             self.symbol_store
                 .mine_receiver_type_relationship_targets()?;
+            self.symbol_store.resolve_semantic_anchor_targets(None)?;
         }
 
         stats.duration_ms = start.elapsed().as_millis() as u64;
@@ -3167,6 +3183,16 @@ impl LanguageService {
         Ok(self
             .symbol_store
             .get_semantic_anchors_in_file(file_path, limit)?)
+    }
+
+    pub fn get_semantic_context_for_symbols(
+        &self,
+        symbol_ids: &[String],
+        limit: usize,
+    ) -> Result<Vec<SemanticAnchor>, LanguageError> {
+        Ok(self
+            .symbol_store
+            .get_semantic_context_for_symbol_ids(symbol_ids, limit)?)
     }
 
     pub fn get_symbol_at(
@@ -6461,6 +6487,18 @@ fn extract_semantic_anchors(file_path: &str, content: &str) -> Vec<SemanticAncho
     let mut seen = HashSet::new();
     let limit = semantic_anchor_limit_for_file(file_path);
 
+    extract_rationale_anchors(file_path, content, &mut anchors, &mut seen, limit);
+    if anchors.len() >= limit {
+        return anchors;
+    }
+
+    if matches!(Language::from_path(file_path), Some(Language::Markdown)) {
+        extract_markdown_document_anchors(file_path, content, &mut anchors, &mut seen, limit);
+        if anchors.len() >= limit {
+            return anchors;
+        }
+    }
+
     if is_translation_resource_path(file_path) {
         extract_translation_definition_anchors(file_path, content, &mut anchors, &mut seen, limit);
         if anchors.len() >= limit {
@@ -6524,6 +6562,343 @@ fn extract_semantic_anchors(file_path: &str, content: &str) -> Vec<SemanticAncho
     }
 
     anchors
+}
+
+fn extract_rationale_anchors(
+    file_path: &str,
+    content: &str,
+    anchors: &mut Vec<SemanticAnchor>,
+    seen: &mut HashSet<(String, String, u32, u32)>,
+    limit: usize,
+) {
+    const MARKERS: [&str; 7] = [
+        "why:",
+        "rationale:",
+        "reason:",
+        "decision:",
+        "tradeoff:",
+        "note:",
+        "hack:",
+    ];
+
+    for (line_index, line) in content.lines().enumerate() {
+        if anchors.len() >= limit {
+            return;
+        }
+        let lower = line.to_ascii_lowercase();
+        let Some((marker, character)) = MARKERS
+            .iter()
+            .filter_map(|marker| lower.find(marker).map(|index| (*marker, index)))
+            .min_by_key(|(_, index)| *index)
+        else {
+            continue;
+        };
+        let prefix = line[..character].trim();
+        if !prefix.is_empty()
+            && !prefix.chars().all(|character| {
+                character.is_whitespace()
+                    || matches!(
+                        character,
+                        '/' | '*' | '#' | '-' | '!' | '<' | '>' | ';' | '[' | ']' | '(' | ')'
+                    )
+            })
+        {
+            continue;
+        }
+        let rationale = line[character + marker.len()..].trim();
+        let value = if rationale.is_empty() {
+            line.trim()
+        } else {
+            rationale
+        };
+        push_semantic_anchor(
+            anchors,
+            seen,
+            file_path,
+            "rationale",
+            value.chars().take(240).collect::<String>(),
+            line_index as u32,
+            character as u32,
+            line.trim().chars().take(240).collect::<String>(),
+            if matches!(marker, "why:" | "rationale:" | "decision:") {
+                0.98
+            } else {
+                0.9
+            },
+            limit,
+        );
+    }
+}
+
+fn extract_markdown_document_anchors(
+    file_path: &str,
+    content: &str,
+    anchors: &mut Vec<SemanticAnchor>,
+    seen: &mut HashSet<(String, String, u32, u32)>,
+    limit: usize,
+) {
+    for (line_index, line) in content.lines().enumerate() {
+        if anchors.len() >= limit {
+            return;
+        }
+        let preview = line.trim().chars().take(240).collect::<String>();
+
+        for (raw_target, character) in extract_markdown_link_targets(line) {
+            let Some((target_file_path, target_name)) =
+                resolve_markdown_reference(file_path, &raw_target, false)
+            else {
+                continue;
+            };
+            push_linked_semantic_anchor(
+                anchors,
+                seen,
+                file_path,
+                "documentation_link",
+                raw_target,
+                line_index as u32,
+                character as u32,
+                preview.clone(),
+                0.97,
+                target_file_path,
+                target_name,
+                limit,
+            );
+        }
+
+        for (raw_target, character) in extract_wikilink_targets(line) {
+            let Some((target_file_path, target_name)) =
+                resolve_markdown_reference(file_path, &raw_target, true)
+            else {
+                continue;
+            };
+            push_linked_semantic_anchor(
+                anchors,
+                seen,
+                file_path,
+                "documentation_link",
+                raw_target,
+                line_index as u32,
+                character as u32,
+                preview.clone(),
+                0.94,
+                target_file_path,
+                target_name,
+                limit,
+            );
+        }
+
+        for (reference, character) in extract_design_reference_tokens(line) {
+            push_linked_semantic_anchor(
+                anchors,
+                seen,
+                file_path,
+                "design_reference",
+                reference.clone(),
+                line_index as u32,
+                character as u32,
+                preview.clone(),
+                0.92,
+                None,
+                Some(reference),
+                limit,
+            );
+        }
+
+        for (reference, character) in extract_inline_code_references(line) {
+            push_linked_semantic_anchor(
+                anchors,
+                seen,
+                file_path,
+                "design_symbol_reference",
+                reference.clone(),
+                line_index as u32,
+                character as u32,
+                preview.clone(),
+                0.78,
+                None,
+                Some(reference),
+                limit,
+            );
+        }
+    }
+}
+
+fn extract_markdown_link_targets(line: &str) -> Vec<(String, usize)> {
+    let mut targets = Vec::new();
+    let mut search_start = 0usize;
+    while let Some(relative) = line[search_start..].find("](") {
+        let target_start = search_start + relative + 2;
+        let Some(relative_end) = line[target_start..].find(')') else {
+            break;
+        };
+        let target_end = target_start + relative_end;
+        let raw = line[target_start..target_end].trim();
+        let raw = if raw.starts_with('<') && raw.ends_with('>') {
+            &raw[1..raw.len().saturating_sub(1)]
+        } else {
+            raw.split_whitespace().next().unwrap_or_default()
+        };
+        if !raw.is_empty() {
+            targets.push((raw.to_string(), target_start));
+        }
+        search_start = target_end.saturating_add(1);
+    }
+    targets
+}
+
+fn extract_wikilink_targets(line: &str) -> Vec<(String, usize)> {
+    let mut targets = Vec::new();
+    let mut search_start = 0usize;
+    while let Some(relative) = line[search_start..].find("[[") {
+        let target_start = search_start + relative + 2;
+        let Some(relative_end) = line[target_start..].find("]]") else {
+            break;
+        };
+        let target_end = target_start + relative_end;
+        let raw = line[target_start..target_end]
+            .split('|')
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if !raw.is_empty() {
+            targets.push((raw.to_string(), target_start));
+        }
+        search_start = target_end.saturating_add(2);
+    }
+    targets
+}
+
+fn resolve_markdown_reference(
+    file_path: &str,
+    raw_target: &str,
+    wikilink: bool,
+) -> Option<(Option<String>, Option<String>)> {
+    let target = raw_target.trim();
+    let lower = target.to_ascii_lowercase();
+    if target.is_empty()
+        || lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("mailto:")
+        || lower.starts_with("data:")
+        || target.starts_with('/')
+    {
+        return None;
+    }
+
+    let (path_part, fragment) = target
+        .split_once('#')
+        .map(|(path, fragment)| (path, Some(fragment)))
+        .unwrap_or((target, None));
+    let target_file_path = if path_part.is_empty() {
+        Some(file_path.to_string())
+    } else {
+        let path_part = path_part.split('?').next().unwrap_or(path_part);
+        let mut relative = PathBuf::from(path_part);
+        if wikilink && relative.extension().is_none() {
+            relative.set_extension("md");
+        }
+        let parent = Path::new(file_path)
+            .parent()
+            .unwrap_or_else(|| Path::new(""));
+        Some(
+            normalize_path(&parent.join(relative))
+                .to_string_lossy()
+                .replace('\\', "/"),
+        )
+    };
+    let target_name = fragment
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    Some((target_file_path, target_name))
+}
+
+fn extract_design_reference_tokens(line: &str) -> Vec<(String, usize)> {
+    let upper = line.to_ascii_uppercase();
+    let mut references = Vec::new();
+    for prefix in ["ADR", "RFC"] {
+        let mut search_start = 0usize;
+        while let Some(relative) = upper[search_start..].find(prefix) {
+            let start = search_start + relative;
+            let boundary_ok = start == 0 || !upper.as_bytes()[start - 1].is_ascii_alphanumeric();
+            let mut index = start + prefix.len();
+            while index < upper.len()
+                && matches!(upper.as_bytes()[index], b'-' | b'_' | b' ' | b':')
+            {
+                index += 1;
+            }
+            let digits_start = index;
+            while index < upper.len() && upper.as_bytes()[index].is_ascii_digit() {
+                index += 1;
+            }
+            if boundary_ok && index > digits_start {
+                references.push((format!("{}-{}", prefix, &upper[digits_start..index]), start));
+            }
+            search_start = (start + prefix.len()).min(upper.len());
+        }
+    }
+    references
+}
+
+fn extract_inline_code_references(line: &str) -> Vec<(String, usize)> {
+    let mut references = Vec::new();
+    let mut search_start = 0usize;
+    while let Some(relative_start) = line[search_start..].find('`') {
+        let start = search_start + relative_start;
+        if line[start..].starts_with("```") {
+            search_start = start.saturating_add(3);
+            continue;
+        }
+        let value_start = start + 1;
+        let Some(relative_end) = line[value_start..].find('`') else {
+            break;
+        };
+        let end = value_start + relative_end;
+        let value = normalize_inline_symbol_reference(&line[value_start..end]);
+        if let Some(value) = value {
+            references.push((value, value_start));
+        }
+        search_start = end.saturating_add(1);
+    }
+    references
+}
+
+fn normalize_inline_symbol_reference(value: &str) -> Option<String> {
+    let value = value
+        .trim()
+        .strip_suffix("()")
+        .unwrap_or(value.trim())
+        .trim();
+    let lower = value.to_ascii_lowercase();
+    if value.len() < 3
+        || value.len() > 120
+        || value.contains(char::is_whitespace)
+        || value.contains('/')
+        || matches!(
+            lower.as_str(),
+            "true"
+                | "false"
+                | "null"
+                | "none"
+                | "undefined"
+                | "rust"
+                | "typescript"
+                | "javascript"
+                | "python"
+                | "markdown"
+        )
+        || !value
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_alphabetic() || character == '_')
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '_' | ':' | '.' | '#' | '-' | '$')
+        })
+    {
+        return None;
+    }
+    Some(value.to_string())
 }
 
 /// M5.14 — languages for which the generic quoted-literal / token anchor scan is
@@ -6718,8 +7093,129 @@ fn push_semantic_anchor(
         character,
         preview,
         confidence,
+        owner_symbol_id: None,
+        target_file_path: None,
+        target_name: None,
+        target_symbol_id: None,
     });
     true
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_linked_semantic_anchor(
+    anchors: &mut Vec<SemanticAnchor>,
+    seen: &mut HashSet<(String, String, u32, u32)>,
+    file_path: &str,
+    kind: impl Into<String>,
+    value: impl Into<String>,
+    line: u32,
+    character: u32,
+    preview: String,
+    confidence: f32,
+    target_file_path: Option<String>,
+    target_name: Option<String>,
+    limit: usize,
+) -> bool {
+    let before = anchors.len();
+    let inserted = push_semantic_anchor(
+        anchors, seen, file_path, kind, value, line, character, preview, confidence, limit,
+    );
+    if inserted && anchors.len() > before {
+        if let Some(anchor) = anchors.last_mut() {
+            anchor.target_file_path = target_file_path;
+            anchor.target_name = target_name;
+        }
+    }
+    inserted
+}
+
+fn attach_semantic_anchor_context(anchors: &mut [SemanticAnchor], symbols: &[Symbol]) {
+    let file_root = symbols
+        .iter()
+        .find(|symbol| LanguageService::is_synthetic_file_root_symbol(symbol));
+    let headings = symbols
+        .iter()
+        .filter(|symbol| symbol.symbol_type == SymbolType::Heading)
+        .collect::<Vec<_>>();
+
+    for anchor in anchors {
+        let owner = if !headings.is_empty() {
+            headings
+                .iter()
+                .copied()
+                .filter(|heading| heading.range.start.line <= anchor.line)
+                .max_by_key(|heading| heading.range.start.line)
+                .or(file_root)
+        } else {
+            symbols
+                .iter()
+                .filter(|symbol| {
+                    !LanguageService::is_synthetic_file_root_symbol(symbol)
+                        && symbol.range.start.line <= anchor.line
+                        && symbol.range.end.line >= anchor.line
+                })
+                .min_by_key(|symbol| {
+                    (
+                        symbol
+                            .range
+                            .end
+                            .line
+                            .saturating_sub(symbol.range.start.line),
+                        std::cmp::Reverse(symbol.range.start.line),
+                    )
+                })
+                .or_else(|| {
+                    symbols
+                        .iter()
+                        .filter(|symbol| {
+                            !LanguageService::is_synthetic_file_root_symbol(symbol)
+                                && symbol.range.start.line >= anchor.line
+                                && symbol.range.start.line.saturating_sub(anchor.line) <= 3
+                        })
+                        .min_by_key(|symbol| symbol.range.start.line)
+                })
+                .or(file_root)
+        };
+        anchor.owner_symbol_id = owner.map(|symbol| symbol.id.clone());
+
+        if anchor.target_symbol_id.is_none()
+            && anchor.target_file_path.as_deref() == Some(anchor.file_path.as_str())
+        {
+            if let Some(target_name) = anchor.target_name.as_deref() {
+                let candidates = symbols
+                    .iter()
+                    .filter(|symbol| semantic_anchor_target_matches(symbol, target_name))
+                    .collect::<Vec<_>>();
+                if candidates.len() == 1 {
+                    anchor.target_symbol_id = Some(candidates[0].id.clone());
+                }
+            }
+        }
+    }
+}
+
+fn semantic_anchor_target_matches(symbol: &Symbol, target_name: &str) -> bool {
+    symbol.name.eq_ignore_ascii_case(target_name)
+        || symbol.qualified_name.eq_ignore_ascii_case(target_name)
+        || symbol.symbol_type == SymbolType::Heading
+            && markdown_heading_slug(&symbol.name).eq_ignore_ascii_case(target_name)
+}
+
+fn markdown_heading_slug(value: &str) -> String {
+    let mut slug = String::new();
+    let mut pending_dash = false;
+    for character in value.chars().flat_map(char::to_lowercase) {
+        if character.is_alphanumeric() || character == '_' {
+            if pending_dash && !slug.is_empty() {
+                slug.push('-');
+            }
+            pending_dash = false;
+            slug.push(character);
+        } else if character.is_whitespace() || character == '-' {
+            pending_dash = true;
+        }
+    }
+    slug
 }
 
 fn extract_translation_definition_anchors(
@@ -15429,6 +15925,121 @@ metadata:
     }
 
     #[test]
+    fn rationale_anchors_attach_to_the_nearest_enclosing_symbol() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(
+            temp_dir.path().join("decision.ts"),
+            r#"
+export function chooseTransport() {
+    // WHY: WebSockets preserve the bidirectional session semantics.
+    return "websocket";
+}
+"#,
+        )
+        .unwrap();
+
+        service.index_file("decision.ts").unwrap();
+        let owner = service
+            .search_symbols_filtered("chooseTransport", Some("decision.ts"), None, 5)
+            .unwrap()
+            .remove(0)
+            .symbol;
+        let rationales = service
+            .search_semantic_anchors("bidirectional session", Some("decision.ts"), 5)
+            .unwrap();
+
+        assert_eq!(rationales.len(), 1);
+        assert_eq!(rationales[0].anchor.kind, "rationale");
+        assert_eq!(
+            rationales[0].anchor.owner_symbol_id.as_deref(),
+            Some(owner.id.as_str())
+        );
+    }
+
+    #[test]
+    fn markdown_links_and_code_mentions_resolve_without_guessing_ambiguity() {
+        let (service, temp_dir) = create_test_service();
+        fs::create_dir_all(temp_dir.path().join("docs")).unwrap();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        fs::write(
+            temp_dir.path().join("src/service.ts"),
+            "export function processOrder() { return true; }\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("docs/architecture.md"),
+            "# Architecture\n\n## Request Flow\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("docs/decision.md"),
+            "# ADR-0042\n\nUse `processOrder`; see [request flow](architecture.md#request-flow).\n",
+        )
+        .unwrap();
+
+        service.reconcile_index().unwrap();
+        let process_order = service
+            .search_symbols_filtered("processOrder", Some("src/service.ts"), None, 5)
+            .unwrap()
+            .remove(0)
+            .symbol;
+        let request_flow = service
+            .search_symbols_filtered("Request Flow", Some("docs/architecture.md"), None, 5)
+            .unwrap()
+            .remove(0)
+            .symbol;
+        let code_mentions = service
+            .search_semantic_anchors("processOrder", Some("docs/decision.md"), 5)
+            .unwrap();
+        let doc_links = service
+            .search_semantic_anchors("architecture.md#request-flow", Some("docs/decision.md"), 5)
+            .unwrap();
+
+        assert!(code_mentions.iter().any(|result| {
+            result.anchor.kind == "design_symbol_reference"
+                && result.anchor.target_symbol_id.as_deref() == Some(process_order.id.as_str())
+                && result.anchor.owner_symbol_id.is_some()
+        }));
+        assert!(doc_links.iter().any(|result| {
+            result.anchor.kind == "documentation_link"
+                && result.anchor.target_file_path.as_deref() == Some("docs/architecture.md")
+                && result.anchor.target_symbol_id.as_deref() == Some(request_flow.id.as_str())
+        }));
+    }
+
+    #[test]
+    fn ambiguous_markdown_code_mentions_remain_unresolved() {
+        let (service, temp_dir) = create_test_service();
+        fs::create_dir_all(temp_dir.path().join("docs")).unwrap();
+        fs::write(
+            temp_dir.path().join("first.ts"),
+            "export function sharedHandler() {}\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("second.ts"),
+            "export function sharedHandler() {}\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("docs/decision.md"),
+            "# Decision\n\nCall `sharedHandler`.\n",
+        )
+        .unwrap();
+
+        service.reconcile_index().unwrap();
+        let mentions = service
+            .search_semantic_anchors("sharedHandler", Some("docs/decision.md"), 5)
+            .unwrap();
+
+        assert!(mentions.iter().any(|result| {
+            result.anchor.kind == "design_symbol_reference"
+                && result.anchor.target_name.as_deref() == Some("sharedHandler")
+                && result.anchor.target_symbol_id.is_none()
+        }));
+    }
+
+    #[test]
     fn translation_json_resources_are_anchor_indexed_and_searchable() {
         let (service, temp_dir) = create_test_service();
 
@@ -15758,7 +16369,8 @@ metadata:
             .indexed_file_record("versioned.ts")
             .unwrap()
             .unwrap();
-        assert_eq!(initial_record.extractor_version, Some(2));
+        let expected_version = LanguageService::extractor_version_for_index_file("versioned.ts");
+        assert_eq!(initial_record.extractor_version, expected_version);
 
         service
             .symbol_store
@@ -15788,7 +16400,7 @@ metadata:
             .indexed_file_record("versioned.ts")
             .unwrap()
             .unwrap();
-        assert_eq!(refreshed_record.extractor_version, Some(2));
+        assert_eq!(refreshed_record.extractor_version, expected_version);
     }
 
     #[test]

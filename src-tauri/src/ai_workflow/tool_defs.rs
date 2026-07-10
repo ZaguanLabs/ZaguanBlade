@@ -92,7 +92,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "semantic_anchor_search",
             "function": {
                 "name": "semantic_anchor_search",
-                "description": "Search indexed semantic anchors such as protocol tags, command names, event names, route-like strings, config keys, translation keys/text, and CSS/theme tokens. Returns language_support metadata for the optional file filter.",
+                "description": "Search indexed semantic anchors such as rationale comments, design-document/code references, Markdown links, protocol tags, command/event names, routes, config keys, translations, and CSS/theme tokens. Contextual anchors expose their nearest owner symbol and deterministic target path/symbol when resolvable; ambiguous targets remain unresolved. Returns language_support metadata for the optional file filter.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -495,7 +495,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_query",
             "function": {
                 "name": "symbol_query",
-                "description": "Return a compact connected symbol subgraph for a natural-language code question. Uses ranked lexical seeds, bounded traversal, confidence filtering, and explicit node/edge/token budgets.",
+                "description": "Return compact seed-connected symbol neighborhoods for a natural-language code question, plus rationale/design-document anchors owned by returned symbols. Uses ranked lexical seeds, bounded traversal, confidence filtering, and explicit node/edge/token budgets.",
                 "strict": false,
                 "parameters": {
                     "type": "object",

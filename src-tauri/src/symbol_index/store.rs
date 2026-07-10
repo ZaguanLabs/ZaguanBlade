@@ -61,6 +61,53 @@ WHERE target_symbol_id IS NULL
       ) = 1
 "#;
 
+const GLOBAL_SEMANTIC_TARGET_BACKFILL_SQL: &str = r#"
+UPDATE semantic_anchors AS anchor
+SET target_symbol_id = (
+    SELECT symbol.id
+    FROM symbols AS symbol
+    WHERE (symbol.name = anchor.target_name OR symbol.qualified_name = anchor.target_name)
+      AND symbol.symbol_type != 'import'
+      AND symbol.qualified_name != '__file__'
+    LIMIT 1
+)
+WHERE anchor.target_file_path IS NULL
+  AND anchor.target_symbol_id IS NULL
+  AND anchor.target_name IS NOT NULL
+  AND anchor.target_name != ''
+  AND (
+    SELECT COUNT(*)
+    FROM symbols AS candidate
+    WHERE (candidate.name = anchor.target_name OR candidate.qualified_name = anchor.target_name)
+      AND candidate.symbol_type != 'import'
+      AND candidate.qualified_name != '__file__'
+  ) = 1
+"#;
+
+const GLOBAL_SEMANTIC_TARGET_BACKFILL_FOR_FILE_SQL: &str = r#"
+UPDATE semantic_anchors AS anchor
+SET target_symbol_id = (
+    SELECT symbol.id
+    FROM symbols AS symbol
+    WHERE (symbol.name = anchor.target_name OR symbol.qualified_name = anchor.target_name)
+      AND symbol.symbol_type != 'import'
+      AND symbol.qualified_name != '__file__'
+    LIMIT 1
+)
+WHERE anchor.file_path = ?1
+  AND anchor.target_file_path IS NULL
+  AND anchor.target_symbol_id IS NULL
+  AND anchor.target_name IS NOT NULL
+  AND anchor.target_name != ''
+  AND (
+    SELECT COUNT(*)
+    FROM symbols AS candidate
+    WHERE (candidate.name = anchor.target_name OR candidate.qualified_name = anchor.target_name)
+      AND candidate.symbol_type != 'import'
+      AND candidate.qualified_name != '__file__'
+  ) = 1
+"#;
+
 /// M5.1: serialize a relationship's receiver type into the `metadata_json`
 /// column (M2.3) as `{"recv_type":"<name>"}`. `None` (bare / unknown receiver) →
 /// SQL NULL, so non-receiver edges are byte-for-byte what today stores.
@@ -539,6 +586,14 @@ pub struct SemanticAnchor {
     pub character: u32,
     pub preview: String,
     pub confidence: f32,
+    #[serde(default)]
+    pub owner_symbol_id: Option<String>,
+    #[serde(default)]
+    pub target_file_path: Option<String>,
+    #[serde(default)]
+    pub target_name: Option<String>,
+    #[serde(default)]
+    pub target_symbol_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -728,6 +783,10 @@ impl SymbolStore {
                 character INTEGER NOT NULL,
                 preview TEXT NOT NULL,
                 confidence REAL NOT NULL,
+                owner_symbol_id TEXT,
+                target_file_path TEXT,
+                target_name TEXT,
+                target_symbol_id TEXT,
                 indexed_at INTEGER NOT NULL
             );
 
@@ -861,8 +920,9 @@ impl SymbolStore {
             tx.execute(
                 r#"
                 INSERT OR REPLACE INTO semantic_anchors
-                (id, file_path, kind, value, line, character, preview, confidence, indexed_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                (id, file_path, kind, value, line, character, preview, confidence,
+                 owner_symbol_id, target_file_path, target_name, target_symbol_id, indexed_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                 "#,
                 params![
                     &anchor.id,
@@ -873,6 +933,10 @@ impl SymbolStore {
                     anchor.character,
                     &anchor.preview,
                     anchor.confidence,
+                    anchor.owner_symbol_id.as_deref(),
+                    anchor.target_file_path.as_deref(),
+                    anchor.target_name.as_deref(),
+                    anchor.target_symbol_id.as_deref(),
                     now,
                 ],
             )?;
@@ -898,7 +962,8 @@ impl SymbolStore {
         let (sql, values) = if let Some(file_path) = file_path {
             (
                 r#"
-                SELECT id, file_path, kind, value, line, character, preview, confidence
+                SELECT id, file_path, kind, value, line, character, preview, confidence,
+                       owner_symbol_id, target_file_path, target_name, target_symbol_id
                 FROM semantic_anchors
                 WHERE file_path = ?1 AND (value LIKE ?2 OR preview LIKE ?2)
                 ORDER BY CASE
@@ -919,7 +984,8 @@ impl SymbolStore {
         } else {
             (
                 r#"
-                SELECT id, file_path, kind, value, line, character, preview, confidence
+                SELECT id, file_path, kind, value, line, character, preview, confidence,
+                       owner_symbol_id, target_file_path, target_name, target_symbol_id
                 FROM semantic_anchors
                 WHERE value LIKE ?1 OR preview LIKE ?1
                 ORDER BY CASE
@@ -956,7 +1022,8 @@ impl SymbolStore {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, file_path, kind, value, line, character, preview, confidence
+            SELECT id, file_path, kind, value, line, character, preview, confidence,
+                   owner_symbol_id, target_file_path, target_name, target_symbol_id
             FROM semantic_anchors
             WHERE file_path = ?1
             ORDER BY line, character, value
@@ -1033,6 +1100,10 @@ impl SymbolStore {
             params![file_path],
         )?;
         tx.execute(
+            "UPDATE semantic_anchors SET target_symbol_id = NULL WHERE target_file_path = ?1",
+            params![file_path],
+        )?;
+        tx.execute(
             "DELETE FROM semantic_anchors WHERE file_path = ?1",
             params![file_path],
         )?;
@@ -1074,8 +1145,9 @@ impl SymbolStore {
             tx.execute(
                 r#"
                 INSERT OR REPLACE INTO semantic_anchors
-                (id, file_path, kind, value, line, character, preview, confidence, indexed_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                (id, file_path, kind, value, line, character, preview, confidence,
+                 owner_symbol_id, target_file_path, target_name, target_symbol_id, indexed_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                 "#,
                 params![
                     &anchor.id,
@@ -1086,6 +1158,10 @@ impl SymbolStore {
                     anchor.character,
                     &anchor.preview,
                     anchor.confidence,
+                    anchor.owner_symbol_id.as_deref(),
+                    anchor.target_file_path.as_deref(),
+                    anchor.target_name.as_deref(),
+                    anchor.target_symbol_id.as_deref(),
                     now,
                 ],
             )?;
@@ -1153,9 +1229,13 @@ impl SymbolStore {
                 tx.prepare_cached("DELETE FROM semantic_anchors WHERE file_path = ?1")?;
             let mut delete_symbols =
                 tx.prepare_cached("DELETE FROM symbols WHERE file_path = ?1")?;
+            let mut clear_incoming_anchor_targets = tx.prepare_cached(
+                "UPDATE semantic_anchors SET target_symbol_id = NULL WHERE target_file_path = ?1",
+            )?;
 
             for file in files {
                 delete_relationships.execute(params![&file.file_path])?;
+                clear_incoming_anchor_targets.execute(params![&file.file_path])?;
                 delete_anchors.execute(params![&file.file_path])?;
                 delete_symbols.execute(params![&file.file_path])?;
             }
@@ -1199,8 +1279,9 @@ impl SymbolStore {
             let mut insert_anchor = tx.prepare_cached(
                 r#"
                 INSERT OR REPLACE INTO semantic_anchors
-                (id, file_path, kind, value, line, character, preview, confidence, indexed_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                (id, file_path, kind, value, line, character, preview, confidence,
+                 owner_symbol_id, target_file_path, target_name, target_symbol_id, indexed_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                 "#,
             )?;
 
@@ -1215,6 +1296,10 @@ impl SymbolStore {
                         anchor.character,
                         &anchor.preview,
                         anchor.confidence,
+                        anchor.owner_symbol_id.as_deref(),
+                        anchor.target_file_path.as_deref(),
+                        anchor.target_name.as_deref(),
+                        anchor.target_symbol_id.as_deref(),
                         now,
                     ])?;
                 }
@@ -1347,6 +1432,153 @@ impl SymbolStore {
         let conn = self.conn.lock().unwrap();
         let resolved = conn.execute(BACKFILL_GLOBAL_UNIQUE_SQL, [])?;
         Ok(resolved)
+    }
+
+    /// Resolve deterministic semantic-anchor targets after their candidate
+    /// symbols have been committed. Exact file-scoped references may also match
+    /// normalized Markdown heading slugs; unscoped code references resolve only
+    /// when one exact global name/qualified-name candidate exists.
+    pub fn resolve_semantic_anchor_targets(
+        &self,
+        source_file_path: Option<&str>,
+    ) -> Result<usize, SymbolStoreError> {
+        let mut conn = self.conn.lock().unwrap();
+        let global_resolved = match source_file_path {
+            Some(file_path) => conn.execute(
+                GLOBAL_SEMANTIC_TARGET_BACKFILL_FOR_FILE_SQL,
+                params![file_path],
+            )?,
+            None => conn.execute(GLOBAL_SEMANTIC_TARGET_BACKFILL_SQL, [])?,
+        };
+        conn.execute(
+            r#"
+            UPDATE semantic_anchors
+            SET target_file_path = (
+                SELECT file_path FROM symbols WHERE id = semantic_anchors.target_symbol_id
+            )
+            WHERE target_symbol_id IS NOT NULL AND target_file_path IS NULL
+            "#,
+            [],
+        )?;
+        let pending = {
+            let (sql, values) = match source_file_path {
+                Some(file_path) => (
+                    r#"
+                    SELECT id, target_file_path, target_name
+                    FROM semantic_anchors
+                    WHERE (file_path = ?1 OR target_file_path = ?1)
+                      AND target_symbol_id IS NULL
+                      AND target_file_path IS NOT NULL
+                      AND target_name IS NOT NULL
+                      AND target_name != ''
+                    "#,
+                    vec![Value::Text(file_path.to_string())],
+                ),
+                None => (
+                    r#"
+                    SELECT id, target_file_path, target_name
+                    FROM semantic_anchors
+                    WHERE target_symbol_id IS NULL
+                      AND target_file_path IS NOT NULL
+                      AND target_name IS NOT NULL
+                      AND target_name != ''
+                    "#,
+                    Vec::new(),
+                ),
+            };
+            let mut stmt = conn.prepare(sql)?;
+            let rows = stmt.query_map(params_from_iter(values), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        let mut file_candidates = HashMap::<String, Vec<SemanticTargetCandidate>>::new();
+        let mut resolved = Vec::<(String, String)>::new();
+        for (anchor_id, target_file_path, target_name) in pending {
+            let candidate_ids = if let Some(target_file_path) = target_file_path {
+                if !file_candidates.contains_key(&target_file_path) {
+                    let mut stmt = conn.prepare(
+                        r#"
+                        SELECT id, name, qualified_name, symbol_type
+                        FROM symbols
+                        WHERE file_path = ?1
+                          AND symbol_type != 'import'
+                        ORDER BY start_line, start_char
+                        "#,
+                    )?;
+                    let candidates = stmt
+                        .query_map(params![&target_file_path], |row| {
+                            Ok(SemanticTargetCandidate {
+                                id: row.get(0)?,
+                                name: row.get(1)?,
+                                qualified_name: row.get(2)?,
+                                symbol_type: row.get(3)?,
+                            })
+                        })?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    file_candidates.insert(target_file_path.clone(), candidates);
+                }
+                file_candidates
+                    .get(&target_file_path)
+                    .into_iter()
+                    .flatten()
+                    .filter(|candidate| candidate.matches(&target_name))
+                    .map(|candidate| candidate.id.clone())
+                    .collect::<Vec<_>>()
+            } else {
+                let mut stmt = conn.prepare(
+                    r#"
+                    SELECT id, name, qualified_name, symbol_type
+                    FROM symbols
+                    WHERE (name = ?1 OR qualified_name = ?1)
+                      AND symbol_type != 'import'
+                      AND qualified_name != '__file__'
+                    ORDER BY file_path, start_line, start_char
+                    LIMIT 3
+                    "#,
+                )?;
+                let rows = stmt.query_map(params![&target_name], |row| {
+                    Ok(SemanticTargetCandidate {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        qualified_name: row.get(2)?,
+                        symbol_type: row.get(3)?,
+                    })
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .map(|candidate| candidate.id)
+                    .collect::<Vec<_>>()
+            };
+            if candidate_ids.len() == 1 {
+                resolved.push((anchor_id, candidate_ids[0].clone()));
+            }
+        }
+
+        if resolved.is_empty() {
+            return Ok(global_resolved);
+        }
+        let tx = conn.transaction()?;
+        let mut count = 0usize;
+        {
+            let mut update = tx.prepare_cached(
+                r#"
+                UPDATE semantic_anchors
+                SET target_symbol_id = ?1
+                WHERE id = ?2 AND target_symbol_id IS NULL
+                "#,
+            )?;
+            for (anchor_id, target_symbol_id) in resolved {
+                count += update.execute(params![target_symbol_id, anchor_id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(global_resolved + count)
     }
 
     /// M5.1b — GLOBAL receiver-type mining of the still-NULL call edges.
@@ -1912,6 +2144,10 @@ impl SymbolStore {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "DELETE FROM symbol_relationships WHERE source_file_path = ?1",
+            params![file_path],
+        )?;
+        conn.execute(
+            "UPDATE semantic_anchors SET target_symbol_id = NULL WHERE target_file_path = ?1",
             params![file_path],
         )?;
         conn.execute(
@@ -2651,6 +2887,50 @@ impl SymbolStore {
         Ok(references)
     }
 
+    pub fn get_semantic_context_for_symbol_ids(
+        &self,
+        symbol_ids: &[String],
+        limit: usize,
+    ) -> Result<Vec<SemanticAnchor>, SymbolStoreError> {
+        if symbol_ids.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let unique_ids = symbol_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let conn = self.conn.lock().unwrap();
+        let mut anchors = Vec::new();
+        let unique_ids = unique_ids.into_iter().collect::<Vec<_>>();
+        for chunk in unique_ids.chunks(900) {
+            if anchors.len() >= limit {
+                break;
+            }
+            let placeholders = std::iter::repeat("?")
+                .take(chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                r#"
+                SELECT id, file_path, kind, value, line, character, preview, confidence,
+                       owner_symbol_id, target_file_path, target_name, target_symbol_id
+                FROM semantic_anchors
+                WHERE owner_symbol_id IN ({placeholders})
+                  AND kind IN ('rationale', 'documentation_link', 'design_reference',
+                               'design_symbol_reference')
+                ORDER BY confidence DESC, file_path, line, character
+                LIMIT ?
+                "#,
+            );
+            let mut values = chunk.iter().cloned().map(Value::Text).collect::<Vec<_>>();
+            values.push(Value::Integer(limit.saturating_sub(anchors.len()) as i64));
+            let mut stmt = conn.prepare(&sql)?;
+            anchors.extend(
+                stmt.query_map(params_from_iter(values), row_to_semantic_anchor)?
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+        }
+        anchors.truncate(limit);
+        Ok(anchors)
+    }
+
     /// Fetch the given symbol ids in a single query, returning an `id -> Symbol`
     /// map. Ids are de-duplicated and chunked under SQLite's bound-parameter
     /// ceiling so one logical lookup replaces N `get_symbol` calls.
@@ -2725,6 +3005,10 @@ fn row_to_semantic_anchor(row: &rusqlite::Row) -> rusqlite::Result<SemanticAncho
         character: row.get::<_, i64>(5)? as u32,
         preview: row.get(6)?,
         confidence: row.get::<_, f64>(7)? as f32,
+        owner_symbol_id: row.get(8)?,
+        target_file_path: row.get(9)?,
+        target_name: row.get(10)?,
+        target_symbol_id: row.get(11)?,
     })
 }
 
@@ -2740,6 +3024,39 @@ fn semantic_anchor_score(anchor: &SemanticAnchor, query: &str) -> f32 {
     } else {
         0.45 * anchor.confidence
     }
+}
+
+struct SemanticTargetCandidate {
+    id: String,
+    name: String,
+    qualified_name: String,
+    symbol_type: String,
+}
+
+impl SemanticTargetCandidate {
+    fn matches(&self, target_name: &str) -> bool {
+        self.name.eq_ignore_ascii_case(target_name)
+            || self.qualified_name.eq_ignore_ascii_case(target_name)
+            || self.symbol_type == "heading"
+                && semantic_heading_slug(&self.name).eq_ignore_ascii_case(target_name)
+    }
+}
+
+fn semantic_heading_slug(value: &str) -> String {
+    let mut slug = String::new();
+    let mut pending_dash = false;
+    for character in value.chars().flat_map(char::to_lowercase) {
+        if character.is_alphanumeric() || character == '_' {
+            if pending_dash && !slug.is_empty() {
+                slug.push('-');
+            }
+            pending_dash = false;
+            slug.push(character);
+        } else if character.is_whitespace() || character == '-' {
+            pending_dash = true;
+        }
+    }
+    slug
 }
 
 fn row_to_symbol(row: &rusqlite::Row) -> rusqlite::Result<Symbol> {
@@ -2846,18 +3163,20 @@ const LATEST_SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 /// than letting the two coexist), so the two intentionally overlap with no
 /// conflict.
 ///
-/// N7 — no column without an in-phase consumer: v1 adds ONLY the three
-/// `symbol_relationships` columns that M2.4 (set-based relationship back-fill)
-/// will consume to tag each back-filled edge with how it was resolved + a
-/// confidence, so wrong/ambiguous back-fills stay auditable.
+/// N7 — no column without an in-phase consumer: v1 adds the three relationship
+/// provenance columns consumed by set-based resolution; v2 adds the four
+/// semantic-owner/target columns consumed by rationale/document extraction and
+/// graph-context queries. Wrong or ambiguous targets stay NULL and auditable.
 ///
 /// DEFERRED per N7 (do NOT add here): the other columns from the plan's M2.3
 /// list — `language`, `is_lexical`, `return_type`, `visibility`, `modifiers` on
 /// `symbols`, and the `routes` table — are deferred to their consuming
 /// milestones (M0.2 re-base / M4.x). They land as new appended migration steps
 /// when (and only when) their consumer ships.
-const MIGRATIONS: &[fn(&Connection) -> Result<(), SymbolStoreError>] =
-    &[migration_v1_relationship_resolution_columns];
+const MIGRATIONS: &[fn(&Connection) -> Result<(), SymbolStoreError>] = &[
+    migration_v1_relationship_resolution_columns,
+    migration_v2_semantic_anchor_links,
+];
 
 /// Apply every pending migration step, advancing `PRAGMA user_version`.
 ///
@@ -2897,6 +3216,38 @@ fn migration_v1_relationship_resolution_columns(conn: &Connection) -> Result<(),
     ensure_column(conn, "symbol_relationships", "resolution_strategy", "TEXT")?;
     ensure_column(conn, "symbol_relationships", "confidence", "REAL")?;
     ensure_column(conn, "symbol_relationships", "metadata_json", "TEXT")?;
+    Ok(())
+}
+
+/// Migration v2: attach semantic evidence to its owning symbol and retain
+/// deterministic document/symbol link targets without fabricating graph edges.
+fn migration_v2_semantic_anchor_links(conn: &Connection) -> Result<(), SymbolStoreError> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS semantic_anchors (
+            id TEXT PRIMARY KEY,
+            file_path TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            value TEXT NOT NULL,
+            line INTEGER NOT NULL,
+            character INTEGER NOT NULL,
+            preview TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            indexed_at INTEGER NOT NULL
+        );
+        "#,
+    )?;
+    ensure_column(conn, "semantic_anchors", "owner_symbol_id", "TEXT")?;
+    ensure_column(conn, "semantic_anchors", "target_file_path", "TEXT")?;
+    ensure_column(conn, "semantic_anchors", "target_name", "TEXT")?;
+    ensure_column(conn, "semantic_anchors", "target_symbol_id", "TEXT")?;
+    conn.execute_batch(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_semantic_anchors_owner ON semantic_anchors(owner_symbol_id);
+        CREATE INDEX IF NOT EXISTS idx_semantic_anchors_target_file ON semantic_anchors(target_file_path);
+        CREATE INDEX IF NOT EXISTS idx_semantic_anchors_target_symbol ON semantic_anchors(target_symbol_id);
+        "#,
+    )?;
     Ok(())
 }
 
@@ -3927,6 +4278,10 @@ mod tests {
                     character: 0,
                     preview: "/settings".to_string(),
                     confidence: 0.9,
+                    owner_symbol_id: Some(symbol.id.clone()),
+                    target_file_path: None,
+                    target_name: None,
+                    target_symbol_id: None,
                 }],
             )
             .unwrap();
@@ -3987,6 +4342,12 @@ mod tests {
 
     const NEW_RELATIONSHIP_COLUMNS: [&str; 3] =
         ["resolution_strategy", "confidence", "metadata_json"];
+    const NEW_SEMANTIC_ANCHOR_COLUMNS: [&str; 4] = [
+        "owner_symbol_id",
+        "target_file_path",
+        "target_name",
+        "target_symbol_id",
+    ];
 
     #[test]
     fn migration_forward_from_empty_reaches_latest_with_writable_columns() {
@@ -4004,6 +4365,13 @@ mod tests {
             assert!(
                 columns.iter().any(|column| column == new_column),
                 "expected migrated column `{new_column}`"
+            );
+        }
+        let anchor_columns = table_columns(&conn, "semantic_anchors");
+        for new_column in NEW_SEMANTIC_ANCHOR_COLUMNS {
+            assert!(
+                anchor_columns.iter().any(|column| column == new_column),
+                "expected migrated semantic-anchor column `{new_column}`"
             );
         }
 
@@ -4071,6 +4439,10 @@ mod tests {
                 "expected migrated column `{new_column}`"
             );
         }
+        let anchor_columns = table_columns(&conn, "semantic_anchors");
+        for new_column in NEW_SEMANTIC_ANCHOR_COLUMNS {
+            assert!(anchor_columns.iter().any(|column| column == new_column));
+        }
 
         // Running again is a no-op: version stays put and no columns are added.
         run_migrations(&conn).unwrap();
@@ -4101,6 +4473,14 @@ mod tests {
         let columns = table_columns(&conn, "symbol_relationships");
         for new_column in NEW_RELATIONSHIP_COLUMNS {
             let occurrences = columns
+                .iter()
+                .filter(|column| *column == new_column)
+                .count();
+            assert_eq!(occurrences, 1, "column `{new_column}` was duplicated");
+        }
+        let anchor_columns = table_columns(&conn, "semantic_anchors");
+        for new_column in NEW_SEMANTIC_ANCHOR_COLUMNS {
+            let occurrences = anchor_columns
                 .iter()
                 .filter(|column| *column == new_column)
                 .count();

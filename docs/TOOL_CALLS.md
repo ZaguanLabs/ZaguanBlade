@@ -371,7 +371,13 @@ Parameters:
 
 ### `semantic_anchor_search`
 
-Searches indexed semantic anchors such as command names, event names, route-like strings, config keys, translation keys/text, and CSS/theme tokens. Use this for literals and anchors when structural symbol support is absent, shallow, or too narrow for the question.
+Searches indexed semantic anchors such as rationale comments (`WHY:`, `RATIONALE:`, `DECISION:`,
+`NOTE:`), Markdown/document links, ADR/RFC references, design-document code mentions, command and
+event names, routes, config keys, translation keys/text, and CSS/theme tokens. Contextual anchors
+include `owner_symbol_id` plus deterministic `target_file_path`, `target_name`, and
+`target_symbol_id` fields when available. Ambiguous symbol mentions deliberately remain unresolved.
+Use this for literals, decisions, and documentation evidence when structural symbol support alone is
+too narrow for the question.
 
 Responses include `_meta.language_support` for the optional file filter.
 
@@ -512,9 +518,10 @@ selectors. Optional controls include `direction`, `relationships`, `max_hops` (c
 
 ### `symbol_query`
 
-Returns a compact connected subgraph for a natural-language codebase question. It combines ranked
-lexical seeds with bounded graph traversal, filters low-confidence edges, and observes explicit
-node, edge, and approximate token budgets.
+Returns compact seed-connected symbol neighborhoods for a natural-language codebase question. It
+combines ranked lexical seeds with bounded graph traversal, filters low-confidence edges, and
+observes explicit node, edge, and approximate token budgets. `semantic_context` includes bounded
+rationale and design-document anchors owned by returned symbols.
 
 Parameters include `query`, `direction`, `relationships`, `depth` (cap `4`), `max_seeds` (cap `5`),
 `node_limit` (cap `200`), `edge_limit` (cap `300`), `per_node_limit` (cap `50`),

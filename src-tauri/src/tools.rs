@@ -554,17 +554,17 @@ mod tests {
     use super::{
         apply_multi_patch_to_string, apply_patch_to_string, apply_patch_to_string_with_line_hint,
         apply_semantic_patch_with_service, apply_semantic_patch_writes_with_service,
-        compact_outline_nodes_for_parent, execute_tool, execute_tool_with_editor,
-        fast_context_tool, format_investigation_markdown, grep_search, impact_confidence,
-        impact_risk_level, investigation_confidence, is_batch_read_only_tool,
-        language_support_for_path_json, language_support_meta_json, merge_language_diagnostics,
-        paginate_tool_results, parse_grep_timeout_ms, parse_relationship_types_arg,
-        related_symbol_to_json, related_test_files_for_paths, stage_semantic_patch_writes,
-        symbol_inventory_entries, symbol_inventory_summary, symbol_language_diagnostics,
-        symbol_outline_diagnostics, symbol_reference_resolution_json,
-        symbol_search_connection_json, symbol_to_json, symbol_to_json_full, EditorState, PatchHunk,
-        SemanticPatchWrite, ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
-        GREP_TIMEOUT_MIN_MS,
+        build_incoming_impact_path, build_symbol_query_context, compact_outline_nodes_for_parent,
+        execute_tool, execute_tool_with_editor, fast_context_tool, format_investigation_markdown,
+        grep_search, impact_confidence, impact_risk_level, investigation_confidence,
+        is_batch_read_only_tool, language_support_for_path_json, language_support_meta_json,
+        merge_language_diagnostics, paginate_tool_results, parse_grep_timeout_ms,
+        parse_relationship_types_arg, related_symbol_to_json, related_test_files_for_paths,
+        stage_semantic_patch_writes, symbol_inventory_entries, symbol_inventory_summary,
+        symbol_language_diagnostics, symbol_outline_diagnostics, symbol_reference_resolution_json,
+        symbol_search_connection_json, symbol_to_json, symbol_to_json_full,
+        transitive_impact_score, EditorState, PatchHunk, SemanticPatchWrite, ToolResult,
+        GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
@@ -1093,7 +1093,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         fs::write(
             temp_dir.path().join("query.ts"),
-            "export function leaf() {}\nexport function middle() { leaf(); }\nexport function root() { middle(); }\n",
+            "export function leaf() {}\nexport function middle() { leaf(); }\nexport function root() {\n  // WHY: Keep graph context tied to the entry point.\n  middle();\n}\n",
         )
         .unwrap();
         let store = std::sync::Arc::new(
@@ -1122,6 +1122,14 @@ mod tests {
         assert_eq!(payload["summary"]["seed_count"], 1);
         assert!(payload["summary"]["edge_count"].as_u64().unwrap_or(0) >= 1);
         assert!(payload["summary"]["node_count"].as_u64().unwrap_or(0) >= 2);
+        assert!(payload["semantic_context"]
+            .as_array()
+            .is_some_and(|anchors| {
+                anchors.iter().any(|anchor| {
+                    anchor["kind"] == "rationale"
+                        && anchor["value"] == "Keep graph context tied to the entry point."
+                })
+            }));
         assert!(
             payload["summary"]["edge_count"].as_u64().unwrap_or(0)
                 <= payload["budget"]["edge_limit"].as_u64().unwrap_or(0)
@@ -3994,18 +4002,29 @@ fn symbol_inventory_entries(
 fn semantic_anchor_result_to_json(
     result: &crate::symbol_index::SemanticAnchorResult,
 ) -> serde_json::Value {
+    semantic_anchor_to_json(&result.anchor, Some(result.score))
+}
+
+fn semantic_anchor_to_json(
+    anchor: &crate::symbol_index::SemanticAnchor,
+    score: Option<f32>,
+) -> serde_json::Value {
     serde_json::json!({
-        "id": result.anchor.id,
-        "file_path": result.anchor.file_path,
-        "kind": result.anchor.kind,
-        "value": result.anchor.value,
-        "line": result.anchor.line,
-        "character": result.anchor.character,
+        "id": anchor.id,
+        "file_path": anchor.file_path,
+        "kind": anchor.kind,
+        "value": anchor.value,
+        "line": anchor.line,
+        "character": anchor.character,
+        "owner_symbol_id": anchor.owner_symbol_id,
+        "target_file_path": anchor.target_file_path,
+        "target_name": anchor.target_name,
+        "target_symbol_id": anchor.target_symbol_id,
         // M5.14 Step 2 — reference-not-text: `file_path` + `line`/`character` above
         // locate the anchor; the caller reads that line on demand rather than
         // receiving a stored snippet inline.
-        "confidence": result.anchor.confidence,
-        "score": result.score,
+        "confidence": anchor.confidence,
+        "score": score,
     })
 }
 
@@ -5951,6 +5970,16 @@ fn build_symbol_query_context(
             .cmp(&right.depth)
             .then_with(|| left.symbol.qualified_name.cmp(&right.symbol.qualified_name))
     });
+    let semantic_context_limit = (token_budget / 250).clamp(2, 16);
+    let semantic_context = service
+        .get_semantic_context_for_symbols(
+            &node_values
+                .iter()
+                .map(|node| node.symbol.id.clone())
+                .collect::<Vec<_>>(),
+            semantic_context_limit,
+        )
+        .map_err(|error| error.to_string())?;
     let seed_values = seeds
         .iter()
         .map(|seed| {
@@ -5981,10 +6010,15 @@ fn build_symbol_query_context(
         "seeds": seed_values,
         "nodes": node_values,
         "edges": edge_values,
+        "semantic_context": semantic_context
+            .iter()
+            .map(|anchor| semantic_anchor_to_json(anchor, None))
+            .collect::<Vec<_>>(),
         "summary": {
             "seed_count": seeds.len(),
             "node_count": node_values.len(),
             "edge_count": edge_values.len(),
+            "semantic_context_count": semantic_context.len(),
             "examined_edge_count": examined_edges,
             "filtered_low_confidence": filtered_low_confidence,
             "truncated": truncated,
