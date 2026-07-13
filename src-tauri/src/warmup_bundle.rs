@@ -494,9 +494,16 @@ pub fn active_file_identity(
 // ---------------------------------------------------------------------------
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    format!("sha256:{:x}", hasher.finalize())
+    hasher
+        .finalize()
+        .iter()
+        .fold(String::from("sha256:"), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
 }
 
 /// Absolute canonical form of `path` when it stays inside `root` (which must
