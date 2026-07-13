@@ -81,16 +81,16 @@ install-deps: ## Install frontend dependencies
 	$(BUN) install
 
 # --- Development ------------------------------------------------------------
-dev: ## Run the desktop app with live reload
+dev: install-deps ## Run the desktop app with live reload
 	$(BUN) run tauri dev
 
 # --- Build ------------------------------------------------------------------
-build: ## Full release build
+build: install-deps ## Full release build
 	$(BUN) run tauri build $(TAURI_BUILD_ARGS)
 
 release: build ## Alias for 'build'
 
-build-frontend: ## Frontend build only (tsc + vite build)
+build-frontend: install-deps ## Frontend build only (tsc + vite build)
 	$(BUN) run build
 
 # --- Tests ------------------------------------------------------------------
@@ -154,5 +154,5 @@ ci-check: check lint test ## CI checks: type-check + lint + test (no build)
 
 ci: ci-check build ## Full CI pipeline: check + lint + test + build
 
-ci-build: ## CI build with optional TARGET and BUNDLES overrides
+ci-build: install-deps ## CI build with optional TARGET and BUNDLES overrides
 	$(BUN) run tauri build $(TAURI_BUILD_ARGS)
