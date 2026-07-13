@@ -4144,7 +4144,10 @@ fn relationship_resolution_json(
     serde_json::json!({
         "strategy": strategy,
         "confidence": confidence,
-        "confidence_score": confidence_score,
+        // f32 scores serialize with float noise (0.95 -> 0.949999988...);
+        // round to keep the model-facing JSON clean.
+        "confidence_score": confidence_score
+            .map(|score| (f64::from(score) * 1000.0).round() / 1000.0),
         "resolved": resolved,
         "receiver_type": receiver_type,
         "receiver_is_self": receiver_is_self,

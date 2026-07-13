@@ -33,7 +33,7 @@ const ANCHOR_ONLY_EXTRACTOR_VERSION: u32 = 1;
 // Stored extractor versions combine the language extractor with cross-language
 // semantic-anchor behavior, so a rationale/link extraction change invalidates
 // every affected file exactly once without rewriting each language capability.
-const SEMANTIC_CONTEXT_EXTRACTOR_VERSION: u32 = 2;
+const SEMANTIC_CONTEXT_EXTRACTOR_VERSION: u32 = 3;
 
 /// Unified language service
 pub struct LanguageService {
@@ -8285,6 +8285,17 @@ fn extract_css_tokens(line: &str) -> Vec<(String, usize)> {
 }
 
 fn extract_unquoted_keys(line: &str) -> Vec<(String, usize)> {
+    // Comment prose like `// WHY: ...` is not an object/config key; rationale
+    // extraction owns those lines, and heading/selector `#` lines carry no keys.
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("//")
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with('*')
+        || trimmed.starts_with('#')
+        || trimmed.starts_with("<!--")
+    {
+        return Vec::new();
+    }
     let Some(colon_index) = line.find(':') else {
         return Vec::new();
     };
