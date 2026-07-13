@@ -684,6 +684,7 @@
         "pollHttpFailed": "Sign-in poll failed ({{status}}): {{body}}",
         "pollReadFailed": "Failed to read sign-in poll response: {{error}}",
         "missingApiKey": "Approved sign-in did not include an API key.",
+        "invalidApiKeyFormat": "Approved sign-in returned an API key in an invalid format.",
         "missingUserId": "Approved sign-in did not include a user ID.",
         "missingEmail": "Approved sign-in did not include an email address."
       }
@@ -1047,6 +1048,7 @@
     "snapshotNotFound": "Snapshot not found",
     "noHistoryForGroup": "No history entries found for group ID: {{id}}",
     "wsAuthTimeout": "WebSocket authentication timed out",
+    "wsAuthRejected": "Zaguán rejected the stored API key. Sign out and sign in again in Settings to refresh this device's credentials.",
     "aiGenerationFailed": "AI generation failed: {{error}}",
     "serverReturned": "Server returned {{status}}: {{body}}",
     "createParentDirsFailed": "Failed to create parent directories: {{error}}",

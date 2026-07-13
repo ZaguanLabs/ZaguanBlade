@@ -257,6 +257,9 @@ async fn persist_approved_login(
     state: &AppState,
     approved: ApprovedLogin,
 ) -> Result<SsoLoginResult, String> {
+    if !config::is_valid_zaguan_api_key(&approved.api_key) {
+        return Err("Approved sign-in returned an API key in an invalid format.".to_string());
+    }
     let remote = {
         let mut cfg = state
             .config

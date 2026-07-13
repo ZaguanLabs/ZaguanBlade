@@ -369,6 +369,19 @@ struct WsIncomingMessage {
     payload: Value,
 }
 
+/// Exact English string mapped to an i18n key in src/utils/backendErrors.ts.
+pub const WS_AUTH_REJECTED_MESSAGE: &str = "Zaguán rejected the stored API key. Sign out and sign in again in Settings to refresh this device's credentials.";
+
+fn is_auth_rejection(error: &tokio_tungstenite::tungstenite::Error) -> bool {
+    match error {
+        tokio_tungstenite::tungstenite::Error::Http(response) => {
+            let status = response.status();
+            status == 401 || status == 403
+        }
+        _ => false,
+    }
+}
+
 impl BladeWsClient {
     fn websocket_endpoint_url(base_url: &str) -> String {
         let ws_url = crate::blade_endpoint::to_websocket_url(base_url);
@@ -486,6 +499,13 @@ impl BladeWsClient {
                         break 'connect_loop (stream, endpoint.role);
                     }
                     Ok(Err(error)) => {
+                        // An HTTP 401/403 during the upgrade means the server
+                        // rejected our credentials, not that the endpoint is
+                        // down: retrying or failing over cannot succeed with
+                        // the same key, so surface an actionable error now.
+                        if is_auth_rejection(&error) {
+                            return Err(WS_AUTH_REJECTED_MESSAGE.to_string());
+                        }
                         last_error = format!("{}: {}", endpoint.base_url, error);
                         crate::blade_endpoint::mark_failure(&endpoint, &self.api_key).await;
                     }
@@ -1841,6 +1861,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn auth_rejection_detects_401_and_403_but_not_other_errors() {
+        let http_error = |status: u16| {
+            tokio_tungstenite::tungstenite::Error::Http(Box::new(
+                tokio_tungstenite::tungstenite::http::Response::builder()
+                    .status(status)
+                    .body(None)
+                    .unwrap(),
+            ))
+        };
+
+        assert!(is_auth_rejection(&http_error(401)));
+        assert!(is_auth_rejection(&http_error(403)));
+        assert!(!is_auth_rejection(&http_error(500)));
+        assert!(!is_auth_rejection(
+            &tokio_tungstenite::tungstenite::Error::ConnectionClosed
+        ));
+    }
+
+    #[test]
     fn websocket_endpoint_url_has_no_api_key_query() {
         let url = BladeWsClient::websocket_endpoint_url("https://coder-api.zblade.dev/");
 
@@ -1852,7 +1891,7 @@ mod tests {
     #[test]
     fn websocket_request_uses_authorization_bearer_header() {
         let request =
-            BladeWsClient::websocket_request("https://coder-api.zblade.dev", "  ps_live_secret  ")
+            BladeWsClient::websocket_request("https://coder-api.zblade.dev", "  ps_live_0123456789abcdefghijklmnopqrstuv  ")
                 .unwrap();
 
         assert_eq!(
@@ -1864,7 +1903,7 @@ mod tests {
                 .headers()
                 .get(AUTHORIZATION)
                 .and_then(|value| value.to_str().ok()),
-            Some("Bearer ps_live_secret")
+            Some("Bearer ps_live_0123456789abcdefghijklmnopqrstuv")
         );
         assert!(request.uri().query().is_none());
     }

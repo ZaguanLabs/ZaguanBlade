@@ -36,6 +36,10 @@ pub struct WsConnectionManager {
     session_id: RwLock<Option<String>>,
     auth_state: RwLock<Option<AuthState>>,
     storage_mode: RwLock<Option<String>>,
+    /// Latched when the server rejects our credentials (HTTP 401/403 on the
+    /// websocket upgrade). Redialing with the same key cannot succeed, so
+    /// further connect attempts short-circuit until credentials change.
+    auth_rejected: RwLock<bool>,
 }
 
 impl WsConnectionManager {
@@ -50,6 +54,7 @@ impl WsConnectionManager {
             session_id: RwLock::new(None),
             auth_state: RwLock::new(None),
             storage_mode: RwLock::new(None),
+            auth_rejected: RwLock::new(false),
         }
     }
 
@@ -62,6 +67,10 @@ impl WsConnectionManager {
         {
             let mut key = self.api_key.write().await;
             *key = api_key;
+        }
+        {
+            let mut auth_rejected = self.auth_rejected.write().await;
+            *auth_rejected = false;
         }
         // Force reconnect with new credentials
         self.disconnect().await;
@@ -83,6 +92,9 @@ impl WsConnectionManager {
     pub async fn ensure_connected(
         self: &Arc<Self>,
     ) -> Result<mpsc::UnboundedReceiver<BladeWsEvent>, String> {
+        if *self.auth_rejected.read().await {
+            return Err(crate::blade_ws_client::WS_AUTH_REJECTED_MESSAGE.to_string());
+        }
         let current_client = {
             let client_lock = self.client.lock().await;
             client_lock.as_ref().cloned()
@@ -178,6 +190,10 @@ impl WsConnectionManager {
                 Ok(())
             }
             Err(e) => {
+                if e == crate::blade_ws_client::WS_AUTH_REJECTED_MESSAGE {
+                    let mut auth_rejected = self.auth_rejected.write().await;
+                    *auth_rejected = true;
+                }
                 // Reset state
                 {
                     let mut state = self.state.write().await;

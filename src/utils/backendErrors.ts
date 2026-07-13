@@ -29,6 +29,7 @@ export function isBladeError(value: unknown): value is BladeError {
 const EXACT_BACKEND_MESSAGE_KEYS = new Map<string, string>([
     // Connection / WebSocket
     ['Not connected', 'errors.notConnected'],
+    ['Zaguán rejected the stored API key. Sign out and sign in again in Settings to refresh this device\'s credentials.', 'errors.wsAuthRejected'],
     ['Failed to send authentication', 'errors.sendAuthFailed'],
     ['WebSocket authentication timed out', 'errors.wsAuthTimeout'],
     ['WebSocket disconnected before authentication', 'errors.wsDisconnectedBeforeAuth'],
@@ -98,6 +99,7 @@ const EXACT_BACKEND_MESSAGE_KEYS = new Map<string, string>([
     ['Zaguán sign-in was denied in the browser.', 'settings.account.sso.denied'],
     ['This Zaguán sign-in was already used. Start a new request.', 'settings.account.sso.consumed'],
     ['Approved sign-in did not include an API key.', 'settings.account.sso.missingApiKey'],
+    ['Approved sign-in returned an API key in an invalid format.', 'settings.account.sso.invalidApiKeyFormat'],
     ['Approved sign-in did not include a user ID.', 'settings.account.sso.missingUserId'],
     ['Approved sign-in did not include an email address.', 'settings.account.sso.missingEmail'],
 ]);

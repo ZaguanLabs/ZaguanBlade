@@ -680,6 +680,7 @@
         "pollHttpFailed": "La consulta del inicio de sesión falló ({{status}}): {{body}}",
         "pollReadFailed": "No se pudo leer la respuesta de la consulta del inicio de sesión: {{error}}",
         "missingApiKey": "El inicio de sesión aprobado no incluía una clave API.",
+        "invalidApiKeyFormat": "El inicio de sesión aprobado devolvió una clave API con un formato no válido.",
         "missingUserId": "El inicio de sesión aprobado no incluía un ID de usuario.",
         "missingEmail": "El inicio de sesión aprobado no incluía una dirección de correo electrónico."
       }
@@ -1043,6 +1044,7 @@
     "snapshotNotFound": "Instantánea no encontrada",
     "noHistoryForGroup": "No se han encontrado entradas de historial para el ID de grupo: {{id}}",
     "wsAuthTimeout": "La autenticación WebSocket superó el tiempo de espera",
+    "wsAuthRejected": "Zaguán rechazó la clave API almacenada. Cierra sesión y vuelve a iniciarla en Ajustes para renovar las credenciales de este dispositivo.",
     "aiGenerationFailed": "La generación de la IA falló: {{error}}",
     "serverReturned": "El servidor devolvió {{status}}: {{body}}",
     "createParentDirsFailed": "No se pudieron crear los directorios superiores: {{error}}",

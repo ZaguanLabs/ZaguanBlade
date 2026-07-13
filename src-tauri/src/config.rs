@@ -694,17 +694,47 @@ pub fn local_prompt_status_for_model(model_name: &str) -> (bool, Option<String>)
     }
 }
 
+/// Canonical Zaguán API key contract, shared with CoreX and zcoderd:
+/// `ps_live_` or `ps_test_` followed by exactly 32 chars of `[A-Za-z0-9_-]`.
+pub fn is_valid_zaguan_api_key(key: &str) -> bool {
+    let Some(suffix) = key
+        .strip_prefix("ps_live_")
+        .or_else(|| key.strip_prefix("ps_test_"))
+    else {
+        return false;
+    };
+    suffix.len() == 32
+        && suffix
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+}
+
+// A malformed keyring credential (e.g. a legacy 16-char-suffix key) can never
+// authenticate against CoreX; loading it would only produce a reconnect loop.
+// Drop it so the app behaves as signed-out and the user is asked to sign in.
+fn load_valid_keyring_api_key() -> Option<String> {
+    let api_key = crate::credential_store::load_api_key()?;
+    if is_valid_zaguan_api_key(&api_key) {
+        return Some(api_key);
+    }
+    eprintln!(
+        "[CONFIG] Stored API key does not match the Zaguán key contract; removing it. Sign in again from Settings."
+    );
+    crate::credential_store::delete_api_key();
+    None
+}
+
 pub fn load_api_config(path: &Path) -> ApiConfig {
     let Ok(bytes) = fs::read(path) else {
         let mut cfg = ApiConfig::default();
-        if let Some(api_key) = crate::credential_store::load_api_key() {
+        if let Some(api_key) = load_valid_keyring_api_key() {
             cfg.api_key = api_key;
         }
         return cfg;
     };
     let mut cfg = serde_json::from_slice::<ApiConfig>(&bytes).unwrap_or_default();
     if cfg.api_key.trim().is_empty() {
-        if let Some(api_key) = crate::credential_store::load_api_key() {
+        if let Some(api_key) = load_valid_keyring_api_key() {
             cfg.api_key = api_key;
         }
     }
@@ -806,10 +836,39 @@ mod tests {
     }
 
     #[test]
+    fn api_key_validator_accepts_canonical_40_char_keys() {
+        assert!(is_valid_zaguan_api_key(
+            "ps_live_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+        ));
+        assert!(is_valid_zaguan_api_key(
+            "ps_test_abcdefghijklmnopqrstuvwxyz0-_345"
+        ));
+    }
+
+    #[test]
+    fn api_key_validator_rejects_legacy_and_malformed_keys() {
+        // Legacy 16-char suffix (24 total) — the format that broke SSO auth.
+        assert!(!is_valid_zaguan_api_key("ps_live_ABCDEFGH12345678"));
+        assert!(!is_valid_zaguan_api_key(""));
+        assert!(!is_valid_zaguan_api_key("ps_live_"));
+        assert!(!is_valid_zaguan_api_key(
+            "zz_live_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+        ));
+        // Right length, invalid character.
+        assert!(!is_valid_zaguan_api_key(
+            "ps_live_ABCDEFGHIJKLMNOPQRSTUVWXYZ01234!"
+        ));
+        // 33-char suffix.
+        assert!(!is_valid_zaguan_api_key(
+            "ps_live_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456"
+        ));
+    }
+
+    #[test]
     fn remote_config_stores_server_user_id() {
         let mut cfg = ApiConfig::default();
         cfg.apply_remote_config(&RemoteAiConfig {
-            api_key: "ps_live_ABCDEFGH12345678".to_string(),
+            api_key: "ps_live_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345".to_string(),
             user_id: "user_canonical".to_string(),
             ..RemoteAiConfig::default()
         });
@@ -821,7 +880,7 @@ mod tests {
     fn remote_config_preserves_empty_user_id_for_manual_key_without_identity() {
         let mut cfg = ApiConfig::default();
         cfg.apply_remote_config(&RemoteAiConfig {
-            api_key: "ps_live_ABCDEFGH12345678".to_string(),
+            api_key: "ps_live_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345".to_string(),
             ..RemoteAiConfig::default()
         });
 
@@ -835,7 +894,7 @@ mod tests {
         save_api_config(
             &path,
             &ApiConfig {
-                api_key: "ps_live_ABCDEFGH12345678".to_string(),
+                api_key: "ps_live_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345".to_string(),
                 ..ApiConfig::default()
             },
         )
