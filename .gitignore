@@ -47,7 +47,6 @@ yarn-error.log*
 
 # Rust/Tauri build artifacts
 src-tauri/target/
-src-tauri/Cargo.lock
 
 # Tauri bundles
 *.AppImage
