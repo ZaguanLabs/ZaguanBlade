@@ -284,6 +284,12 @@ fn derive_pre_edit_content(
                     let Some(new_text) = patch.get("new_text").and_then(Value::as_str) else {
                         continue;
                     };
+                    // No-op hunks and pure deletions cannot be reversed
+                    // positionally; skip them so the baseline stays usable
+                    // instead of failing the whole reconstruction.
+                    if new_text == old_text || new_text.is_empty() {
+                        continue;
+                    }
                     pre_edit_content = tools::apply_patch_to_string(
                         pre_edit_content.as_str(),
                         new_text,
@@ -306,6 +312,10 @@ fn derive_pre_edit_content(
                     .or_else(|| object.get("new_text"))
                     .and_then(Value::as_str)
                     .unwrap_or_default();
+
+                if new_content == old_content || new_content.is_empty() {
+                    return Ok(Some(post_edit_content.to_string()));
+                }
 
                 Ok(Some(tools::apply_patch_to_string(
                     post_edit_content,
@@ -815,6 +825,39 @@ mod tests {
             .expect("should produce prior content");
 
         assert_eq!(pre_edit, "before");
+    }
+
+    #[test]
+    fn derive_pre_edit_content_skips_irreversible_deletion_hunks() {
+        let call = ToolCall {
+            id: "call-deletion".to_string(),
+            typ: "function".to_string(),
+            function: ToolFunction {
+                name: "apply_patch".to_string(),
+                arguments: json!({
+                    "path": "src/app.ts",
+                    "patches": [
+                        {
+                            "old_text": "alpha",
+                            "new_text": "beta"
+                        },
+                        {
+                            "old_text": "removed line\n",
+                            "new_text": ""
+                        }
+                    ]
+                })
+                .to_string(),
+            },
+            status: None,
+            result: None,
+        };
+
+        let pre_edit = derive_pre_edit_content(&call, "beta")
+            .expect("deletion hunk must not fail reconstruction")
+            .expect("should produce prior content");
+
+        assert_eq!(pre_edit, "alpha");
     }
 
     #[test]

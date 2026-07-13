@@ -266,7 +266,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "apply_patch",
             "function": {
                 "name": "apply_patch",
-                "description": "Apply atomic search/replace edits to an existing file",
+                "description": "Apply atomic search/replace edits to an existing file. Each patch must change the file: old_text must be non-empty, copied exactly from the file, and differ from new_text. Use write_file to create or fully rewrite a file.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -282,8 +282,8 @@ pub fn get_tool_definitions() -> Vec<Value> {
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "old_text": { "type": "string", "description": "Exact text to replace" },
-                                    "new_text": { "type": "string", "description": "Replacement text" },
+                                    "old_text": { "type": "string", "description": "Exact text to replace; must be non-empty and differ from new_text" },
+                                    "new_text": { "type": "string", "description": "Replacement text; empty string deletes old_text" },
                                     "start_line": { "type": "integer", "description": "Optional line hint" },
                                     "end_line": { "type": "integer", "description": "Optional end line hint" }
                                 },

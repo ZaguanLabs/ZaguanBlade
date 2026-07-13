@@ -1432,6 +1432,74 @@ mod tests {
     }
 
     #[test]
+    fn apply_patch_rejects_empty_noop_pair_in_patches_array() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("example.txt");
+        fs::write(&file_path, "hello\nworld\n").expect("write test file");
+
+        let result = execute_tool(
+            workspace.path(),
+            "apply_patch",
+            r#"{"path":"example.txt","patches":[{"old_text":"","new_text":""}]}"#,
+        );
+
+        assert!(!result.success, "empty no-op patch must fail");
+        let content = fs::read_to_string(&file_path).expect("read file");
+        assert_eq!(content, "hello\nworld\n", "file must not be rewritten");
+    }
+
+    #[test]
+    fn apply_patch_rejects_empty_noop_pair_in_legacy_args() {
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("example.txt");
+        fs::write(&file_path, "hello\nworld\n").expect("write test file");
+
+        let result = execute_tool(
+            workspace.path(),
+            "apply_patch",
+            r#"{"path":"example.txt","old_text":"","new_text":""}"#,
+        );
+
+        assert!(!result.success, "empty no-op patch must fail");
+        let content = fs::read_to_string(&file_path).expect("read file");
+        assert_eq!(content, "hello\nworld\n", "file must not be rewritten");
+    }
+
+    #[test]
+    fn apply_patch_rejects_identical_non_empty_pair() {
+        let err = apply_patch_to_string("same text\n", "same", "same").unwrap_err();
+        assert!(
+            err.contains("old_text and new_text are identical"),
+            "unexpected error: {err}"
+        );
+
+        let workspace = tempdir().expect("tempdir");
+        let file_path = workspace.path().join("example.txt");
+        fs::write(&file_path, "same text\n").expect("write test file");
+        let result = execute_tool(
+            workspace.path(),
+            "apply_patch",
+            r#"{"path":"example.txt","patches":[{"old_text":"same","new_text":"same"}]}"#,
+        );
+        assert!(!result.success, "identical pair must fail as a no-op");
+    }
+
+    #[test]
+    fn apply_patch_rejects_empty_old_text_insertion() {
+        let err = apply_patch_to_string("hello\n", "", "inserted\n").unwrap_err();
+        assert!(
+            err.contains("old_text is empty") && err.contains("write_file"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn apply_patch_deletion_with_empty_new_text_still_succeeds() {
+        let updated = apply_patch_to_string("keep\nremove\n", "remove\n", "").unwrap();
+        assert_eq!(updated, "keep\n");
+    }
+
+    #[test]
     fn failed_tool_content_includes_recovery_feedback_for_patch_failures() {
         let result = ToolResult::err(
             "old_text not found in file (searched 12 chars). Exact match required.",
@@ -6274,37 +6342,47 @@ fn symbol_schema_tool<R: tauri::Runtime>(
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }
 
+// Reject patch pairs that cannot change the file so callers never write
+// unchanged content back and report a successful edit.
+fn validate_patch_pair(old_text: &str, new_text: &str) -> Result<(), String> {
+    if old_text == new_text {
+        return Err(
+            "patch makes no changes: old_text and new_text are identical. Re-read the current content with read_file_range and retry with the actual text to replace.".to_string(),
+        );
+    }
+    if old_text.is_empty() {
+        return Err(
+            "old_text is empty. apply_patch only replaces existing text: provide non-empty old_text copied exactly from the file, or use write_file to create or fully rewrite a file.".to_string(),
+        );
+    }
+    Ok(())
+}
+
 pub fn apply_patch_to_string(
     content: &str,
     old_text: &str,
     new_text: &str,
 ) -> Result<String, String> {
-    if !old_text.is_empty() {
-        let mut exact_matches = content.match_indices(old_text);
-        if let Some((pos, _)) = exact_matches.next() {
-            if exact_matches.next().is_some() {
-                return Err(
-                    "Ambiguous match: old_text appears multiple times (exact match). Please provide more unique context."
-                        .to_string(),
-                );
-            }
+    validate_patch_pair(old_text, new_text)?;
 
-            let mut out = String::with_capacity(content.len() - old_text.len() + new_text.len());
-            out.push_str(&content[..pos]);
-            out.push_str(new_text);
-            out.push_str(&content[pos + old_text.len()..]);
-            return Ok(out);
+    let mut exact_matches = content.match_indices(old_text);
+    if let Some((pos, _)) = exact_matches.next() {
+        if exact_matches.next().is_some() {
+            return Err(
+                "Ambiguous match: old_text appears multiple times (exact match). Please provide more unique context."
+                    .to_string(),
+            );
         }
 
-        if let Some(result) = apply_patch_whitespace_recovery(content, old_text, new_text) {
-            return result;
-        }
-    } else if let Some(pos) = content.find(old_text) {
         let mut out = String::with_capacity(content.len() - old_text.len() + new_text.len());
         out.push_str(&content[..pos]);
         out.push_str(new_text);
         out.push_str(&content[pos + old_text.len()..]);
         return Ok(out);
+    }
+
+    if let Some(result) = apply_patch_whitespace_recovery(content, old_text, new_text) {
+        return result;
     }
 
     Err(old_text_not_found_error(content, old_text))
@@ -6534,41 +6612,40 @@ pub fn apply_patch_to_string_with_line_hint(
     start_line: Option<usize>,
     end_line: Option<usize>,
 ) -> Result<String, String> {
+    validate_patch_pair(old_text, new_text)?;
     let Some(start_line) = start_line else {
         return apply_patch_to_string(content, old_text, new_text);
     };
     let (window_start, window_end) = line_window_byte_range(content, start_line, end_line)?;
     let window = &content[window_start..window_end];
 
-    if !old_text.is_empty() {
-        let mut exact_matches = window.match_indices(old_text);
-        if let Some((relative_pos, _)) = exact_matches.next() {
-            if exact_matches.next().is_some() {
-                return Err(format!(
-                    "Ambiguous match: old_text appears multiple times within line hint {}-{}. Please provide more unique context.",
-                    start_line,
-                    end_line.unwrap_or(start_line)
-                ));
-            }
-
-            let pos = window_start + relative_pos;
-            let mut out = String::with_capacity(content.len() - old_text.len() + new_text.len());
-            out.push_str(&content[..pos]);
-            out.push_str(new_text);
-            out.push_str(&content[pos + old_text.len()..]);
-            return Ok(out);
+    let mut exact_matches = window.match_indices(old_text);
+    if let Some((relative_pos, _)) = exact_matches.next() {
+        if exact_matches.next().is_some() {
+            return Err(format!(
+                "Ambiguous match: old_text appears multiple times within line hint {}-{}. Please provide more unique context.",
+                start_line,
+                end_line.unwrap_or(start_line)
+            ));
         }
 
-        if let Some(result) = apply_patch_whitespace_recovery(window, old_text, new_text) {
-            return result.map(|patched_window| {
-                let mut out =
-                    String::with_capacity(content.len() - window.len() + patched_window.len());
-                out.push_str(&content[..window_start]);
-                out.push_str(&patched_window);
-                out.push_str(&content[window_end..]);
-                out
-            });
-        }
+        let pos = window_start + relative_pos;
+        let mut out = String::with_capacity(content.len() - old_text.len() + new_text.len());
+        out.push_str(&content[..pos]);
+        out.push_str(new_text);
+        out.push_str(&content[pos + old_text.len()..]);
+        return Ok(out);
+    }
+
+    if let Some(result) = apply_patch_whitespace_recovery(window, old_text, new_text) {
+        return result.map(|patched_window| {
+            let mut out =
+                String::with_capacity(content.len() - window.len() + patched_window.len());
+            out.push_str(&content[..window_start]);
+            out.push_str(&patched_window);
+            out.push_str(&content[window_end..]);
+            out
+        });
     }
 
     Err(format!(
@@ -7061,6 +7138,10 @@ fn apply_edit_tool<R: tauri::Runtime>(
                     return ToolResult::err(format!("Patch {} missing new_text", idx + 1));
                 };
 
+                if let Err(e) = validate_patch_pair(old_text, new_text) {
+                    return ToolResult::err(format!("Patch {} invalid: {}", idx + 1, e));
+                }
+
                 let start_line = patch_obj
                     .get("start_line")
                     .and_then(|v| v.as_u64())
@@ -7085,6 +7166,11 @@ fn apply_edit_tool<R: tauri::Runtime>(
             // Apply multi-patch atomically
             match apply_multi_patch_to_string(&content, &patches) {
                 Ok(new_content) => {
+                    if new_content == content {
+                        return ToolResult::err(
+                            "patch makes no changes: resulting content is identical to the current file",
+                        );
+                    }
                     let tracking =
                         prepare_tool_write_tracking(app_handle, &change_id, &abs, &content);
                     match fs::write(&abs, new_content.as_bytes()) {
@@ -7126,10 +7212,19 @@ fn apply_edit_tool<R: tauri::Runtime>(
             .and_then(|v| v.as_u64())
             .map(|n| n as usize);
 
+        if let Err(e) = validate_patch_pair(&old_text, &new_text) {
+            return ToolResult::err(e);
+        }
+
         match apply_patch_to_string_with_line_hint(
             &content, &old_text, &new_text, start_line, end_line,
         ) {
             Ok(new_content) => {
+                if new_content == content {
+                    return ToolResult::err(
+                        "patch makes no changes: resulting content is identical to the current file",
+                    );
+                }
                 let tracking = prepare_tool_write_tracking(app_handle, &change_id, &abs, &content);
                 match fs::write(&abs, new_content.as_bytes()) {
                     Ok(()) => {
