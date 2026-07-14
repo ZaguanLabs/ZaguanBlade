@@ -18,6 +18,10 @@ use zblade_lib::symbol_index::SymbolStore;
 /// through a full cold index of the corpus root. The `TempDir` is kept alive so
 /// the DB file is not deleted while `service`/`store` are still in use.
 pub struct IndexedCorpus {
+    // Every file under tests/ compiles this module into its own binary, so a
+    // field used by one test binary is dead code in another (bench_cold_index
+    // reads `service`; query_latency only reads `store`).
+    #[allow(dead_code)]
     pub service: LanguageService,
     pub store: Arc<SymbolStore>,
     // Keeps the on-disk temp DB alive for the lifetime of the corpus.
