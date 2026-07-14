@@ -19,9 +19,9 @@ use crate::symbol_index::{
     UnresolvedRelationshipTarget,
 };
 use crate::tree_sitter::{
-    collect_routes, extract_symbol_relationships, extract_symbol_relationships_with_routes,
-    extract_symbols, extract_symbols_with_routes, stable_symbol_id, Language, Position, Range,
-    Symbol, SymbolRelationship, SymbolRelationshipType, SymbolType, TreeSitterParser,
+    collect_routes, extract_symbol_relationships_with_routes, extract_symbols_with_routes,
+    stable_symbol_id, Language, Position, Range, Symbol, SymbolRelationship,
+    SymbolRelationshipType, SymbolType, TreeSitterParser,
 };
 use crate::worktree::{normalize_path, WorktreeStore};
 use serde::{Deserialize, Serialize};
@@ -13315,6 +13315,7 @@ fn file_end_position(content: &str) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tree_sitter::{extract_symbol_relationships, extract_symbols};
     use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
