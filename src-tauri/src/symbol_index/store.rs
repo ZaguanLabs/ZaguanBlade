@@ -27,63 +27,141 @@ const GENERATED_INDEX_TABLES: &[&str] = &[
     "indexed_files",
 ];
 
-/// M2.4 set-based back-fill. One `UPDATE`: for every relationship whose
-/// `target_symbol_id` is still NULL, write the id of the matching symbol ONLY
-/// when `target_name` matches EXACTLY ONE candidate symbol globally. The
-/// `COUNT(*) = 1` guard and the value sub-`SELECT` share an identical candidate
-/// filter (`name = target_name`, excluding `import` placeholders and the
-/// synthetic `__file__` root), so an ambiguous name can never be written and a
-/// unique name resolves deterministically. `import` relationships are skipped.
+/// M2.4 set-based back-fill, target-driven: resolve each DISTINCT observed
+/// target name once — not once per relationship, and never for symbols nothing
+/// requests. The old form evaluated a correlated candidate `SELECT` plus a
+/// correlated `COUNT(*)` guard PER unresolved relationship row, so thousands
+/// of `calls → get` edges repeated the identical `get` lookup thousands of
+/// times (on Scout's Firefox corpus: complete resolution 110.77s → 44.23s from
+/// this change alone). Three steps inside one transaction:
+///
+/// 1. `wanted_relationship_names` — the distinct names unresolved rows request.
+/// 2. `unique_relationship_targets` — those names joined against `symbols`,
+///    keeping ONLY names with exactly one valid candidate.
+/// 3. One `UPDATE` from that compact unique-indexed lookup table.
+///
+/// CORRECTNESS GUARD (unchanged from the correlated form): a target is written
+/// ONLY when the name matches EXACTLY ONE candidate symbol globally
+/// (`HAVING COUNT(*) = 1`). Candidates exclude `import` placeholders and the
+/// synthetic `__file__` root; the old filter's `name != ''` is implied by the
+/// equality join against wanted names, which are never empty. An ambiguous
+/// name is simply absent from the lookup table and stays NULL. `import`
+/// relationships are skipped, and already-resolved (non-NULL) rows are never
+/// overwritten. `MIN(s.id)` is the single candidate the guard admits.
 /// `confidence = 0.5`: a name-only heuristic (no scope/type analysis) — the
 /// uniqueness guard is what makes it safe, not the score.
+const BUILD_UNIQUE_RELATIONSHIP_TARGETS_SQL: &str = r#"
+DROP TABLE IF EXISTS temp.wanted_relationship_names;
+CREATE TEMP TABLE wanted_relationship_names AS
+SELECT DISTINCT target_name AS name
+FROM symbol_relationships
+WHERE target_symbol_id IS NULL
+  AND relationship_type != 'import'
+  AND target_name != '';
+CREATE UNIQUE INDEX wanted_relationship_names_idx ON wanted_relationship_names(name);
+
+DROP TABLE IF EXISTS temp.unique_relationship_targets;
+CREATE TEMP TABLE unique_relationship_targets AS
+SELECT wanted.name AS name, MIN(s.id) AS id
+FROM wanted_relationship_names AS wanted
+JOIN symbols AS s ON s.name = wanted.name
+WHERE s.symbol_type != 'import'
+  AND s.qualified_name != '__file__'
+GROUP BY wanted.name
+HAVING COUNT(*) = 1;
+CREATE UNIQUE INDEX unique_relationship_targets_idx ON unique_relationship_targets(name);
+"#;
+
 const BACKFILL_GLOBAL_UNIQUE_SQL: &str = r#"
 UPDATE symbol_relationships
 SET target_symbol_id = (
-        SELECT s.id
-        FROM symbols s
-        WHERE s.name = symbol_relationships.target_name
-          AND s.name != ''
-          AND s.symbol_type != 'import'
-          AND s.qualified_name != '__file__'
+        SELECT candidate.id
+        FROM unique_relationship_targets AS candidate
+        WHERE candidate.name = symbol_relationships.target_name
     ),
     resolution_strategy = 'global_unique',
     confidence = 0.5
 WHERE target_symbol_id IS NULL
   AND relationship_type != 'import'
-  AND symbol_relationships.target_name != ''
-  AND (
-        SELECT COUNT(*)
-        FROM symbols s2
-        WHERE s2.name = symbol_relationships.target_name
-          AND s2.name != ''
-          AND s2.symbol_type != 'import'
-          AND s2.qualified_name != '__file__'
-      ) = 1
+  AND target_name != ''
+  AND EXISTS (
+        SELECT 1
+        FROM unique_relationship_targets AS candidate
+        WHERE candidate.name = symbol_relationships.target_name
+      )
+"#;
+
+const DROP_UNIQUE_RELATIONSHIP_TARGETS_SQL: &str = r#"
+DROP TABLE wanted_relationship_names;
+DROP TABLE unique_relationship_targets;
+"#;
+
+/// Target-driven global anchor resolution — the same shape as the relationship
+/// back-fill above, with the anchor rules preserved: lookups match `name` OR
+/// `qualified_name`, and a target is written only when exactly one candidate
+/// symbol matches (`HAVING COUNT(*) = 1`; the OR is a row-level predicate over
+/// a table keyed by `id`, so the row count IS the distinct-symbol count).
+const BUILD_UNIQUE_ANCHOR_TARGETS_SQL: &str = r#"
+DROP TABLE IF EXISTS temp.wanted_anchor_lookups;
+CREATE TEMP TABLE wanted_anchor_lookups AS
+SELECT DISTINCT target_name AS lookup
+FROM semantic_anchors
+WHERE target_symbol_id IS NULL
+  AND target_file_path IS NULL
+  AND target_name IS NOT NULL
+  AND target_name != '';
+CREATE UNIQUE INDEX wanted_anchor_lookups_idx ON wanted_anchor_lookups(lookup);
+
+DROP TABLE IF EXISTS temp.unique_anchor_targets;
+CREATE TEMP TABLE unique_anchor_targets AS
+SELECT wanted.lookup AS lookup, MIN(symbol.id) AS id
+FROM wanted_anchor_lookups AS wanted
+JOIN symbols AS symbol
+  ON symbol.name = wanted.lookup OR symbol.qualified_name = wanted.lookup
+WHERE symbol.symbol_type != 'import'
+  AND symbol.qualified_name != '__file__'
+GROUP BY wanted.lookup
+HAVING COUNT(*) = 1;
+CREATE UNIQUE INDEX unique_anchor_targets_idx ON unique_anchor_targets(lookup);
 "#;
 
 const GLOBAL_SEMANTIC_TARGET_BACKFILL_SQL: &str = r#"
-UPDATE semantic_anchors AS anchor
+UPDATE semantic_anchors
 SET target_symbol_id = (
-    SELECT symbol.id
-    FROM symbols AS symbol
-    WHERE (symbol.name = anchor.target_name OR symbol.qualified_name = anchor.target_name)
-      AND symbol.symbol_type != 'import'
-      AND symbol.qualified_name != '__file__'
-    LIMIT 1
+    SELECT candidate.id
+    FROM unique_anchor_targets AS candidate
+    WHERE candidate.lookup = semantic_anchors.target_name
 )
-WHERE anchor.target_file_path IS NULL
-  AND anchor.target_symbol_id IS NULL
-  AND anchor.target_name IS NOT NULL
-  AND anchor.target_name != ''
-  AND (
-    SELECT COUNT(*)
-    FROM symbols AS candidate
-    WHERE (candidate.name = anchor.target_name OR candidate.qualified_name = anchor.target_name)
-      AND candidate.symbol_type != 'import'
-      AND candidate.qualified_name != '__file__'
-  ) = 1
+WHERE target_file_path IS NULL
+  AND target_symbol_id IS NULL
+  AND target_name IS NOT NULL
+  AND target_name != ''
+  AND EXISTS (
+    SELECT 1
+    FROM unique_anchor_targets AS candidate
+    WHERE candidate.lookup = semantic_anchors.target_name
+  )
 "#;
 
+const DROP_UNIQUE_ANCHOR_TARGETS_SQL: &str = r#"
+DROP TABLE wanted_anchor_lookups;
+DROP TABLE unique_anchor_targets;
+"#;
+
+/// Run the whole-index anchor back-fill (build unique-target lookup, update,
+/// drop) in one transaction. Returns the number of anchors newly resolved.
+fn backfill_global_anchor_targets(conn: &mut Connection) -> Result<usize, SymbolStoreError> {
+    let tx = conn.transaction()?;
+    tx.execute_batch(BUILD_UNIQUE_ANCHOR_TARGETS_SQL)?;
+    let resolved = tx.execute(GLOBAL_SEMANTIC_TARGET_BACKFILL_SQL, [])?;
+    tx.execute_batch(DROP_UNIQUE_ANCHOR_TARGETS_SQL)?;
+    tx.commit()?;
+    Ok(resolved)
+}
+
+/// Per-file anchor resolution keeps the correlated form deliberately: a single
+/// file's few unresolved anchors don't repay the temp-table setup that pays
+/// off for the whole-index passes above.
 const GLOBAL_SEMANTIC_TARGET_BACKFILL_FOR_FILE_SQL: &str = r#"
 UPDATE semantic_anchors AS anchor
 SET target_symbol_id = (
@@ -1423,26 +1501,31 @@ impl SymbolStore {
     /// M2.4 — set-based relationship back-fill.
     ///
     /// Resolves `symbol_relationships.target_symbol_id` for rows that are still
-    /// NULL by matching `target_name` against the GLOBAL symbol set in a single
-    /// `UPDATE`, replacing the old per-reference `search_symbols_contextual`
-    /// round-trips (the cold-index bottleneck: 81–97% of wall time).
+    /// NULL by matching `target_name` against the GLOBAL symbol set, replacing
+    /// the old per-reference `search_symbols_contextual` round-trips (the
+    /// cold-index bottleneck: 81–97% of wall time). Target-driven: distinct
+    /// requested names are resolved once through a temp lookup table instead of
+    /// re-evaluating correlated subqueries per relationship row (see
+    /// `BUILD_UNIQUE_RELATIONSHIP_TARGETS_SQL` for the guard rationale).
     ///
     /// CORRECTNESS GUARD: a target is written ONLY when the name matches
-    /// EXACTLY ONE candidate symbol globally (`COUNT(*) = 1`). An ambiguous name
-    /// (`> 1` match) is left NULL — a wrong `target_symbol_id` silently corrupts
-    /// the knowledge graph (symbol_trace / edit_impact). Already-resolved
+    /// EXACTLY ONE candidate symbol globally. An ambiguous name (`> 1` match)
+    /// is left NULL — a wrong `target_symbol_id` silently corrupts the
+    /// knowledge graph (symbol_trace / edit_impact). Already-resolved
     /// (non-NULL) rows are never overwritten, and `import` edges are left to the
     /// dedicated import canonicalization. Candidate symbols exclude `import`
     /// placeholders and the synthetic `__file__` root, mirroring the in-memory
-    /// resolver's filter. The `COUNT(*) = 1` predicate is byte-for-byte the same
-    /// candidate filter as the value `SELECT`, so the guard cannot disagree with
-    /// the write.
+    /// resolver's filter.
     ///
     /// Idempotent: re-running only ever turns NULL into a unique match. Returns
     /// the number of rows newly resolved.
     pub fn backfill_unresolved_relationship_targets(&self) -> Result<usize, SymbolStoreError> {
-        let conn = self.conn.lock().unwrap();
-        let resolved = conn.execute(BACKFILL_GLOBAL_UNIQUE_SQL, [])?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute_batch(BUILD_UNIQUE_RELATIONSHIP_TARGETS_SQL)?;
+        let resolved = tx.execute(BACKFILL_GLOBAL_UNIQUE_SQL, [])?;
+        tx.execute_batch(DROP_UNIQUE_RELATIONSHIP_TARGETS_SQL)?;
+        tx.commit()?;
         Ok(resolved)
     }
 
@@ -1460,7 +1543,7 @@ impl SymbolStore {
                 GLOBAL_SEMANTIC_TARGET_BACKFILL_FOR_FILE_SQL,
                 params![file_path],
             )?,
-            None => conn.execute(GLOBAL_SEMANTIC_TARGET_BACKFILL_SQL, [])?,
+            None => backfill_global_anchor_targets(&mut conn)?,
         };
         conn.execute(
             r#"
@@ -3501,6 +3584,223 @@ mod tests {
             signature: Some("(param: string): void".to_string()),
             content_hash: "hash".to_string(),
         }
+    }
+
+    /// The pre-target-driven correlated statements, kept VERBATIM as the
+    /// reference semantics for `target_driven_backfill_matches_legacy_correlated_backfill`.
+    const LEGACY_BACKFILL_GLOBAL_UNIQUE_SQL: &str = r#"
+UPDATE symbol_relationships
+SET target_symbol_id = (
+        SELECT s.id
+        FROM symbols s
+        WHERE s.name = symbol_relationships.target_name
+          AND s.name != ''
+          AND s.symbol_type != 'import'
+          AND s.qualified_name != '__file__'
+    ),
+    resolution_strategy = 'global_unique',
+    confidence = 0.5
+WHERE target_symbol_id IS NULL
+  AND relationship_type != 'import'
+  AND symbol_relationships.target_name != ''
+  AND (
+        SELECT COUNT(*)
+        FROM symbols s2
+        WHERE s2.name = symbol_relationships.target_name
+          AND s2.name != ''
+          AND s2.symbol_type != 'import'
+          AND s2.qualified_name != '__file__'
+      ) = 1
+"#;
+
+    const LEGACY_GLOBAL_SEMANTIC_TARGET_BACKFILL_SQL: &str = r#"
+UPDATE semantic_anchors AS anchor
+SET target_symbol_id = (
+    SELECT symbol.id
+    FROM symbols AS symbol
+    WHERE (symbol.name = anchor.target_name OR symbol.qualified_name = anchor.target_name)
+      AND symbol.symbol_type != 'import'
+      AND symbol.qualified_name != '__file__'
+    LIMIT 1
+)
+WHERE anchor.target_file_path IS NULL
+  AND anchor.target_symbol_id IS NULL
+  AND anchor.target_name IS NOT NULL
+  AND anchor.target_name != ''
+  AND (
+    SELECT COUNT(*)
+    FROM symbols AS candidate
+    WHERE (candidate.name = anchor.target_name OR candidate.qualified_name = anchor.target_name)
+      AND candidate.symbol_type != 'import'
+      AND candidate.qualified_name != '__file__'
+  ) = 1
+"#;
+
+    /// Every discriminating case the global back-fills must handle: a unique
+    /// name, an ambiguous name, import-only and `__file__`-only candidates, an
+    /// `import`-type edge, an already-resolved edge, an empty target name, a
+    /// qualified-name anchor match, and a name that is unique for relationships
+    /// (name-only match) but ambiguous for anchors (name OR qualified-name).
+    fn seed_backfill_fixture(store: &SymbolStore) {
+        let conn = store.conn.lock().unwrap();
+        conn.execute_batch(
+            r#"
+            INSERT INTO symbols (id, name, qualified_name, symbol_type, file_path,
+                                 start_line, start_char, end_line, end_char, indexed_at)
+            VALUES
+                ('s_unique',     'unique_fn',   'mod.unique_fn',   'function', 'a.py', 0, 0, 0, 0, 0),
+                ('s_dup1',       'dup_fn',      'mod1.dup_fn',     'function', 'a.py', 0, 0, 0, 0, 0),
+                ('s_dup2',       'dup_fn',      'mod2.dup_fn',     'function', 'b.py', 0, 0, 0, 0, 0),
+                ('s_import',     'imported_fn', 'mod.imported_fn', 'import',   'a.py', 0, 0, 0, 0, 0),
+                ('s_root',       'root_fn',     '__file__',        'function', 'a.py', 0, 0, 0, 0, 0),
+                ('s_qn',         'qn_fn',       'pkg.qn_fn',       'function', 'c.py', 0, 0, 0, 0, 0),
+                ('s_cross_name', 'crossy',      'mod.crossy',      'function', 'd.py', 0, 0, 0, 0, 0),
+                ('s_cross_qn',   'other_fn',    'crossy',          'function', 'e.py', 0, 0, 0, 0, 0);
+
+            INSERT INTO symbol_relationships
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line)
+            VALUES
+                ('r_src', 'x.py', 'unique_fn',   NULL,     'call',   1),
+                ('r_src', 'x.py', 'dup_fn',      NULL,     'call',   2),
+                ('r_src', 'x.py', 'imported_fn', NULL,     'call',   3),
+                ('r_src', 'x.py', 'root_fn',     NULL,     'call',   4),
+                ('r_src', 'x.py', 'unique_fn',   NULL,     'import', 5),
+                ('r_src', 'x.py', 'unique_fn',   'preset', 'use',    6),
+                ('r_src', 'x.py', 'crossy',      NULL,     'call',   7),
+                ('r_src', 'x.py', '',            NULL,     'call',   8);
+
+            INSERT INTO semantic_anchors
+                (id, file_path, kind, value, line, character, preview, confidence,
+                 target_file_path, target_name, target_symbol_id, indexed_at)
+            VALUES
+                ('a1', 'doc.md', 'ref', 'v', 1, 0, 'p', 1.0, NULL,        'unique_fn',   NULL, 0),
+                ('a2', 'doc.md', 'ref', 'v', 2, 0, 'p', 1.0, NULL,        'pkg.qn_fn',   NULL, 0),
+                ('a3', 'doc.md', 'ref', 'v', 3, 0, 'p', 1.0, NULL,        'dup_fn',      NULL, 0),
+                ('a4', 'doc.md', 'ref', 'v', 4, 0, 'p', 1.0, NULL,        'crossy',      NULL, 0),
+                ('a5', 'doc.md', 'ref', 'v', 5, 0, 'p', 1.0, 'target.py', 'unique_fn',   NULL, 0),
+                ('a6', 'doc.md', 'ref', 'v', 6, 0, 'p', 1.0, NULL,        NULL,          NULL, 0),
+                ('a7', 'doc.md', 'ref', 'v', 7, 0, 'p', 1.0, NULL,        'imported_fn', NULL, 0);
+            "#,
+        )
+        .unwrap();
+    }
+
+    type RelationshipResolutionRow = (String, i64, Option<String>, Option<String>, Option<f64>);
+
+    fn dump_relationship_resolutions(store: &SymbolStore) -> Vec<RelationshipResolutionRow> {
+        let conn = store.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT target_name, line, target_symbol_id, resolution_strategy, confidence
+                 FROM symbol_relationships ORDER BY target_name, line",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .unwrap();
+        rows.collect::<Result<Vec<_>, _>>().unwrap()
+    }
+
+    fn dump_anchor_resolutions(store: &SymbolStore) -> Vec<(String, Option<String>)> {
+        let conn = store.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, target_symbol_id FROM semantic_anchors ORDER BY id")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap();
+        rows.collect::<Result<Vec<_>, _>>().unwrap()
+    }
+
+    /// The target-driven back-fills must be row-for-row identical to the legacy
+    /// correlated statements, and each fixture case must land where the
+    /// precision rules say (so both implementations being wrong together
+    /// cannot pass).
+    #[test]
+    fn target_driven_backfill_matches_legacy_correlated_backfill() {
+        let legacy = SymbolStore::in_memory().unwrap();
+        let current = SymbolStore::in_memory().unwrap();
+        seed_backfill_fixture(&legacy);
+        seed_backfill_fixture(&current);
+
+        let (legacy_relationships, legacy_anchors) = {
+            let conn = legacy.conn.lock().unwrap();
+            (
+                conn.execute(LEGACY_BACKFILL_GLOBAL_UNIQUE_SQL, []).unwrap(),
+                conn.execute(LEGACY_GLOBAL_SEMANTIC_TARGET_BACKFILL_SQL, [])
+                    .unwrap(),
+            )
+        };
+
+        let current_relationships = current.backfill_unresolved_relationship_targets().unwrap();
+        let current_anchors = {
+            let mut conn = current.conn.lock().unwrap();
+            backfill_global_anchor_targets(&mut conn).unwrap()
+        };
+
+        assert_eq!(current_relationships, legacy_relationships);
+        assert_eq!(current_anchors, legacy_anchors);
+        assert_eq!(
+            dump_relationship_resolutions(&current),
+            dump_relationship_resolutions(&legacy)
+        );
+        assert_eq!(
+            dump_anchor_resolutions(&current),
+            dump_anchor_resolutions(&legacy)
+        );
+
+        // Explicit expected outcomes on the new implementation.
+        assert_eq!(current_relationships, 2);
+        let relationships: HashMap<(String, i64), (Option<String>, Option<String>)> =
+            dump_relationship_resolutions(&current)
+                .into_iter()
+                .map(|(name, line, target, strategy, _)| ((name, line), (target, strategy)))
+                .collect();
+        let expect = |name: &str, line: i64| relationships[&(name.to_string(), line)].clone();
+        assert_eq!(
+            expect("unique_fn", 1),
+            (
+                Some("s_unique".to_string()),
+                Some("global_unique".to_string())
+            )
+        );
+        assert_eq!(
+            expect("crossy", 7),
+            (
+                Some("s_cross_name".to_string()),
+                Some("global_unique".to_string())
+            )
+        );
+        assert_eq!(expect("dup_fn", 2), (None, None));
+        assert_eq!(expect("imported_fn", 3), (None, None));
+        assert_eq!(expect("root_fn", 4), (None, None));
+        assert_eq!(expect("unique_fn", 5), (None, None)); // import edge skipped
+        assert_eq!(expect("unique_fn", 6), (Some("preset".to_string()), None)); // never overwritten
+        assert_eq!(expect("", 8), (None, None));
+
+        assert_eq!(current_anchors, 2);
+        let anchors: HashMap<String, Option<String>> =
+            dump_anchor_resolutions(&current).into_iter().collect();
+        assert_eq!(anchors["a1"], Some("s_unique".to_string()));
+        assert_eq!(anchors["a2"], Some("s_qn".to_string())); // qualified-name match
+        assert_eq!(anchors["a3"], None); // ambiguous by name
+        assert_eq!(anchors["a4"], None); // ambiguous across name + qualified name
+        assert_eq!(anchors["a5"], None); // target_file_path already set: untouched
+        assert_eq!(anchors["a6"], None); // no target name
+        assert_eq!(anchors["a7"], None); // only candidate is an import placeholder
+
+        // Idempotent: a second run resolves nothing and changes nothing.
+        let before = dump_relationship_resolutions(&current);
+        assert_eq!(current.backfill_unresolved_relationship_targets().unwrap(), 0);
+        assert_eq!(dump_relationship_resolutions(&current), before);
     }
 
     /// The composite PRIMARY KEY's autoindex must serve `source_symbol_id`
