@@ -2875,12 +2875,10 @@ impl LanguageService {
                             match result {
                                 Ok(outcome) => {
                                     stats.files_indexed += 1;
-                                    stats.symbols_extracted += self
-                                        .filter_visible_symbols(
-                                            &relative_path,
-                                            outcome.staged.symbols.clone(),
-                                        )
-                                        .len();
+                                    stats.symbols_extracted += Self::count_visible_symbols(
+                                        &relative_path,
+                                        &outcome.staged.symbols,
+                                    );
                                     stats.files_reindexed += 1;
                                     stats.anchors_extracted += outcome.metrics.anchors;
                                     stats.load_ms += outcome.metrics.load_ms;
@@ -6388,6 +6386,20 @@ impl LanguageService {
             .into_iter()
             .filter_map(|symbol| self.normalize_visible_symbol(file_path, symbol))
             .collect()
+    }
+
+    /// The number of symbols `filter_visible_symbols` would keep, without
+    /// cloning them: only the synthetic file-root symbol is hidden, and the
+    /// `parent_id` normalization in `normalize_visible_symbol` never changes
+    /// the count.
+    fn count_visible_symbols(file_path: &str, symbols: &[Symbol]) -> usize {
+        let root_id = Self::synthetic_file_root_id(file_path);
+        symbols
+            .iter()
+            .filter(|symbol| {
+                symbol.id != root_id || !Self::is_synthetic_file_root_symbol(symbol)
+            })
+            .count()
     }
 
     fn normalize_visible_symbol(&self, file_path: &str, mut symbol: Symbol) -> Option<Symbol> {
