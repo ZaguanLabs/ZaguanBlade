@@ -28,10 +28,6 @@ jobs:
 
       - name: install rust stable
         uses: dtolnay/rust-toolchain@stable
-        with:
-          # Pinned so clippy's lint set (and the [lints.clippy] allow-list in
-          # src-tauri/Cargo.toml) stays in sync; bump both together.
-          toolchain: 1.97.0
 
       - name: install frontend dependencies
         run: make install-deps
@@ -103,7 +99,6 @@ jobs:
       - name: install rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.97.0
           targets: ${{ matrix.rust_target }}
 
       - name: install frontend dependencies
