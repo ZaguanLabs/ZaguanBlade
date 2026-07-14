@@ -214,7 +214,7 @@ impl Range {
 }
 
 /// A symbol extracted from source code
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Symbol {
     /// Unique identifier (UUID v4)
     pub id: String,
@@ -350,7 +350,7 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SymbolRelationship {
     pub source_symbol_id: String,
     pub source_file_path: String,
@@ -2008,20 +2008,36 @@ impl SymbolExtractor {
     }
 }
 
-/// Convenience function to extract symbols from source code
+/// Convenience function to extract symbols from source code. Detects route
+/// facts itself; the production indexing path detects them ONCE and shares
+/// them with the relationship pass via `extract_symbols_with_routes`.
 pub fn extract_symbols(
     tree: &Tree,
     source: &str,
     language: Language,
     file_path: &str,
 ) -> Vec<Symbol> {
+    let routes = collect_routes(&tree.root_node(), source, language);
+    extract_symbols_with_routes(tree, source, language, file_path, &routes)
+}
+
+/// Symbol extraction over pre-detected route facts, so a single
+/// `collect_routes` pass per file can be shared with
+/// `extract_symbol_relationships_with_routes`.
+pub(crate) fn extract_symbols_with_routes(
+    tree: &Tree,
+    source: &str,
+    language: Language,
+    file_path: &str,
+    routes: &[DetectedRoute],
+) -> Vec<Symbol> {
     let extractor = SymbolExtractor::new(file_path.to_string());
     let mut symbols = extractor.extract(tree, source, language);
     // M4.4: append a `Route` symbol per detected HTTP route registration (Python
     // decorators, NestJS `@Controller`/`@Get`, Express `app`/`router.METHOD`).
     // Each is named with its canonical `"<METHOD> <path>"`; the matching `Handles`
-    // edge to the handler is emitted later by `extract_symbol_relationships`.
-    append_route_symbols(tree, source, language, file_path, &mut symbols);
+    // edge to the handler is emitted later by the relationship pass.
+    append_route_symbols(routes, file_path, &mut symbols);
     symbols
 }
 
@@ -2030,14 +2046,7 @@ pub fn extract_symbols(
 /// `qualified_name`, and its id is derived with `stable_symbol_id` so the
 /// relationship pass can recover it for the `Handles` edge. Duplicate
 /// `<METHOD> <path>` routes in one file collapse to a single node.
-fn append_route_symbols(
-    tree: &Tree,
-    source: &str,
-    language: Language,
-    file_path: &str,
-    symbols: &mut Vec<Symbol>,
-) {
-    let routes = collect_routes(&tree.root_node(), source, language);
+fn append_route_symbols(routes: &[DetectedRoute], file_path: &str, symbols: &mut Vec<Symbol>) {
     let mut seen: HashSet<String> = HashSet::new();
     for route in routes {
         let qn = route.symbol_name();
@@ -2147,12 +2156,29 @@ fn cpp_callable_symbol_type(name_node: &Node, callable_node: &Node) -> SymbolTyp
     }
 }
 
+/// Convenience relationship extraction. Detects route facts itself; the
+/// production indexing path detects them ONCE and shares them with the symbol
+/// pass via `extract_symbol_relationships_with_routes`.
 pub fn extract_symbol_relationships(
     tree: &Tree,
     source: &str,
     language: Language,
     file_path: &str,
     symbols: &[Symbol],
+) -> Vec<SymbolRelationship> {
+    let routes = collect_routes(&tree.root_node(), source, language);
+    extract_symbol_relationships_with_routes(tree, source, language, file_path, symbols, &routes)
+}
+
+/// Relationship extraction over pre-detected route facts (shared with
+/// `extract_symbols_with_routes` by the production indexing path).
+pub(crate) fn extract_symbol_relationships_with_routes(
+    tree: &Tree,
+    source: &str,
+    language: Language,
+    file_path: &str,
+    symbols: &[Symbol],
+    routes: &[DetectedRoute],
 ) -> Vec<SymbolRelationship> {
     // M5.3 / N8: a language whose capability declares no relationship extraction
     // (graduated C/C++ is definitions-only until source-attribution fixtures
@@ -2199,14 +2225,13 @@ pub fn extract_symbol_relationships(
     // Import edges are derived from the symbol list, not the tree.
     extract_import_relationships(file_path, symbols, &mut rel.relationships, &mut rel.seen);
 
-    // M4.4: `Handles` edges (Route → handler). Re-runs route detection (cheap,
-    // pure) and links each route's synthetic `Route` symbol id to the handler
-    // function/method symbol resolved from `symbols`. Routes whose handler cannot
-    // be identified emit no edge (the Route node alone is the anchor fallback).
+    // M4.4: `Handles` edges (Route → handler). The production extraction path
+    // shares its route facts with symbol extraction; compatibility callers that
+    // request relationships separately still detect them once here. Routes whose
+    // handler cannot be identified emit no edge (the Route node alone is the
+    // anchor fallback).
     emit_route_handles(
-        tree,
-        source,
-        language,
+        routes,
         file_path,
         symbols,
         &mut rel.relationships,
@@ -2224,15 +2249,12 @@ pub fn extract_symbol_relationships(
 /// method) or by name (an Express identifier callback). A route with no resolvable
 /// handler contributes no edge.
 fn emit_route_handles(
-    tree: &Tree,
-    source: &str,
-    language: Language,
+    routes: &[DetectedRoute],
     file_path: &str,
     all_symbols: &[Symbol],
     relationships: &mut Vec<SymbolRelationship>,
     seen: &mut HashSet<(String, String, SymbolRelationshipType, u32)>,
 ) {
-    let routes = collect_routes(&tree.root_node(), source, language);
     for route in routes {
         let qn = route.symbol_name();
         let route_id = stable_symbol_id(file_path, &qn, SymbolType::Route);
@@ -2288,7 +2310,7 @@ fn resolve_route_handler<'a>(
 /// One detected HTTP route registration: its method + canonical path, the span of
 /// the registration site (decorator / call / method-decorator) for the synthetic
 /// `Route` symbol, and how to find its handler symbol.
-struct DetectedRoute {
+pub(crate) struct DetectedRoute {
     method: String,
     canon_path: String,
     reg_range: Range,
@@ -2413,12 +2435,30 @@ fn route_canon_path(raw: &str) -> String {
 /// `@Controller` + `@Get`/`@Post`/… method decorators, and Express/JS
 /// `app`/`router.METHOD(...)` calls. Paths passed as bare identifiers are resolved
 /// through the M4.2 module-level constant map.
-fn collect_routes(root: &Node, source: &str, language: Language) -> Vec<DetectedRoute> {
+pub(crate) fn collect_routes(root: &Node, source: &str, language: Language) -> Vec<DetectedRoute> {
+    if !supports_route_detection(language) {
+        return Vec::new();
+    }
     let mut const_map: HashMap<String, String> = HashMap::new();
     collect_module_constants(root, language, source, &mut const_map);
     let mut out = Vec::new();
     walk_routes(root, source, language, &const_map, &mut out);
     out
+}
+
+/// The only languages with route-extraction rules in `walk_routes`. Everything
+/// else (Rust, Go, C/C++, …) skips route detection entirely — no constants map,
+/// no tree walk — because it could never emit a route.
+const fn supports_route_detection(language: Language) -> bool {
+    matches!(
+        language,
+        Language::Python
+            | Language::TypeScript
+            | Language::Tsx
+            | Language::Astro
+            | Language::JavaScript
+            | Language::Jsx
+    )
 }
 
 /// Recursive dispatch for `collect_routes`: visit each node and run the
@@ -5030,6 +5070,72 @@ fn compute_content_hash(content: &str) -> String {
 mod tests {
     use super::*;
     use crate::tree_sitter::TreeSitterParser;
+
+    #[test]
+    fn route_detection_is_limited_to_framework_languages() {
+        for language in [
+            Language::Python,
+            Language::TypeScript,
+            Language::Tsx,
+            Language::Astro,
+            Language::JavaScript,
+            Language::Jsx,
+        ] {
+            assert!(supports_route_detection(language));
+        }
+
+        for language in [Language::Rust, Language::Go, Language::Cpp] {
+            assert!(!supports_route_detection(language));
+        }
+    }
+
+    #[test]
+    fn shared_route_facts_preserve_separate_extraction_results() {
+        let fixtures = [
+            (
+                Language::TypeScript,
+                "routes.ts",
+                r#"const ROOT = "/users";
+function showUser() {}
+router.get(ROOT, showUser);"#,
+            ),
+            (
+                Language::Python,
+                "routes.py",
+                r#"ROOT = "/users/{id}"
+@app.get(ROOT)
+def show_user():
+    return None
+"#,
+            ),
+        ];
+
+        for (language, path, code) in fixtures {
+            let mut parser = TreeSitterParser::new().unwrap();
+            let tree = parser.parse(code, language).unwrap();
+            let separate_symbols = extract_symbols(&tree, code, language, path);
+            let separate_relationships =
+                extract_symbol_relationships(&tree, code, language, path, &separate_symbols);
+
+            let routes = collect_routes(&tree.root_node(), code, language);
+            let shared_symbols = extract_symbols_with_routes(&tree, code, language, path, &routes);
+            let shared_relationships = extract_symbol_relationships_with_routes(
+                &tree,
+                code,
+                language,
+                path,
+                &shared_symbols,
+                &routes,
+            );
+
+            assert!(
+                shared_symbols.iter().any(|s| s.symbol_type == SymbolType::Route),
+                "{path}: fixture must actually detect a route"
+            );
+            assert_eq!(shared_symbols, separate_symbols);
+            assert_eq!(shared_relationships, separate_relationships);
+        }
+    }
 
     #[test]
     fn test_extract_typescript_function() {

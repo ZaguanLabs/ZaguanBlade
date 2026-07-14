@@ -16,7 +16,10 @@ pub use parser::{
     ExtractionCapabilities, Language, LanguageCapability, ParserKind, SupportLevel,
     TreeSitterGrammar, TreeSitterParser,
 };
-pub(crate) use symbol::stable_symbol_id;
+pub(crate) use symbol::{
+    collect_routes, extract_symbol_relationships_with_routes, extract_symbols_with_routes,
+    stable_symbol_id,
+};
 pub use symbol::{
     extract_symbol_relationships, extract_symbols, Position, Range, Symbol, SymbolExtractor,
     SymbolRelationship, SymbolRelationshipType, SymbolType,
