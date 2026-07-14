@@ -31,6 +31,10 @@ const EXCLUDE_DIRS: &[&str] = &[
     "dist",
     "__pycache__",
     ".cache",
+    // A previously-indexed corpus carries its own index (potentially many GB);
+    // production discovery skips it, so the bench's counts must too — and
+    // `count_corpus`'s read_to_string must never slurp a multi-GB SQLite file.
+    ".zblade",
 ];
 
 /// Extensions we will pick from when choosing a file to mutate for the
