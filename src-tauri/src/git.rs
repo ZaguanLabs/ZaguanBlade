@@ -978,6 +978,9 @@ fn parse_git_status_files(output: &str) -> Vec<GitFileStatus> {
 }
 
 #[cfg(test)]
+// Blocking `git` invocations are intentional in tests (no async runtime to
+// starve) — the explicit allow clippy.toml's disallowed-list asks for.
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use std::path::Path;
