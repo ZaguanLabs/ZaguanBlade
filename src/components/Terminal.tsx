@@ -134,6 +134,14 @@ interface TerminalProps {
 export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, command, displayCommand, interactive = true, externalProcess = false }) => {
     recordDebugPerf(`Terminal.render.${id}`);
     const { t } = useTranslation();
+    // Latest translator for the long-lived xterm event callbacks below. The
+    // mount effect's cleanup kills the PTY, so `t` must not be one of its
+    // deps — a language switch would restart the shell. The ref also means
+    // exit/failure messages render in the language current at event time.
+    const tRef = useRef(t);
+    useEffect(() => {
+        tRef.current = t;
+    }, [t]);
     const { themeId } = useTheme();
     const terminalRef = useRef<HTMLDivElement>(null);
     const xtermRef = useRef<XTerm | null>(null);
@@ -575,7 +583,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
             const { id: termId, code } = payload;
             if (termId === id && xtermRef.current) {
                 clearSpawnDiagnosticTimers();
-                xtermRef.current.write(`\r\n\x1b[33m${t('terminal.processExited', { code })}\x1b[0m\r\n`);
+                xtermRef.current.write(`\r\n\x1b[33m${tRef.current('terminal.processExited', { code })}\x1b[0m\r\n`);
             }
         });
         const writeDisplayCommand = (commandText: string) => {
@@ -641,7 +649,7 @@ export const Terminal: React.FC<TerminalProps> = ({ id = "main-terminal", cwd, c
                 }, 50);
             } catch (err) {
                 console.error("Failed to create terminal:", err);
-                term.write(`\r\n\x1b[31m${t('terminal.initFailed')}\x1b[0m\r\n`);
+                term.write(`\r\n\x1b[31m${tRef.current('terminal.initFailed')}\x1b[0m\r\n`);
             }
         };
 

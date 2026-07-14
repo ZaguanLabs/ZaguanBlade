@@ -170,7 +170,7 @@ function useNoopChat() {
     };
 }
 
-function useNoopTabManager(uncommittedChanges: { file_path: string }[]) {
+function useNoopTabManager(_uncommittedChanges: { file_path: string }[]) {
     const [tabs, setTabs] = useState<Tab[]>([]);
     const [activeTabId, setActiveTabId] = useState<string | null>(null);
     const [aiEditedFilePaths, setAiEditedFilePaths] = useState<Set<string>>(new Set());
@@ -290,6 +290,129 @@ function useNoopTabManager(uncommittedChanges: { file_path: string }[]) {
     };
 }
 
+// ---------------------------------------------------------------------------
+// Debug-flag hook selection.
+//
+// Each disable* debug flag swaps a subsystem hook for a noop implementation.
+// The selection is frozen in a useState initializer on first render — after
+// DebugFlagBootstrap has merged the backend runtime flags, so the timing is
+// identical to the old useMemo reads — and can never change for the lifetime
+// of the mount because the setter is never exposed. The wrapper is called
+// unconditionally, so hook order is stable and the Rules of Hooks hold.
+// If a flag ever needs to change at runtime, move the branch INSIDE the
+// subsystem hook (an `enabled` option); do not branch on it in a component.
+// ---------------------------------------------------------------------------
+
+function useNoopChatAdapter(..._args: Parameters<typeof useChatV2>) {
+    return useNoopChat();
+}
+
+function useChatForLayout(...args: Parameters<typeof useChatV2>) {
+    const [useImpl] = useState(() =>
+        readDebugFlag('disableChatHook') ? useNoopChatAdapter : useChatV2,
+    );
+    return useImpl(...args);
+}
+
+function useUncommittedChangesDisabled(..._args: Parameters<typeof useUncommittedChanges>) {
+    return {
+        changes: [],
+        acceptFile: async () => false,
+        acceptAll: async () => false,
+        rejectFile: async () => false,
+        rejectAll: async () => false,
+    };
+}
+
+function useUncommittedChangesForLayout(...args: Parameters<typeof useUncommittedChanges>) {
+    const [useImpl] = useState(() =>
+        readDebugFlag('disableUncommittedChanges')
+            ? useUncommittedChangesDisabled
+            : useUncommittedChanges,
+    );
+    return useImpl(...args);
+}
+
+function useGitStatusDisabled(..._args: Parameters<typeof useGitStatus>) {
+    return {
+        status: null,
+        files: [],
+        error: null,
+        filesError: null,
+        lastRefreshedAt: null,
+        refresh: async () => undefined,
+        stageFile: async (_path: string) => undefined,
+        unstageFile: async (_path: string) => undefined,
+        stageAll: async () => undefined,
+        unstageAll: async () => undefined,
+        commit: async (_message: string) => undefined,
+        push: async () => undefined,
+        diff: async (_path: string, _staged: boolean) => '',
+        generateCommitMessage: async (_modelId?: string) => '',
+        commitPreflight: async () => ({
+            canCommit: false,
+            isRepo: false,
+            branch: null,
+            isDetached: false,
+            hasUpstream: false,
+            hasConflicts: false,
+            stagedCount: 0,
+            errorMessage: 'Git status disabled',
+            errorKey: 'git_disabled',
+        }),
+    };
+}
+
+function useGitStatusForLayout(...args: Parameters<typeof useGitStatus>) {
+    const [useImpl] = useState(() =>
+        readDebugFlag('disableGitStatus') ? useGitStatusDisabled : useGitStatus,
+    );
+    return useImpl(...args);
+}
+
+function useTabManagerForLayout(...args: Parameters<typeof useTabManager>) {
+    const [useImpl] = useState(() =>
+        readDebugFlag('disableTabManager') ? useNoopTabManager : useTabManager,
+    );
+    return useImpl(...args);
+}
+
+function useLayoutEventsDisabled(..._args: Parameters<typeof useLayoutEvents>) {
+    return {
+        researchProgress: null,
+        finalizeResearchActivities: (_loading: boolean, _wasStoppedByUser: boolean) => undefined,
+    };
+}
+
+function useLayoutEventsForLayout(...args: Parameters<typeof useLayoutEvents>) {
+    const [useImpl] = useState(() =>
+        readDebugFlag('disableLayoutEvents') ? useLayoutEventsDisabled : useLayoutEvents,
+    );
+    return useImpl(...args);
+}
+
+function useProjectStateDisabled(..._args: Parameters<typeof useProjectState>) {
+    return { loaded: true, isClosing: false };
+}
+
+function useProjectStateForLayout(...args: Parameters<typeof useProjectState>) {
+    const [useImpl] = useState(() =>
+        readDebugFlag('disableProjectState') ? useProjectStateDisabled : useProjectState,
+    );
+    return useImpl(...args);
+}
+
+function useWarmupDisabled(..._args: Parameters<typeof useWarmup>) {
+    return { trackActivity: () => undefined };
+}
+
+function useWarmupForLayout(...args: Parameters<typeof useWarmup>) {
+    const [useImpl] = useState(() =>
+        readDebugFlag('disableWarmup') ? useWarmupDisabled : useWarmup,
+    );
+    return useImpl(...args);
+}
+
 const AppLayoutInner: React.FC = () => {
     recordDebugPerf('Layout.render');
     const { t } = useTranslation();
@@ -298,13 +421,6 @@ const AppLayoutInner: React.FC = () => {
     const disableTerminalSurface = useMemo(() => readDebugSurfaceFlag('disableTerminal'), []);
     const disableEditorSurface = useMemo(() => readDebugSurfaceFlag('disableEditor'), []);
     const disableChatSurface = useMemo(() => readDebugSurfaceFlag('disableChat'), []);
-    const disableChatHook = useMemo(() => readDebugFlag('disableChatHook'), []);
-    const disableGitStatus = useMemo(() => readDebugFlag('disableGitStatus'), []);
-    const disableUncommittedChanges = useMemo(() => readDebugFlag('disableUncommittedChanges'), []);
-    const disableLayoutEvents = useMemo(() => readDebugFlag('disableLayoutEvents'), []);
-    const disableProjectState = useMemo(() => readDebugFlag('disableProjectState'), []);
-    const disableWarmup = useMemo(() => readDebugFlag('disableWarmup'), []);
-    const disableTabManager = useMemo(() => readDebugFlag('disableTabManager'), []);
     const disableActivityBar = useMemo(() => readDebugFlag('disableActivityBar'), []);
     const disableSidebarOverlay = useMemo(() => readDebugFlag('disableSidebarOverlay'), []);
     const disableEditorChrome = useMemo(() => readDebugFlag('disableEditorChrome'), []);
@@ -363,9 +479,7 @@ const AppLayoutInner: React.FC = () => {
         () => activeBufferContentForChatRef.current,
         [],
     );
-    const chat = disableChatHook
-        ? useNoopChat()
-        : useChatV2({ autoApproveRunCommands, getActiveBufferContent: getActiveBufferContentForChat });
+    const chat = useChatForLayout({ autoApproveRunCommands, getActiveBufferContent: getActiveBufferContentForChat });
     const [wasStoppedByUser, setWasStoppedByUser] = useState(false);
     const {
         changes: uncommittedChanges,
@@ -373,15 +487,7 @@ const AppLayoutInner: React.FC = () => {
         acceptAll: acceptAllChanges,
         rejectFile: rejectFileChange,
         rejectAll: rejectAllChanges,
-    } = disableUncommittedChanges
-        ? {
-            changes: [],
-            acceptFile: async () => false,
-            acceptAll: async () => false,
-            rejectFile: async () => false,
-            rejectAll: async () => false,
-        }
-        : useUncommittedChanges();
+    } = useUncommittedChangesForLayout();
     const {
         status: gitStatus,
         files: gitFiles,
@@ -398,48 +504,24 @@ const AppLayoutInner: React.FC = () => {
         diff: diffGit,
         generateCommitMessage: generateGitCommitMessage,
         commitPreflight: commitPreflightGit,
-    } = disableGitStatus
-        ? {
-            status: null,
-            files: [],
-            error: null,
-            filesError: null,
-            lastRefreshedAt: null,
-            refresh: async () => undefined,
-            stageFile: async (_path: string) => undefined,
-            unstageFile: async (_path: string) => undefined,
-            stageAll: async () => undefined,
-            unstageAll: async () => undefined,
-            commit: async (_message: string) => undefined,
-            push: async () => undefined,
-            diff: async (_path: string, _staged: boolean) => '',
-            generateCommitMessage: async (_modelId?: string) => '',
-            commitPreflight: async () => ({
-                canCommit: false,
-                isRepo: false,
-                branch: null,
-                isDetached: false,
-                hasUpstream: false,
-                hasConflicts: false,
-                stagedCount: 0,
-                errorMessage: 'Git status disabled',
-                errorKey: 'git_disabled',
-            }),
-        }
-        : useGitStatus({ includeFiles: isGitSidebarVisible });
+    } = useGitStatusForLayout({ includeFiles: isGitSidebarVisible });
     const gitChangedCount = gitStatus?.changedCount ?? 0;
-    const { selectedModelId, setSelectedModelId, refreshModels } = chat;
+    const {
+        selectedModelId,
+        setSelectedModelId,
+        refreshModels,
+        stopGeneration: stopChatGeneration,
+        sendMessage: sendChatMessage,
+    } = chat;
     const terminalPaneRef = useRef<TerminalPaneHandle>(null);
 
     const handleStopGeneration = useCallback(async () => {
         setWasStoppedByUser(true);
-        await chat.stopGeneration();
-    }, [chat.stopGeneration]);
+        await stopChatGeneration();
+    }, [stopChatGeneration]);
 
     // Tab management (CRUD, history, keyboard shortcuts, backend sync)
-    const tabManager = disableTabManager
-        ? useNoopTabManager(uncommittedChanges)
-        : useTabManager(uncommittedChanges);
+    const tabManager = useTabManagerForLayout(uncommittedChanges);
     const {
         tabs, setTabs, activeTabId, setActiveTabId, activeTab, activeFilename,
         aiEditedFilePaths, setAiEditedFilePaths,
@@ -758,12 +840,7 @@ const AppLayoutInner: React.FC = () => {
     }, []);
 
     // Tauri event listeners (file open, research progress, change-applied, etc.)
-    const { researchProgress, finalizeResearchActivities } = disableLayoutEvents
-        ? {
-            researchProgress: null,
-            finalizeResearchActivities: (_loading: boolean, _wasStoppedByUser: boolean) => undefined,
-        }
-        : useLayoutEvents({
+    const { researchProgress, finalizeResearchActivities } = useLayoutEventsForLayout({
             setTabs,
             setActiveTabId,
             setAiEditedFilePaths,
@@ -804,16 +881,13 @@ const AppLayoutInner: React.FC = () => {
         const unlistenPromise = listen<string>('telegram_command', (event) => {
             const command = event.payload;
             console.debug('[Layout] Received telegram_command:', command);
-            // Ensure we are not in an unready state
-            if (chat.sendMessage) {
-                chat.sendMessage(command);
-            }
+            sendChatMessage(command);
         });
 
         return () => {
             unlistenPromise.then(unlisten => unlisten());
         };
-    }, [chat.sendMessage]);
+    }, [sendChatMessage]);
 
     // First-time setup modal state (RFC-002)
     const [showStorageSetup, setShowStorageSetup] = useState(false);
@@ -1050,9 +1124,7 @@ const AppLayoutInner: React.FC = () => {
     }, [requestShutdownDecision, requestShutdownSaveErrorAck, t, tabs]);
 
     // Project state persistence
-    const { loaded: stateLoaded, isClosing } = disableProjectState
-        ? { loaded: true, isClosing: false }
-        : useProjectState({
+    const { loaded: stateLoaded, isClosing } = useProjectStateForLayout({
             projectPath: workspacePath,
             tabs: tabs.map(t => ({ id: t.id, title: t.title, type: t.type, path: t.path })),
             activeTabId,
@@ -1101,9 +1173,8 @@ const AppLayoutInner: React.FC = () => {
                 : null,
         };
     }, [tabs, tabDirtyStates, activeTab, activeFilePath, getEditorSnapshot]);
-    const { trackActivity } = disableWarmup
-        ? { trackActivity: () => undefined }
-        : useWarmup(workspacePath, selectedModelId, stateLoaded, {
+    // Return value intentionally unused: the hook runs for its warmup effects.
+    useWarmupForLayout(workspacePath, selectedModelId, stateLoaded, {
             activeFilePath,
             activeFileDirty: activeFileDirtyForWarmup,
             getSnapshot: getWarmupEditorSnapshot,

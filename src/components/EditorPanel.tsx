@@ -447,7 +447,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
         return () => {
             onRegisterContentSnapshot(null);
         };
-    }, [activeFile, getActiveEditorContent, onRegisterContentSnapshot]);
+    }, [activeFile, getActiveEditorContent, onRegisterContentSnapshot, isDeletedOnDisk]);
 
     const isMarkdownFile = activeFile?.endsWith('.md') || activeFile?.endsWith('.markdown') || false;
     const isPdfFile = activeFile?.endsWith('.pdf') || false;

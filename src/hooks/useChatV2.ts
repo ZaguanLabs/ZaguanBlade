@@ -1197,7 +1197,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
         }
 
         void init();
-    }, [refreshModels]);
+    }, [refreshModels, replaceMessagesPreservingImagePreviews]);
 
     const [hiddenLocalModels, setHiddenLocalModels] = useState<string[]>([]);
 
@@ -2089,7 +2089,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
             }
             clearPendingTimers();
         };
-    }, [applyDeferredRunCommandCompletion, clearPendingTimers, flushPendingUpdates, flushPendingUpdatesImmediately, queueMessageUpdate, setMessages, setToolActivity, updateMessages, updateToolCallsStatusLocally]);
+    }, [applyDeferredRunCommandCompletion, cancelMessageCompletionCleanup, clearPendingTimers, finalizeActiveStreamingMessages, flushPendingUpdates, flushPendingUpdatesImmediately, queueMessageUpdate, scheduleMessageCompletionCleanup, setMessages, setToolActivity, updateMessages, updateToolCallsStatusLocally]);
 
     const dispatchToBackend = useCallback(async (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode): Promise<boolean> => {
         try {

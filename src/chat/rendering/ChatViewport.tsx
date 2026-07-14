@@ -125,7 +125,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             return messageRows;
         }
         return messageRows.slice(firstLiveMessageRowIndex);
-    }, [firstLiveMessageRowIndex, messageRows]);
+    }, [firstLiveMessageRowIndex, messageRows, shouldVirtualizeRows]);
     const pendingRunCommandId = useMemo(() => {
         for (const row of messageRows) {
             if (row.pendingActions) {
@@ -257,7 +257,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             isBottomSentinelVisibleRef.current = true;
             setStableScrollMode('following');
         }
-    }, [setStableScrollMode]);
+    }, [setStableScrollMode, scheduleVisibleVirtualRangeUpdate]);
 
     const scrollToPendingCommand = useCallback(() => {
         const element = scrollRef.current;

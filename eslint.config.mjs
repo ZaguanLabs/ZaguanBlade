@@ -21,7 +21,10 @@ const eslintConfig = defineConfig([
       "react-hooks": reactHooks,
     },
     rules: {
-      "react-hooks/rules-of-hooks": "warn",
+      // Conditional hook calls crash the app shell when hook counts change
+      // between renders — hard error, never ship one. exhaustive-deps stays a
+      // warning: some sites legitimately use the latest-ref pattern instead.
+      "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "warn",
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": "off",

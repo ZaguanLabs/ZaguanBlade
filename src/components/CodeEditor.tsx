@@ -200,6 +200,14 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
         onDocumentChangeRef.current = onDocumentChange;
     }, [onDocumentChange]);
 
+    // Latest translator, read at editor-creation time. Depending on `t`
+    // directly would change createEditorState's identity on language switch
+    // and recreate the editor (losing undo/scroll state) for a placeholder.
+    const tRef = useRef(t);
+    useEffect(() => {
+        tRef.current = t;
+    }, [t]);
+
     useEffect(() => {
         return () => {
             if (selectionSyncFrameRef.current !== null) {
@@ -239,7 +247,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
                 themeConf.current.of(getZaguanTheme(themeAppearanceRef.current === 'dark')),
 
                 // UX enhancements
-                placeholder(t('editor.placeholder')),
+                placeholder(tRef.current('editor.placeholder')),
                 highlightSpecialChars(),
 
                 // Error handling

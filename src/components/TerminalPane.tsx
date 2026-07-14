@@ -39,13 +39,13 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
     const [terminals, setTerminals] = useState<TerminalTab[]>([]);
     const [activeId, setActiveId] = useState<string>("");
 
-    const getTitleFromCwd = (path?: string, fallback = t('terminal.title')) => {
+    const getTitleFromCwd = useCallback((path?: string, fallback = t('terminal.title')) => {
         if (!path) return fallback;
         const normalized = path.replace(/[\\/]+$/, "");
         if (!normalized) return fallback;
         const parts = normalized.split(/[\\/]/);
         return parts[parts.length - 1] || fallback;
-    };
+    }, [t]);
 
     useImperativeHandle(ref, () => ({
         getTerminalState: () => {
@@ -73,7 +73,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
                 setActiveId("");
             }
         },
-    }), [terminals, activeId]);
+    }), [terminals, activeId, getTitleFromCwd]);
 
     // Set initial terminal cwd/title to workspace root if available
     useEffect(() => {
@@ -86,7 +86,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
                     : { ...term, cwd: workspaceRoot, title: getTitleFromCwd(workspaceRoot, term.title) }
             )
         );
-    }, [workspaceRoot]);
+    }, [workspaceRoot, getTitleFromCwd]);
 
     // Listen for open-terminal events from other components (e.g., File Explorer)
     useEffect(() => {
@@ -144,7 +144,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
         return () => {
             unlisten.then(fn => fn());
         };
-    }, []);
+    }, [getTitleFromCwd, t]);
 
     // Update terminal titles when backend reports cwd changes
     useEffect(() => {
@@ -161,7 +161,7 @@ export const TerminalPane = forwardRef<TerminalPaneHandle, TerminalPaneProps>(({
         return () => {
             unlisten.then(fn => fn());
         };
-    }, []);
+    }, [getTitleFromCwd]);
 
     const addTerminal = async () => {
         const newId = `term-${Date.now()}`;
