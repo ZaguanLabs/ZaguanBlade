@@ -843,7 +843,10 @@ impl SymbolStore {
             CREATE INDEX IF NOT EXISTS idx_symbols_type ON symbols(symbol_type);
             CREATE INDEX IF NOT EXISTS idx_symbols_parent ON symbols(parent_id);
             CREATE INDEX IF NOT EXISTS idx_symbols_indexed ON symbols(indexed_at);
-            CREATE INDEX IF NOT EXISTS idx_symbol_relationships_source ON symbol_relationships(source_symbol_id);
+            -- No source_symbol_id index: the composite PRIMARY KEY's autoindex
+            -- (sqlite_autoindex_symbol_relationships_1) already serves those
+            -- lookups via its leftmost prefix. Migration v3 drops the old
+            -- duplicate from pre-existing databases.
             CREATE INDEX IF NOT EXISTS idx_symbol_relationships_file ON symbol_relationships(source_file_path);
             CREATE INDEX IF NOT EXISTS idx_symbol_relationships_target ON symbol_relationships(target_name);
             CREATE INDEX IF NOT EXISTS idx_symbol_relationships_target_symbol_id ON symbol_relationships(target_symbol_id);
@@ -3325,6 +3328,7 @@ const LATEST_SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 const MIGRATIONS: &[fn(&Connection) -> Result<(), SymbolStoreError>] = &[
     migration_v1_relationship_resolution_columns,
     migration_v2_semantic_anchor_links,
+    migration_v3_drop_redundant_relationship_source_index,
 ];
 
 /// Apply every pending migration step, advancing `PRAGMA user_version`.
@@ -3397,6 +3401,23 @@ fn migration_v2_semantic_anchor_links(conn: &Connection) -> Result<(), SymbolSto
         CREATE INDEX IF NOT EXISTS idx_semantic_anchors_target_symbol ON semantic_anchors(target_symbol_id);
         "#,
     )?;
+    Ok(())
+}
+
+/// Migration v3: drop the redundant `symbol_relationships(source_symbol_id)`
+/// index. The table's composite PRIMARY KEY `(source_symbol_id, target_name,
+/// relationship_type, line)` materializes
+/// `sqlite_autoindex_symbol_relationships_1`, whose leftmost prefix already
+/// serves every `source_symbol_id` lookup — the explicit index only duplicated
+/// it (write amplification on every relationship insert plus dead pages).
+/// `IF EXISTS` because a fresh database never creates it (removed from the
+/// base schema in the same change). Freed pages are recycled by SQLite, not
+/// returned to the filesystem — deliberately no `VACUUM` here, as it rewrites
+/// the entire file and this runs on every open of a possibly-huge index.
+fn migration_v3_drop_redundant_relationship_source_index(
+    conn: &Connection,
+) -> Result<(), SymbolStoreError> {
+    conn.execute_batch("DROP INDEX IF EXISTS idx_symbol_relationships_source")?;
     Ok(())
 }
 
@@ -3480,6 +3501,73 @@ mod tests {
             signature: Some("(param: string): void".to_string()),
             content_hash: "hash".to_string(),
         }
+    }
+
+    /// The composite PRIMARY KEY's autoindex must serve `source_symbol_id`
+    /// lookups on its own: a fresh schema carries no duplicate explicit index,
+    /// and the query planner picks the autoindex prefix.
+    #[test]
+    fn relationship_source_lookup_uses_primary_key_autoindex() {
+        let store = SymbolStore::in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+
+        let indexes: Vec<String> = conn
+            .prepare("PRAGMA index_list(symbol_relationships)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(
+            !indexes
+                .iter()
+                .any(|name| name == "idx_symbol_relationships_source"),
+            "redundant index present: {indexes:?}"
+        );
+
+        let plan = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN SELECT * FROM symbol_relationships WHERE source_symbol_id = ?1",
+            )
+            .unwrap()
+            .query_map(["symbol-id"], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join(" ");
+        assert!(
+            plan.contains("sqlite_autoindex_symbol_relationships_1"),
+            "source lookup does not use the PK autoindex: {plan}"
+        );
+    }
+
+    /// Migration v3 removes the legacy duplicate index from a database created
+    /// before this version (the base schema used to CREATE it on every open).
+    #[test]
+    fn migration_v3_drops_legacy_relationship_source_index() {
+        let store = SymbolStore::in_memory().unwrap();
+        let conn = store.conn.lock().unwrap();
+        // Recreate the pre-v3 state: duplicate index present, version rewound.
+        conn.execute_batch(
+            "CREATE INDEX idx_symbol_relationships_source ON symbol_relationships(source_symbol_id);
+             PRAGMA user_version = 2;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_symbol_relationships_source'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, LATEST_SCHEMA_VERSION);
     }
 
     /// M5.13 — `checkpoint()` must fold the WAL back into the main DB and truncate
