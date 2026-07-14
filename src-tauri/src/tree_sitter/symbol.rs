@@ -553,8 +553,9 @@ struct RelState<'a> {
     /// whole file (M4.2 constant propagation). When an env accessor's KEY arg is a
     /// BARE IDENTIFIER rather than a string literal, its name is looked up here to
     /// recover the literal (e.g. `const KEY = "DATABASE_URL"; env::var(KEY)`).
-    /// Single-file / scope-agnostic heuristic — no dataflow.
-    const_map: HashMap<String, String>,
+    /// Single-file / scope-agnostic heuristic — no dataflow. Borrowed from the
+    /// shared per-file `ExtractionFacts` (route detection consumes the same map).
+    const_map: &'a HashMap<String, String>,
 }
 
 impl SymbolExtractor {
@@ -2008,28 +2009,59 @@ impl SymbolExtractor {
     }
 }
 
-/// Convenience function to extract symbols from source code. Detects route
-/// facts itself; the production indexing path detects them ONCE and shares
-/// them with the relationship pass via `extract_symbols_with_routes`.
+/// Per-file facts shared between the symbol and relationship passes so each is
+/// computed at most once per file: detected routes (M4.4) and the module-level
+/// constant map (M4.2), which BOTH route-path resolution and env-var KEY
+/// resolution consume. Gating preserves each language's work profile exactly:
+/// constants are collected only when routes or relationships can use them
+/// (C/C++ skip both walks entirely; Rust/Go collect constants only for the
+/// relationship pass, as before), and routes only for
+/// `supports_route_detection` languages.
+pub(crate) struct ExtractionFacts {
+    routes: Vec<DetectedRoute>,
+    constants: HashMap<String, String>,
+}
+
+pub(crate) fn collect_extraction_facts(
+    tree: &Tree,
+    source: &str,
+    language: Language,
+) -> ExtractionFacts {
+    let needs_routes = supports_route_detection(language);
+    let needs_constants = needs_routes || language.capability().extracts.relationships;
+    let mut constants: HashMap<String, String> = HashMap::new();
+    if needs_constants {
+        collect_module_constants(&tree.root_node(), language, source, &mut constants);
+    }
+    let mut routes = Vec::new();
+    if needs_routes {
+        walk_routes(&tree.root_node(), source, language, &constants, &mut routes);
+    }
+    ExtractionFacts { routes, constants }
+}
+
+/// Convenience function to extract symbols from source code. Collects the
+/// per-file facts itself; the production indexing path collects them ONCE and
+/// shares them with the relationship pass via `extract_symbols_with_facts`.
 pub fn extract_symbols(
     tree: &Tree,
     source: &str,
     language: Language,
     file_path: &str,
 ) -> Vec<Symbol> {
-    let routes = collect_routes(&tree.root_node(), source, language);
-    extract_symbols_with_routes(tree, source, language, file_path, &routes)
+    let facts = collect_extraction_facts(tree, source, language);
+    extract_symbols_with_facts(tree, source, language, file_path, &facts)
 }
 
-/// Symbol extraction over pre-detected route facts, so a single
-/// `collect_routes` pass per file can be shared with
-/// `extract_symbol_relationships_with_routes`.
-pub(crate) fn extract_symbols_with_routes(
+/// Symbol extraction over pre-collected per-file facts, so a single
+/// routes-and-constants pass can be shared with
+/// `extract_symbol_relationships_with_facts`.
+pub(crate) fn extract_symbols_with_facts(
     tree: &Tree,
     source: &str,
     language: Language,
     file_path: &str,
-    routes: &[DetectedRoute],
+    facts: &ExtractionFacts,
 ) -> Vec<Symbol> {
     let extractor = SymbolExtractor::new(file_path.to_string());
     let mut symbols = extractor.extract(tree, source, language);
@@ -2037,7 +2069,7 @@ pub(crate) fn extract_symbols_with_routes(
     // decorators, NestJS `@Controller`/`@Get`, Express `app`/`router.METHOD`).
     // Each is named with its canonical `"<METHOD> <path>"`; the matching `Handles`
     // edge to the handler is emitted later by the relationship pass.
-    append_route_symbols(routes, file_path, &mut symbols);
+    append_route_symbols(&facts.routes, file_path, &mut symbols);
     symbols
 }
 
@@ -2156,9 +2188,9 @@ fn cpp_callable_symbol_type(name_node: &Node, callable_node: &Node) -> SymbolTyp
     }
 }
 
-/// Convenience relationship extraction. Detects route facts itself; the
-/// production indexing path detects them ONCE and shares them with the symbol
-/// pass via `extract_symbol_relationships_with_routes`.
+/// Convenience relationship extraction. Collects the per-file facts itself;
+/// the production indexing path collects them ONCE and shares them with the
+/// symbol pass via `extract_symbol_relationships_with_facts`.
 pub fn extract_symbol_relationships(
     tree: &Tree,
     source: &str,
@@ -2166,19 +2198,19 @@ pub fn extract_symbol_relationships(
     file_path: &str,
     symbols: &[Symbol],
 ) -> Vec<SymbolRelationship> {
-    let routes = collect_routes(&tree.root_node(), source, language);
-    extract_symbol_relationships_with_routes(tree, source, language, file_path, symbols, &routes)
+    let facts = collect_extraction_facts(tree, source, language);
+    extract_symbol_relationships_with_facts(tree, source, language, file_path, symbols, &facts)
 }
 
-/// Relationship extraction over pre-detected route facts (shared with
-/// `extract_symbols_with_routes` by the production indexing path).
-pub(crate) fn extract_symbol_relationships_with_routes(
+/// Relationship extraction over pre-collected per-file facts (shared with
+/// `extract_symbols_with_facts` by the production indexing path).
+pub(crate) fn extract_symbol_relationships_with_facts(
     tree: &Tree,
     source: &str,
     language: Language,
     file_path: &str,
     symbols: &[Symbol],
-    routes: &[DetectedRoute],
+    facts: &ExtractionFacts,
 ) -> Vec<SymbolRelationship> {
     // M5.3 / N8: a language whose capability declares no relationship extraction
     // (graduated C/C++ is definitions-only until source-attribution fixtures
@@ -2205,17 +2237,15 @@ pub(crate) fn extract_symbol_relationships_with_routes(
         var_types: Vec::new(),
         class_names,
     };
-    // Precompute the per-file module-level constant map (M4.2): `NAME = "literal"`
-    // bindings used to resolve bare-identifier env-var KEYs. Built up-front (not
-    // during the walk) so a const declared *after* its use still resolves.
-    let mut const_map: HashMap<String, String> = HashMap::new();
-    collect_module_constants(&tree.root_node(), language, source, &mut const_map);
-
+    // The per-file module-level constant map (M4.2): `NAME = "literal"` bindings
+    // used to resolve bare-identifier env-var KEYs. Precomputed in the shared
+    // facts (not during the walk) so a const declared *after* its use still
+    // resolves — and so route detection reuses the identical map.
     let mut rel = RelState {
         relationships: Vec::new(),
         seen: HashSet::new(),
         all_symbols: symbols,
-        const_map,
+        const_map: &facts.constants,
     };
 
     // Unified relationship walk: call/macro + structural edges off one DFS,
@@ -2231,7 +2261,7 @@ pub(crate) fn extract_symbol_relationships_with_routes(
     // handler cannot be identified emit no edge (the Route node alone is the
     // anchor fallback).
     emit_route_handles(
-        routes,
+        &facts.routes,
         file_path,
         symbols,
         &mut rel.relationships,
@@ -2430,22 +2460,6 @@ fn route_canon_path(raw: &str) -> String {
     out
 }
 
-/// Detect every HTTP route registration in the file (M4.4). Framework coverage:
-/// Python decorators (`@app.route`/`@app.get`/`@router.post`), NestJS
-/// `@Controller` + `@Get`/`@Post`/… method decorators, and Express/JS
-/// `app`/`router.METHOD(...)` calls. Paths passed as bare identifiers are resolved
-/// through the M4.2 module-level constant map.
-pub(crate) fn collect_routes(root: &Node, source: &str, language: Language) -> Vec<DetectedRoute> {
-    if !supports_route_detection(language) {
-        return Vec::new();
-    }
-    let mut const_map: HashMap<String, String> = HashMap::new();
-    collect_module_constants(root, language, source, &mut const_map);
-    let mut out = Vec::new();
-    walk_routes(root, source, language, &const_map, &mut out);
-    out
-}
-
 /// The only languages with route-extraction rules in `walk_routes`. Everything
 /// else (Rust, Go, C/C++, …) skips route detection entirely — no constants map,
 /// no tree walk — because it could never emit a route.
@@ -2461,7 +2475,12 @@ const fn supports_route_detection(language: Language) -> bool {
     )
 }
 
-/// Recursive dispatch for `collect_routes`: visit each node and run the
+/// Detect every HTTP route registration in the file (M4.4). Framework coverage:
+/// Python decorators (`@app.route`/`@app.get`/`@router.post`), NestJS
+/// `@Controller` + `@Get`/`@Post`/… method decorators, and Express/JS
+/// `app`/`router.METHOD(...)` calls. Paths passed as bare identifiers are
+/// resolved through the M4.2 module-level constant map. Recursive dispatch
+/// driven by `collect_extraction_facts`: visit each node and run the
 /// per-framework route extractors that apply to `language`.
 fn walk_routes(
     node: &Node,
@@ -5090,22 +5109,30 @@ mod tests {
     }
 
     #[test]
-    fn shared_route_facts_preserve_separate_extraction_results() {
+    fn shared_extraction_facts_preserve_separate_extraction_results() {
+        // Each fixture routes a path through a module constant AND reads an env
+        // var through a module constant, so BOTH consumers of the shared
+        // constants map (route detection, reads_env resolution) are exercised.
         let fixtures = [
             (
                 Language::TypeScript,
                 "routes.ts",
                 r#"const ROOT = "/users";
-function showUser() {}
+const KEY = "API_TOKEN";
+function showUser() { return process.env[KEY]; }
 router.get(ROOT, showUser);"#,
             ),
             (
                 Language::Python,
                 "routes.py",
-                r#"ROOT = "/users/{id}"
+                r#"import os
+
+ROOT = "/users/{id}"
+KEY = "API_TOKEN"
+
 @app.get(ROOT)
 def show_user():
-    return None
+    return os.environ.get(KEY)
 "#,
             ),
         ];
@@ -5117,20 +5144,27 @@ def show_user():
             let separate_relationships =
                 extract_symbol_relationships(&tree, code, language, path, &separate_symbols);
 
-            let routes = collect_routes(&tree.root_node(), code, language);
-            let shared_symbols = extract_symbols_with_routes(&tree, code, language, path, &routes);
-            let shared_relationships = extract_symbol_relationships_with_routes(
+            let facts = collect_extraction_facts(&tree, code, language);
+            let shared_symbols = extract_symbols_with_facts(&tree, code, language, path, &facts);
+            let shared_relationships = extract_symbol_relationships_with_facts(
                 &tree,
                 code,
                 language,
                 path,
                 &shared_symbols,
-                &routes,
+                &facts,
             );
 
             assert!(
                 shared_symbols.iter().any(|s| s.symbol_type == SymbolType::Route),
                 "{path}: fixture must actually detect a route"
+            );
+            assert!(
+                shared_relationships.iter().any(|r| {
+                    r.relationship_type == SymbolRelationshipType::ReadsEnv
+                        && r.target_name == "API_TOKEN"
+                }),
+                "{path}: fixture must resolve the env key through the constant map"
             );
             assert_eq!(shared_symbols, separate_symbols);
             assert_eq!(shared_relationships, separate_relationships);

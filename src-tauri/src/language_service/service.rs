@@ -19,9 +19,9 @@ use crate::symbol_index::{
     UnresolvedRelationshipTarget,
 };
 use crate::tree_sitter::{
-    collect_routes, extract_symbol_relationships_with_routes, extract_symbols_with_routes,
-    stable_symbol_id, Language, Position, Range, Symbol, SymbolRelationship,
-    SymbolRelationshipType, SymbolType, TreeSitterParser,
+    collect_extraction_facts, extract_symbol_relationships_with_facts,
+    extract_symbols_with_facts, stable_symbol_id, Language, Position, Range, Symbol,
+    SymbolRelationship, SymbolRelationshipType, SymbolType, TreeSitterParser,
 };
 use crate::worktree::{normalize_path, WorktreeStore};
 use serde::{Deserialize, Serialize};
@@ -2105,35 +2105,36 @@ impl LanguageService {
 
         let tree =
             parse_with_thread_local_parser(extraction_content.as_ref(), extraction_language)?;
-        // Route facts are detected ONCE here and shared by both extraction
-        // passes (the separate `extract_symbols` / `extract_symbol_relationships`
-        // entry points would each re-detect them). The Astro component symbol
-        // must still be appended BETWEEN the passes: it participates in
-        // relationship extraction (e.g. as a by-name route-handler candidate).
-        let routes = collect_routes(
-            &tree.root_node(),
+        // Per-file facts (routes + module constants) are collected ONCE here and
+        // shared by both extraction passes (the separate `extract_symbols` /
+        // `extract_symbol_relationships` entry points would each re-collect
+        // them). The Astro component symbol must still be appended BETWEEN the
+        // passes: it participates in relationship extraction (e.g. as a by-name
+        // route-handler candidate).
+        let facts = collect_extraction_facts(
+            &tree,
             extraction_content.as_ref(),
             extraction_language,
         );
-        let mut symbols = extract_symbols_with_routes(
+        let mut symbols = extract_symbols_with_facts(
             &tree,
             extraction_content.as_ref(),
             extraction_language,
             file_path,
-            &routes,
+            &facts,
         );
         if matches!(language, Language::Astro) {
             if let Some(component_symbol) = astro_component_symbol(file_path, content) {
                 symbols.push(component_symbol);
             }
         }
-        let relationships = extract_symbol_relationships_with_routes(
+        let relationships = extract_symbol_relationships_with_facts(
             &tree,
             extraction_content.as_ref(),
             extraction_language,
             file_path,
             &symbols,
-            &routes,
+            &facts,
         );
 
         Ok(SymbolExtraction {
@@ -2165,22 +2166,22 @@ impl LanguageService {
         };
 
         let tree = parse_with_thread_local_parser(&script_projection, Language::Tsx)?;
-        // Same shared-route-facts shape as the tree-sitter file path above.
-        let routes = collect_routes(&tree.root_node(), &script_projection, Language::Tsx);
-        let mut script_symbols = extract_symbols_with_routes(
+        // Same shared per-file-facts shape as the tree-sitter file path above.
+        let facts = collect_extraction_facts(&tree, &script_projection, Language::Tsx);
+        let mut script_symbols = extract_symbols_with_facts(
             &tree,
             &script_projection,
             Language::Tsx,
             file_path,
-            &routes,
+            &facts,
         );
-        let relationships = extract_symbol_relationships_with_routes(
+        let relationships = extract_symbol_relationships_with_facts(
             &tree,
             &script_projection,
             Language::Tsx,
             file_path,
             &script_symbols,
-            &routes,
+            &facts,
         );
         symbols.append(&mut script_symbols);
 

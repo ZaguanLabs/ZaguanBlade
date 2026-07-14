@@ -17,8 +17,8 @@ pub use parser::{
     TreeSitterGrammar, TreeSitterParser,
 };
 pub(crate) use symbol::{
-    collect_routes, extract_symbol_relationships_with_routes, extract_symbols_with_routes,
-    stable_symbol_id,
+    collect_extraction_facts, extract_symbol_relationships_with_facts,
+    extract_symbols_with_facts, stable_symbol_id,
 };
 pub use symbol::{
     extract_symbol_relationships, extract_symbols, Position, Range, Symbol, SymbolExtractor,
