@@ -1430,16 +1430,16 @@ impl LanguageService {
                         // batch's first event paints immediately).
                         let mut last_emit: Option<std::time::Instant> = None;
 
+                        // Shared work cursor instead of a static skip/step_by
+                        // split: a worker that draws several unusually
+                        // expensive files no longer strands its pre-assigned
+                        // tail while the rest of the pool sits idle. Declared
+                        // outside the scope so scoped workers may borrow it.
+                        let next_file = std::sync::atomic::AtomicUsize::new(0);
                         std::thread::scope(|scope| {
-                            for worker_index in 0..worker_count {
+                            let next_file = &next_file;
+                            for _ in 0..worker_count {
                                 let tx = tx.clone();
-                                let worker_files = batch
-                                    .iter()
-                                    .skip(worker_index)
-                                    .step_by(worker_count)
-                                    .cloned()
-                                    .collect::<Vec<_>>();
-
                                 // M5.7 — index workers get a large (virtual, lazily-committed)
                                 // stack: symbol/relationship extraction walks the AST
                                 // recursively, and real C files (e.g. the kernel's deeply
@@ -1448,17 +1448,21 @@ impl LanguageService {
                                 // the process.
                                 std::thread::Builder::new()
                                     .stack_size(256 * 1024 * 1024)
-                                    .spawn_scoped(scope, move || {
-                                        for file_path in worker_files {
-                                            let _ = tx
-                                                .send(IndexWorkerEvent::Started(file_path.clone()));
-                                            let result = self
-                                                .stage_file_index(&file_path)
-                                                .map_err(|error| error.to_string());
-                                            let _ = tx.send(IndexWorkerEvent::Finished(
-                                                file_path, result,
-                                            ));
-                                        }
+                                    .spawn_scoped(scope, move || loop {
+                                        let index = next_file
+                                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                        let Some(file_path) = batch.get(index) else {
+                                            break;
+                                        };
+                                        let _ =
+                                            tx.send(IndexWorkerEvent::Started(file_path.clone()));
+                                        let result = self
+                                            .stage_file_index(file_path)
+                                            .map_err(|error| error.to_string());
+                                        let _ = tx.send(IndexWorkerEvent::Finished(
+                                            file_path.clone(),
+                                            result,
+                                        ));
                                     })
                                     .expect("spawn index worker thread");
                             }
@@ -2840,26 +2844,28 @@ impl LanguageService {
             let mut completed_files = 0usize;
             let mut staged_files = Vec::with_capacity(batch.len());
 
+            // Shared work cursor instead of a static skip/step_by split (same
+            // rationale as the reconcile pool above).
+            let next_file = std::sync::atomic::AtomicUsize::new(0);
             std::thread::scope(|scope| {
-                for worker_index in 0..worker_count {
+                let next_file = &next_file;
+                for _ in 0..worker_count {
                     let tx = tx.clone();
-                    let worker_files = batch
-                        .iter()
-                        .skip(worker_index)
-                        .step_by(worker_count)
-                        .cloned()
-                        .collect::<Vec<_>>();
-
                     std::thread::Builder::new()
                         .stack_size(256 * 1024 * 1024)
-                        .spawn_scoped(scope, move || {
-                            for file_path in worker_files {
-                                let result = self
-                                    .stage_file_index_with_metrics(&file_path)
-                                    .map_err(|error| error.to_string());
-                                let _ =
-                                    tx.send(IndexDirectoryStageEvent::Finished(file_path, result));
-                            }
+                        .spawn_scoped(scope, move || loop {
+                            let index =
+                                next_file.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some(file_path) = batch.get(index) else {
+                                break;
+                            };
+                            let result = self
+                                .stage_file_index_with_metrics(file_path)
+                                .map_err(|error| error.to_string());
+                            let _ = tx.send(IndexDirectoryStageEvent::Finished(
+                                file_path.clone(),
+                                result,
+                            ));
                         })
                         .expect("spawn index worker thread");
                 }
