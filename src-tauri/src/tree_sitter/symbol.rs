@@ -387,6 +387,15 @@ pub struct SymbolRelationship {
     /// `0.5`). `None` unless `resolution_strategy` is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
+    /// Track C Go receiver kind, set ONLY on the receiver-type→method
+    /// `Contains` edge: `Some("pointer")` for `func (m *Memory) …`,
+    /// `Some("value")` for `func (m Memory) …`, `None` on every other edge.
+    /// Persisted to the `metadata_json` column as `{"receiver":"<kind>"}`
+    /// (store-side serialization, following the M5.1 `recv_type` idiom) so the
+    /// store's Go implicit-interface miner can apply pointer/value method-set
+    /// semantics instead of assuming them away.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver_kind: Option<String>,
 }
 
 impl Default for SymbolRelationship {
@@ -402,6 +411,7 @@ impl Default for SymbolRelationship {
             recv_self: false,
             resolution_strategy: None,
             confidence: None,
+            receiver_kind: None,
         }
     }
 }
@@ -534,6 +544,16 @@ struct WalkState {
     /// `let x = Foo::new()` likewise only when `Foo` is a known struct/enum. Built
     /// once up-front from the full symbol list; empty during the symbol walk.
     class_names: HashSet<String>,
+    /// Track B per-scope constant-shadow frames, pushed/popped in lockstep with
+    /// `scope` during the RELATIONSHIP walk only (like `var_types`). Each entry
+    /// is a `(name, activation_byte)` pair recorded when a lexical binding
+    /// (let / match arm / closure / loop / parameter) re-binds the NAME of a
+    /// file-local Rust constant. A constant reference is suppressed only when it
+    /// STARTS at/after the activation byte, so a `let X = X.len();` initializer
+    /// — evaluated with the OUTER binding — still resolves to the constant while
+    /// later uses in the shadowed scope emit nothing. Frames stay empty unless a
+    /// binding actually collides with a constant name.
+    const_shadows: Vec<Vec<(String, usize)>>,
 }
 
 /// Relationship-walk sink, threaded alongside `WalkState` when the unified DFS
@@ -556,6 +576,14 @@ struct RelState<'a> {
     /// Single-file / scope-agnostic heuristic — no dataflow. Borrowed from the
     /// shared per-file `ExtractionFacts` (route detection consumes the same map).
     const_map: &'a HashMap<String, String>,
+    /// Track B: this file's ROOT-LEVEL Rust constants (`const_item` →
+    /// `SymbolType::Constant` with `parent_id: None`), name → symbol id.
+    /// Mod-nested / fn-local / impl-associated consts are excluded — they are
+    /// not file-wide bare names. A name bound by MORE THAN ONE eligible
+    /// constant symbol is ambiguous and dropped up-front (false negative over a
+    /// wrong edge). Built only for `Language::Rust`; empty for every other
+    /// language, so the per-identifier usage concern rejects in O(1).
+    const_targets: HashMap<&'a str, &'a str>,
 }
 
 impl SymbolExtractor {
@@ -570,6 +598,7 @@ impl SymbolExtractor {
             symbols: Vec::new(),
             var_types: Vec::new(),
             class_names: HashSet::new(),
+            const_shadows: Vec::new(),
         };
         self.walk_symbols(tree.root_node(), source, language, &mut state);
         state.symbols
@@ -726,15 +755,26 @@ impl SymbolExtractor {
             // the scope stack (relationship walk only). Typed params for THIS
             // node (if it is a function) land in the frame just pushed.
             state.var_types.push(VarFrame::default());
+            // Track B: constant-shadow frame, same lifecycle.
+            state.const_shadows.push(Vec::new());
         }
         // M5.1: record typed params / constructor-bound locals into the current
         // (innermost) frame BEFORE any receiver in this subtree is evaluated.
         // Pre-order + source order means `x = B()` is recorded before a later
         // `x.run()` reads it.
         self.process_var_typing(&node, source, language, state);
+        // Track B: record lexical shadows of file-local Rust constant names for
+        // THIS binding node BEFORE its subtree's identifiers are visited (the
+        // activation byte, not walk order, decides which of them are affected).
+        self.process_const_shadow(&node, source, language, state, rel);
 
         // Call / macro-call concern: attribute to the innermost enclosing symbol.
         self.process_call_relationship(&node, source, language, state, rel);
+        // Track B: ordinary value references to file-local Rust constants emit
+        // resolved `usage` edges. Like calls, these live anywhere in a body, so
+        // this fires on EVERY node and attributes to the innermost enclosing
+        // symbol.
+        self.process_const_usage_relationship(&node, source, language, state, rel);
         // `reads_env` concern (M4.2): body-level env accessors (`std::env::var`,
         // `os.environ[...]`, `process.env.X`, `os.Getenv`, …). Like calls, these
         // live anywhere in a body, so this fires on EVERY node (not gated on
@@ -760,6 +800,7 @@ impl SymbolExtractor {
         if pushed {
             state.scope.pop();
             state.var_types.pop();
+            state.const_shadows.pop();
         }
     }
 
@@ -884,6 +925,172 @@ impl SymbolExtractor {
                 line,
                 recv_type,
                 recv_self,
+                ..Default::default()
+            });
+        }
+    }
+
+    /// Track B: record lexical shadows of FILE-LOCAL Rust constant names so
+    /// `process_const_usage_relationship` can suppress references a `let` /
+    /// `match` / closure / loop / parameter binding re-bound. Only names that
+    /// actually collide with a known constant are recorded (frames stay empty in
+    /// the common case). Each shadow carries an ACTIVATION byte:
+    /// - `let` / `if let` / `while let` activate at the END of the whole
+    ///   declaration/condition node, so the initializer — evaluated with the
+    ///   OUTER binding — still resolves to the constant (the
+    ///   `let WORKFLOW_TEXT = WORKFLOW_TEXT.len();` case);
+    /// - patterns (fn params, closure params, `for` bindings) activate at the
+    ///   END of the pattern node, which conservatively also suppresses a use
+    ///   inside the `for`-iterator expression (false negative by design);
+    /// - `match` arms activate at the START of the pattern node, because the
+    ///   grammar's `match_arm` pattern field SPANS the `if` guard — start-byte
+    ///   activation suppresses guard and body references of an arm-bound
+    ///   colliding name alike (false negative by design).
+    /// Shadows land in the innermost frame and persist to the end of the
+    /// enclosing SYMBOL scope (blocks/arms push no frame) — again a deliberate
+    /// false-negative bias: a shadow can only suppress edges, never invent one.
+    fn process_const_shadow(
+        &self,
+        node: &Node,
+        source: &str,
+        language: Language,
+        state: &mut WalkState,
+        rel: &RelState,
+    ) {
+        if language != Language::Rust || rel.const_targets.is_empty() {
+            return;
+        }
+        match node.kind() {
+            // Whole-statement activation: the value subtree still sees the
+            // outer constant.
+            "let_declaration" | "let_condition" => {
+                if let Some(pattern) = node.child_by_field_name("pattern") {
+                    record_const_shadows(&pattern, node.end_byte(), source, state, rel);
+                }
+            }
+            // Pattern-START activation: tree-sitter-rust's `match_arm` pattern
+            // node SPANS the `if` guard, so end-byte activation would let guard
+            // identifiers escape suppression and resolve to the shadowed
+            // constant (a false positive). Activating at the pattern's start
+            // byte suppresses guard AND body references of an arm-bound
+            // colliding name — a deliberate false negative, the handoff bias.
+            "match_arm" => {
+                if let Some(pattern) = node.child_by_field_name("pattern") {
+                    record_const_shadows(&pattern, pattern.start_byte(), source, state, rel);
+                }
+            }
+            // Pattern-end activation: the loop body comes after (this also
+            // conservatively suppresses a colliding use inside the iterator
+            // expression — false negative by design, see the doc above).
+            "for_expression" => {
+                if let Some(pattern) = node.child_by_field_name("pattern") {
+                    record_const_shadows(&pattern, pattern.end_byte(), source, state, rel);
+                }
+            }
+            // Parameter patterns only — walking each `parameter`'s `pattern`
+            // field (not the whole list) keeps type-position identifiers (e.g.
+            // `[u8; LEN]` array lengths) out of the shadow set. Bare closure
+            // params (`|x|`) are their own pattern node.
+            "function_item" | "closure_expression" => {
+                let Some(params) = node.child_by_field_name("parameters") else {
+                    return;
+                };
+                let mut cursor = params.walk();
+                for param in params.named_children(&mut cursor) {
+                    let pattern = if param.kind() == "parameter" {
+                        param.child_by_field_name("pattern")
+                    } else {
+                        Some(param)
+                    };
+                    if let Some(pattern) = pattern {
+                        record_const_shadows(&pattern, pattern.end_byte(), source, state, rel);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Track B: emit a resolved `Usage` edge for an ORDINARY value reference to
+    /// a FILE-LOCAL Rust constant. Precision-first: only a plain `identifier`
+    /// whose PARENT position guarantees a value expression counts
+    /// (`rust_const_expression_position`) — patterns, declarations, field
+    /// names, non-terminal `scoped_identifier` path segments, macro
+    /// `token_tree`s, and attribute contents all fall outside the whitelist and
+    /// emit nothing (false negative over false positive). Lexical shadows
+    /// registered by `process_const_shadow` suppress references at/after their
+    /// activation byte. The target is THIS file's constant symbol, known
+    /// exactly, so the edge resolves immediately with strategy
+    /// `file_local_const` and confidence 0.9 (below `receiver_type`'s certainty
+    /// of a typed dispatch, above `global_unique`'s 0.5).
+    fn process_const_usage_relationship(
+        &self,
+        node: &Node,
+        source: &str,
+        language: Language,
+        state: &WalkState,
+        rel: &mut RelState,
+    ) {
+        // Cheap early rejects, hot-path order: language gate, empty target set,
+        // node kind, uppercase first char (Rust consts are SCREAMING_SNAKE_CASE),
+        // then the map lookup.
+        if language != Language::Rust || rel.const_targets.is_empty() {
+            return;
+        }
+        if node.kind() != "identifier" {
+            return;
+        }
+        let Ok(name) = node.safe_text(source) else {
+            return;
+        };
+        if !name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+            return;
+        }
+        let Some(&target_id) = rel.const_targets.get(name) else {
+            return;
+        };
+        if !rust_const_expression_position(node) {
+            return;
+        }
+        // A lexical binding of the same name that activated BEFORE this use
+        // wins: emit nothing (the shadowing rule).
+        let use_start = node.start_byte();
+        if state
+            .const_shadows
+            .iter()
+            .any(|frame| frame.iter().any(|(n, act)| *act <= use_start && n == name))
+        {
+            return;
+        }
+        let range = Range::from_node(node);
+        // Module-level uses outside any symbol are dropped (matching the
+        // env-access concern).
+        let Some(source_id) =
+            resolve_enclosing_scope(&state.scope, &range).map(|s| s.id.to_string())
+        else {
+            return;
+        };
+        // Never a self-edge (a constant's own subtree naming itself).
+        if source_id == target_id {
+            return;
+        }
+        let line = node.start_position().row as u32;
+        let key = (
+            source_id.clone(),
+            name.to_string(),
+            SymbolRelationshipType::Usage,
+            line,
+        );
+        if rel.seen.insert(key) {
+            rel.relationships.push(SymbolRelationship {
+                source_symbol_id: source_id,
+                source_file_path: self.file_path.clone(),
+                target_name: name.to_string(),
+                target_symbol_id: Some(target_id.to_string()),
+                relationship_type: SymbolRelationshipType::Usage,
+                line,
+                resolution_strategy: Some("file_local_const".to_string()),
+                confidence: Some(0.9),
                 ..Default::default()
             });
         }
@@ -1519,6 +1726,42 @@ impl SymbolExtractor {
         // `type_spec`/`const_spec`/`var_spec` need bespoke sub-classification
         // (struct vs interface vs alias) — no shared concern — kept inline.
         match kind {
+            // Track C: an interface METHOD SPEC (`Ping(context.Context) error`
+            // inside an `interface_type`) is a Method symbol. The enclosing
+            // `type_spec` already pushed the interface's scope, so
+            // `parent_id`/qualified name nest under the interface symbol
+            // automatically, and `extract_signature`'s Go arm picks up the
+            // spec's `parameters`/`result` fields for the "(params) result"
+            // signature text — the store-side method-set miner's contract.
+            //
+            // GATE: only a spec belonging to a NAMED interface declaration
+            // (nearest enclosing `interface_type` whose parent is a `type_spec`)
+            // mints a symbol. Anonymous interface literals — function params
+            // (`func Wait(s interface{ Done() })`), type assertions, aliases —
+            // would otherwise mint false Method symbols parented to whatever
+            // scope encloses them; they produce NO symbols (false negative by
+            // design).
+            "method_elem" => {
+                let mut ancestor = node.parent();
+                let mut named_interface = false;
+                while let Some(a) = ancestor {
+                    if a.kind() == "interface_type" {
+                        named_interface = a.parent().is_some_and(|p| p.kind() == "type_spec");
+                        break;
+                    }
+                    ancestor = a.parent();
+                }
+                if !named_interface {
+                    return None;
+                }
+                let name = self.get_child_text(node, "name", source)?;
+                Some(Symbol::new(
+                    name,
+                    SymbolType::Method,
+                    self.file_path.clone(),
+                    range,
+                ))
+            }
             "type_spec" => {
                 let name = self.get_child_text(node, "name", source)?;
                 let symbol_type = match node.child_by_field_name("type")?.kind() {
@@ -2236,7 +2479,36 @@ pub(crate) fn extract_symbol_relationships_with_facts(
         symbols: Vec::new(),
         var_types: Vec::new(),
         class_names,
+        const_shadows: Vec::new(),
     };
+    // Track B: file-local Rust constant targets (name → symbol id), built once
+    // from the full symbol set so a constant declared AFTER its use still
+    // resolves. Only ROOT-level constants (`parent_id: None`) are eligible: a
+    // const nested in `mod x { }` is not addressable as a bare identifier from
+    // scopes outside that module, and fn-local / impl-associated consts are
+    // likewise not file-wide bare names — including any of them fabricates
+    // edges (false negative over a wrong edge, so the strictest rule wins).
+    // A name bound by more than one eligible constant symbol in this file is
+    // ambiguous and dropped. Only Rust pays for the map; every other language
+    // keeps it empty (O(1) concern reject).
+    let mut const_targets: HashMap<&str, &str> = HashMap::new();
+    if language == Language::Rust {
+        let mut ambiguous: HashSet<&str> = HashSet::new();
+        for symbol in symbols {
+            if symbol.symbol_type != SymbolType::Constant
+                || symbol.parent_id.is_some()
+                || ambiguous.contains(symbol.name.as_str())
+            {
+                continue;
+            }
+            if let Some(prev) = const_targets.insert(symbol.name.as_str(), symbol.id.as_str()) {
+                if prev != symbol.id.as_str() {
+                    const_targets.remove(symbol.name.as_str());
+                    ambiguous.insert(symbol.name.as_str());
+                }
+            }
+        }
+    }
     // The per-file module-level constant map (M4.2): `NAME = "literal"` bindings
     // used to resolve bare-identifier env-var KEYs. Precomputed in the shared
     // facts (not during the walk) so a const declared *after* its use still
@@ -2246,6 +2518,7 @@ pub(crate) fn extract_symbol_relationships_with_facts(
         seen: HashSet::new(),
         all_symbols: symbols,
         const_map: &facts.constants,
+        const_targets,
     };
 
     // Unified relationship walk: call/macro + structural edges off one DFS,
@@ -3075,7 +3348,8 @@ fn extract_go_structural_relationships(
             let Some(receiver) = node.child_by_field_name("receiver") else {
                 return;
             };
-            let Some(receiver_type) = go_receiver_type_name(&receiver, source) else {
+            let Some((receiver_type, is_pointer)) = go_receiver_type_name(&receiver, source)
+            else {
                 return;
             };
             let Some(method_name) = node
@@ -3087,35 +3361,60 @@ fn extract_go_structural_relationships(
             let Some(type_symbol) = find_symbol_by_name(symbols, &receiver_type) else {
                 return;
             };
-            push_relationship(
-                relationships,
-                seen,
-                &type_symbol.id,
-                file_path,
+            let line = node.start_position().row as u32;
+            let key = (
+                type_symbol.id.clone(),
                 method_name.to_string(),
                 SymbolRelationshipType::Contains,
-                node.start_position().row as u32,
+                line,
             );
+            if seen.insert(key) {
+                relationships.push(SymbolRelationship {
+                    source_symbol_id: type_symbol.id.clone(),
+                    source_file_path: file_path.to_string(),
+                    target_name: method_name.to_string(),
+                    target_symbol_id: None,
+                    relationship_type: SymbolRelationshipType::Contains,
+                    line,
+                    // Track C: pointer/value receiver kind, persisted to
+                    // `metadata_json` as `{"receiver":"…"}` so the store-side
+                    // implicit-interface miner can honor Go method-set
+                    // semantics (a pointer-receiver method is absent from the
+                    // value type's method set).
+                    receiver_kind: Some(
+                        if is_pointer { "pointer" } else { "value" }.to_string(),
+                    ),
+                    ..Default::default()
+                });
+            }
         }
         // Struct embedding: `type Server struct { Base }` → Server extends Base.
+        // Track C adds the interface analogue: `type Cache interface { Base }`
+        // → Cache extends Base (embedded interfaces contribute inherited
+        // method requirements in the store-side miner).
         "type_spec" => {
             let Some(type_node) = node.child_by_field_name("type") else {
                 return;
             };
-            if type_node.kind() != "struct_type" {
-                return;
-            }
             let Some(type_name) = node
                 .child_by_field_name("name")
                 .and_then(|name| name.safe_text(source).ok())
             else {
                 return;
             };
+            let embedded_names = match type_node.kind() {
+                "struct_type" => go_embedded_type_names(&type_node, source),
+                "interface_type" => go_embedded_interface_names(&type_node, source),
+                _ => return,
+            };
+            if embedded_names.is_empty() {
+                return;
+            }
             let Some(type_symbol) = find_symbol_by_name(symbols, type_name) else {
                 return;
             };
             let line = node.start_position().row as u32;
-            for embedded in go_embedded_type_names(&type_node, source) {
+            for embedded in embedded_names {
                 push_relationship(
                     relationships,
                     seen,
@@ -3131,8 +3430,10 @@ fn extract_go_structural_relationships(
     }
 }
 
-/// Resolve the base type name of a Go method receiver (`(s *Server)` → `Server`).
-fn go_receiver_type_name(receiver: &Node, source: &str) -> Option<String> {
+/// Resolve the base type name of a Go method receiver (`(s *Server)` →
+/// `Server`), plus whether it is a POINTER (`*Server`) or VALUE (`Server`)
+/// receiver — the distinction Go method sets depend on (Track C).
+fn go_receiver_type_name(receiver: &Node, source: &str) -> Option<(String, bool)> {
     let mut type_node = None;
     let mut cursor = receiver.walk();
     for param in receiver.named_children(&mut cursor) {
@@ -3142,10 +3443,22 @@ fn go_receiver_type_name(receiver: &Node, source: &str) -> Option<String> {
         }
     }
     let mut ty = type_node?;
+    let mut is_pointer = false;
     while ty.kind() == "pointer_type" {
+        is_pointer = true;
         ty = last_named_child(&ty)?;
     }
-    ty.safe_text(source).ok().and_then(normalize_reference_name)
+    // Generic receiver (`(p Pair[K, V])` / `(p *Pair[K, V])`): reduce the
+    // `generic_type` to its base `type` field so the name matches the declared
+    // type symbol (`Pair`). `normalize_reference_name` also strips a `[...]`
+    // suffix as a backstop for text-level forms.
+    if ty.kind() == "generic_type" {
+        ty = ty.child_by_field_name("type")?;
+    }
+    ty.safe_text(source)
+        .ok()
+        .and_then(normalize_reference_name)
+        .map(|name| (name, is_pointer))
 }
 
 /// Collect the names of anonymously-embedded fields in a Go struct type.
@@ -3175,6 +3488,42 @@ fn go_embedded_type_names(struct_type: &Node, source: &str) -> Vec<String> {
                 break;
             };
             ty = inner;
+        }
+        if let Some(name) = ty.safe_text(source).ok().and_then(normalize_reference_name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// Track C: collect the names of interfaces EMBEDDED in a Go `interface_type`
+/// (`type Cache interface { Base; Set(string, []byte) error }` → `["Base"]`).
+/// Only a `type_elem` holding EXACTLY ONE named type (`type_identifier` /
+/// `qualified_type`, or a `generic_type` instantiation of one — `Getter[int]`
+/// embeds `Getter`) is an embedding; union / negated generic-constraint
+/// elements (`~int | string`) and `method_elem` specs emit nothing (false
+/// negative over a fabricated edge). A qualified embedding (`io.Reader`)
+/// reduces to its terminal name, matching the struct-embedding arm.
+fn go_embedded_interface_names(interface_type: &Node, source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut cursor = interface_type.walk();
+    for elem in interface_type.named_children(&mut cursor) {
+        if elem.kind() != "type_elem" || elem.named_child_count() != 1 {
+            continue;
+        }
+        let Some(mut ty) = elem.named_child(0) else {
+            continue;
+        };
+        // A generic instantiation (`Getter[int]`) embeds its BASE interface:
+        // reduce `generic_type` to its `type` field before the name gate.
+        if ty.kind() == "generic_type" {
+            let Some(base) = ty.child_by_field_name("type") else {
+                continue;
+            };
+            ty = base;
+        }
+        if !matches!(ty.kind(), "type_identifier" | "qualified_type") {
+            continue;
         }
         if let Some(name) = ty.safe_text(source).ok().and_then(normalize_reference_name) {
             names.push(name);
@@ -3296,6 +3645,9 @@ fn normalize_reference_name(raw: &str) -> Option<String> {
 
     let value = value.split('<').next().unwrap_or(value).trim();
     let value = value.split('(').next().unwrap_or(value).trim();
+    // Go generics: `Pair[K, V]` reduces to its base name `Pair` (also drops
+    // slice/array prefixes like `[]byte` to None — never a named target).
+    let value = value.split('[').next().unwrap_or(value).trim();
     let value = value.split_whitespace().next().unwrap_or(value).trim();
     let value = value.rsplit("::").next().unwrap_or(value).trim();
     let value = value.rsplit('.').next().unwrap_or(value).trim();
@@ -3342,6 +3694,101 @@ fn is_rust_type_symbol(symbol_type: SymbolType) -> bool {
         symbol_type,
         SymbolType::Struct | SymbolType::Enum | SymbolType::Trait | SymbolType::Type
     )
+}
+
+// ---- Track B file-local Rust constant usage ---------------------------------
+
+/// Record every plain `identifier` in a binding-pattern subtree that collides
+/// with a file-local constant name as a shadow in the INNERMOST frame, carrying
+/// `activation_byte`. Descending the whole pattern subtree over-collects (a
+/// unit-struct or const pattern also lands here), but a shadow only ever
+/// SUPPRESSES edges, never fabricates one.
+fn record_const_shadows(
+    pattern: &Node,
+    activation_byte: usize,
+    source: &str,
+    state: &mut WalkState,
+    rel: &RelState,
+) {
+    let Some(frame) = state.const_shadows.last_mut() else {
+        return;
+    };
+    collect_pattern_const_shadows(pattern, activation_byte, source, &rel.const_targets, frame);
+}
+
+/// Recursive worker for `record_const_shadows`: only names that pass the cheap
+/// uppercase pre-filter AND exist in the constant-target map are recorded, so
+/// frames stay empty for ordinary snake_case bindings.
+fn collect_pattern_const_shadows(
+    node: &Node,
+    activation_byte: usize,
+    source: &str,
+    const_targets: &HashMap<&str, &str>,
+    frame: &mut Vec<(String, usize)>,
+) {
+    if node.kind() == "identifier" {
+        if let Ok(name) = node.safe_text(source) {
+            if name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                && const_targets.contains_key(name)
+            {
+                frame.push((name.to_string(), activation_byte));
+            }
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_pattern_const_shadows(&child, activation_byte, source, const_targets, frame);
+    }
+}
+
+/// Track B: whether an `identifier` sits in a position its PARENT guarantees is
+/// a value expression. Conservative whitelist — anything unlisted (patterns,
+/// the `const_item` declaration name and its direct-identifier value,
+/// `scoped_identifier` path segments, type positions, macro `token_tree`s,
+/// attribute contents, `shorthand_field_initializer` keys, …) is NOT counted as
+/// a value use (false negative by design). Field checks pin the identifier to
+/// the value-carrying field where the parent also holds patterns / conditions /
+/// names.
+fn rust_const_expression_position(node: &Node) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    let is_field = |field: &str| {
+        parent
+            .child_by_field_name(field)
+            .is_some_and(|child| child.id() == node.id())
+    };
+    match parent.kind() {
+        // Positions where EVERY identifier child is a value expression. A
+        // `block`'s direct identifier child is its tail expression (statements
+        // are wrapped in `expression_statement`).
+        "arguments"
+        | "binary_expression"
+        | "unary_expression"
+        | "parenthesized_expression"
+        | "reference_expression"
+        | "index_expression"
+        | "return_expression"
+        | "array_expression"
+        | "tuple_expression"
+        | "range_expression"
+        | "await_expression"
+        | "expression_statement"
+        | "block" => true,
+        // Value-carrying fields on parents that also hold patterns/names. (A
+        // `match_arm`'s value is an expression; its own pattern's shadow only
+        // activates at the pattern's END byte, so an unshadowed arm value still
+        // qualifies while a same-arm binding suppresses it.)
+        "field_expression" => is_field("value"),
+        "let_declaration" | "let_condition" | "match_expression" | "for_expression"
+        | "match_arm" => is_field("value"),
+        "if_expression" | "while_expression" => is_field("condition"),
+        "assignment_expression" | "compound_assignment_expr" => is_field("right"),
+        "field_initializer" => is_field("value"),
+        "closure_expression" => is_field("body"),
+        _ => false,
+    }
 }
 
 // ---- M5.1 receiver-type dispatch (extraction side) --------------------------
@@ -3892,6 +4339,7 @@ struct LangSpec {
     enum_variant_kinds: &'static [&'static str],
     call_kinds: &'static [&'static str],
     macro_call_kinds: &'static [&'static str],
+    jsx_element_kinds: &'static [&'static str],
     import_kinds: &'static [&'static str],
     decorator_kinds: &'static [&'static str],
 }
@@ -3905,6 +4353,7 @@ static EMPTY_SPEC: LangSpec = LangSpec {
     enum_variant_kinds: &[],
     call_kinds: &[],
     macro_call_kinds: &[],
+    jsx_element_kinds: &[],
     import_kinds: &[],
     decorator_kinds: &[],
 };
@@ -3936,6 +4385,10 @@ static TS_SPEC: LangSpec = LangSpec {
     enum_variant_kinds: &["enum_assignment"],
     call_kinds: &["call_expression"],
     macro_call_kinds: &[],
+    // Track A: PascalCase JSX elements are call observations. The names are
+    // absent from the plain-TypeScript grammar, so its compiled bitset is
+    // empty and .ts files are unaffected.
+    jsx_element_kinds: &["jsx_opening_element", "jsx_self_closing_element"],
     import_kinds: &["import_statement"],
     decorator_kinds: &[],
 };
@@ -3950,6 +4403,7 @@ static PYTHON_SPEC: LangSpec = LangSpec {
     enum_variant_kinds: &[],
     call_kinds: &["call"],
     macro_call_kinds: &[],
+    jsx_element_kinds: &[],
     import_kinds: &["import_statement", "import_from_statement"],
     decorator_kinds: &[],
 };
@@ -3965,6 +4419,7 @@ static RUST_SPEC: LangSpec = LangSpec {
     enum_variant_kinds: &["enum_variant"],
     call_kinds: &["call_expression"],
     macro_call_kinds: &["macro_invocation"],
+    jsx_element_kinds: &[],
     import_kinds: &["use_declaration"],
     decorator_kinds: &[],
 };
@@ -3979,6 +4434,7 @@ static GO_SPEC: LangSpec = LangSpec {
     enum_variant_kinds: &[],
     call_kinds: &["call_expression"],
     macro_call_kinds: &[],
+    jsx_element_kinds: &[],
     import_kinds: &["import_spec"],
     decorator_kinds: &[],
 };
@@ -4032,7 +4488,7 @@ impl KindSet {
     }
 }
 
-/// All nine `LangSpec` concerns compiled to `KindSet`s for one grammar.
+/// All `LangSpec` concerns compiled to `KindSet`s for one grammar.
 struct LangBitsets {
     function: KindSet,
     method: KindSet,
@@ -4041,6 +4497,7 @@ struct LangBitsets {
     enum_variant: KindSet,
     call: KindSet,
     macro_call: KindSet,
+    jsx_element: KindSet,
     import: KindSet,
     /// Kept for the committed `LangSpec` field set; no language emits decorator
     /// edges yet (that is Phase 4), so this compiled set is intentionally unread.
@@ -4058,6 +4515,7 @@ impl LangBitsets {
             enum_variant: KindSet::build(grammar, spec.enum_variant_kinds),
             call: KindSet::build(grammar, spec.call_kinds),
             macro_call: KindSet::build(grammar, spec.macro_call_kinds),
+            jsx_element: KindSet::build(grammar, spec.jsx_element_kinds),
             import: KindSet::build(grammar, spec.import_kinds),
             decorator: KindSet::build(grammar, spec.decorator_kinds),
         }
@@ -4120,6 +4578,13 @@ fn extract_relationship_target_name(
                 // a Call edge from the macro path child (Rust only today).
                 let macro_node = node.child_by_field_name("macro")?;
                 extract_callable_name(&macro_node, source)
+            } else if bits.jsx_element.contains(kind_id) {
+                // Track A: treat PascalCase JSX component elements as call
+                // observations.  Native/lowercase tags (`nav`, `button`) and
+                // lowercase namespace roots (`motion.div`) are excluded.
+                // Grammars without JSX (plain TypeScript) compile an empty set.
+                let name_node = node.child_by_field_name("name")?;
+                extract_jsx_component_name(&name_node, source)
             } else {
                 None
             }
@@ -4190,6 +4655,53 @@ fn last_named_child<'tree>(node: &Node<'tree>) -> Option<Node<'tree>> {
         None
     } else {
         node.named_child((count - 1) as u32)
+    }
+}
+
+/// Track A: extract a JSX component call target from a `jsx_opening_element`
+/// or `jsx_self_closing_element` name node.
+///
+/// Only PascalCase component names are treated as calls: `<LanguageSwitcher />`,
+/// `<RegionSelector></RegionSelector>`, `<Dialog.Trigger />`.
+///
+/// Native HTML tags (`nav`, `button`) and lowercase namespace roots
+/// (`motion.div`) are rejected because their root does not begin with an
+/// uppercase letter.
+///
+/// For member expressions like `<Dialog.Trigger />`, the terminal component
+/// name (`Trigger`) is used conservatively as the call target.
+fn extract_jsx_component_name(node: &Node, source: &str) -> Option<String> {
+    match node.kind() {
+        "identifier" | "property_identifier" | "type_identifier" => {
+            let text = node.safe_text(source).ok()?;
+            // Only PascalCase identifiers are component calls.
+            if text.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+                Some(text.to_string())
+            } else {
+                None
+            }
+        }
+        "member_expression" | "qualified_identifier" => {
+            // `<Dialog.Trigger />` — check the ROOT (object) is PascalCase.
+            // If the root is lowercase (e.g. `motion` in `motion.div`), reject
+            // the whole expression.  If the root is uppercase, use the terminal
+            // (property) name as the call target.
+            let object = node.child_by_field_name("object")?;
+            let root_text = object.safe_text(source).ok()?;
+            if !root_text
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_uppercase())
+            {
+                return None;
+            }
+            // Use the terminal property name as the call target.
+            let property = node
+                .child_by_field_name("property")
+                .or_else(|| last_named_child(node))?;
+            extract_jsx_component_name(&property, source)
+        }
+        _ => None,
     }
 }
 
@@ -6075,5 +6587,592 @@ func helper() {}
             route_nodes(code, Language::TypeScript, "x.ts").is_empty(),
             "no @Controller → no routes"
         );
+    }
+
+    // ---- Track A: JSX component reference extraction -------------------------
+
+    /// Helper: collect all Call relationships from a TSX source.
+    fn tsx_call_targets(code: &str) -> Vec<(String, u32)> {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let tree = parser.parse(code, Language::Tsx).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::Tsx, "test.tsx");
+        let rels =
+            extract_symbol_relationships(&tree, code, Language::Tsx, "test.tsx", &symbols);
+        rels.into_iter()
+            .filter(|r| r.relationship_type == SymbolRelationshipType::Call)
+            .map(|r| (r.target_name, r.line))
+            .collect()
+    }
+
+    #[test]
+    fn test_jsx_pascalcase_elements_emit_calls() {
+        let code = r#"
+function Toolbar() {
+  return (
+    <nav>
+      <LanguageSwitcher />
+      <RegionSelector></RegionSelector>
+      <Dialog.Trigger />
+    </nav>
+  );
+}
+"#;
+        let calls = tsx_call_targets(code);
+
+        // PascalCase components emit calls.
+        assert!(
+            calls.iter().any(|(name, _)| name == "LanguageSwitcher"),
+            "LanguageSwitcher should emit a call, got: {calls:?}"
+        );
+        assert!(
+            calls.iter().any(|(name, _)| name == "RegionSelector"),
+            "RegionSelector should emit a call, got: {calls:?}"
+        );
+        // Member expression: use terminal component name.
+        assert!(
+            calls.iter().any(|(name, _)| name == "Trigger"),
+            "Dialog.Trigger should emit a call to Trigger, got: {calls:?}"
+        );
+    }
+
+    #[test]
+    fn test_jsx_native_and_lowercase_elements_emit_no_calls() {
+        let code = r#"
+function Toolbar() {
+  return (
+    <nav>
+      <button>Menu</button>
+      <motion.div />
+    </nav>
+  );
+}
+"#;
+        let calls = tsx_call_targets(code);
+
+        // Native HTML tags must NOT emit calls.
+        assert!(
+            !calls.iter().any(|(name, _)| name == "nav"),
+            "native <nav> must not emit a call, got: {calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|(name, _)| name == "button"),
+            "native <button> must not emit a call, got: {calls:?}"
+        );
+        // Lowercase namespace root must NOT emit calls.
+        assert!(
+            !calls.iter().any(|(name, _)| name == "div" || name == "motion"),
+            "lowercase <motion.div> must not emit a call, got: {calls:?}"
+        );
+    }
+
+    // ---- Track B: Rust file-local constant usage -----------------------------
+
+    /// Helper: extract a Rust source's symbols and its `usage` relationships.
+    fn rust_const_usage_edges(code: &str) -> (Vec<Symbol>, Vec<SymbolRelationship>) {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let tree = parser.parse(code, Language::Rust).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::Rust, "consts.rs");
+        let relationships =
+            extract_symbol_relationships(&tree, code, Language::Rust, "consts.rs", &symbols);
+        let usages = relationships
+            .into_iter()
+            .filter(|r| r.relationship_type == SymbolRelationshipType::Usage)
+            .collect();
+        (symbols, usages)
+    }
+
+    /// The `(source_qualified_name, target_name, line)` view of usage edges.
+    fn usage_triples(
+        symbols: &[Symbol],
+        usages: &[SymbolRelationship],
+    ) -> Vec<(String, String, u32)> {
+        let id_to_qn: HashMap<&str, &str> = symbols
+            .iter()
+            .map(|s| (s.id.as_str(), s.qualified_name.as_str()))
+            .collect();
+        let mut triples: Vec<(String, String, u32)> = usages
+            .iter()
+            .map(|r| {
+                let source = id_to_qn
+                    .get(r.source_symbol_id.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| r.source_symbol_id.clone());
+                (source, r.target_name.clone(), r.line)
+            })
+            .collect();
+        triples.sort();
+        triples
+    }
+
+    #[test]
+    fn test_rust_const_usage_and_let_shadowing() {
+        // The handoff fixture: a plain consumer resolves; the shadowing `let`'s
+        // INITIALIZER still refers to the outer constant; later references in
+        // the shadowed scope emit nothing.
+        let code = r#"
+const WORKFLOW_TEXT: &str = "workflow";
+
+fn server_info() -> &'static str {
+    WORKFLOW_TEXT
+}
+
+fn shadowing() {
+    let WORKFLOW_TEXT = WORKFLOW_TEXT.len();
+    consume(WORKFLOW_TEXT);
+}
+"#;
+        let (symbols, usages) = rust_const_usage_edges(code);
+        assert_eq!(
+            usage_triples(&symbols, &usages),
+            vec![
+                ("server_info".to_string(), "WORKFLOW_TEXT".to_string(), 4),
+                ("shadowing".to_string(), "WORKFLOW_TEXT".to_string(), 8),
+            ],
+            "expected exactly the tail-expression use and the let-initializer use"
+        );
+        // Every edge resolves immediately to THIS file's constant symbol.
+        let const_id = symbols
+            .iter()
+            .find(|s| s.name == "WORKFLOW_TEXT" && s.symbol_type == SymbolType::Constant)
+            .map(|s| s.id.clone())
+            .expect("constant symbol not found");
+        for edge in &usages {
+            assert_eq!(edge.target_symbol_id.as_deref(), Some(const_id.as_str()));
+            assert_eq!(edge.resolution_strategy.as_deref(), Some("file_local_const"));
+            assert_eq!(edge.confidence, Some(0.9));
+        }
+    }
+
+    #[test]
+    fn test_rust_const_usage_excludes_binding_shadows() {
+        // Parameters, closure params, loop bindings, and match bindings all
+        // shadow the constant's name: NO usage edges anywhere in this file.
+        let code = r#"
+const LIMIT: usize = 8;
+
+fn param_shadow(LIMIT: usize) -> usize {
+    LIMIT + 1
+}
+
+fn closure_shadow() -> usize {
+    let apply = |LIMIT: usize| LIMIT * 2;
+    apply(3)
+}
+
+fn loop_shadow(values: [usize; 3]) -> usize {
+    let mut total = 0;
+    for LIMIT in values {
+        total += LIMIT;
+    }
+    total
+}
+
+fn match_shadow(input: Option<usize>) -> usize {
+    match input {
+        Some(LIMIT) => LIMIT,
+        None => 0,
+    }
+}
+"#;
+        let (symbols, usages) = rust_const_usage_edges(code);
+        assert!(
+            usages.is_empty(),
+            "shadowed bindings must emit no constant-usage edges, got: {:?}",
+            usage_triples(&symbols, &usages)
+        );
+    }
+
+    #[test]
+    fn test_rust_const_usage_expression_positions() {
+        // Whitelisted expression positions (argument, binary, condition,
+        // return) each emit a per-use edge; the declarations themselves and a
+        // macro token-tree reference emit nothing.
+        let code = r#"
+const MAX_RETRIES: u32 = 3;
+const GREETING: &str = "hi";
+
+fn caller() -> u32 {
+    log(GREETING);
+    let doubled = MAX_RETRIES * 2;
+    if doubled > MAX_RETRIES {
+        return MAX_RETRIES;
+    }
+    doubled
+}
+
+fn macro_user() {
+    println!("{}", MAX_RETRIES);
+}
+"#;
+        let (symbols, usages) = rust_const_usage_edges(code);
+        assert_eq!(
+            usage_triples(&symbols, &usages),
+            vec![
+                ("caller".to_string(), "GREETING".to_string(), 5),
+                ("caller".to_string(), "MAX_RETRIES".to_string(), 6),
+                ("caller".to_string(), "MAX_RETRIES".to_string(), 7),
+                ("caller".to_string(), "MAX_RETRIES".to_string(), 8),
+            ],
+            "macro token trees and declaration sites must not emit usage edges"
+        );
+    }
+
+    #[test]
+    fn test_rust_const_usage_ambiguous_and_path_references_drop() {
+        // The same constant name in two modules is ambiguous (map drops it),
+        // and a `scoped_identifier` path reference is never a whitelisted
+        // position — a truthful miss on both counts.
+        let code = r#"
+mod alpha {
+    pub const TIMEOUT: u32 = 1;
+}
+
+mod beta {
+    pub const TIMEOUT: u32 = 2;
+}
+
+fn read_timeout() -> u32 {
+    let direct = TIMEOUT;
+    alpha::TIMEOUT + direct
+}
+"#;
+        let (symbols, usages) = rust_const_usage_edges(code);
+        assert!(
+            usages.is_empty(),
+            "ambiguous names and path segments must emit nothing, got: {:?}",
+            usage_triples(&symbols, &usages)
+        );
+    }
+
+    #[test]
+    fn test_rust_const_usage_match_guard_shadow_suppressed() {
+        // `match_arm`'s pattern node SPANS the `if` guard, so shadow activation
+        // at the pattern's START byte must suppress the guard reference AND the
+        // arm value alike (deliberate false negative). An unshadowed use in
+        // another function is the positive control.
+        let code = r#"
+const LIMIT: usize = 8;
+
+fn check(input: Option<usize>) -> usize {
+    match input {
+        Some(LIMIT) if LIMIT > 2 => LIMIT,
+        _ => 0,
+    }
+}
+
+fn ok() -> usize {
+    LIMIT
+}
+"#;
+        let (symbols, usages) = rust_const_usage_edges(code);
+        assert_eq!(
+            usage_triples(&symbols, &usages),
+            vec![("ok".to_string(), "LIMIT".to_string(), 11)],
+            "guard and arm-value references of an arm-bound colliding name must emit nothing"
+        );
+    }
+
+    #[test]
+    fn test_rust_mod_nested_const_is_not_a_file_wide_target() {
+        // A const nested in `mod x { }` is NOT lexically visible file-wide by
+        // bare name: an outer function's bare reference must emit NO edge (the
+        // false-positive case), and a match guard colliding with the nested
+        // const's name likewise emits nothing.
+        let code = r#"
+mod inner {
+    pub const RETRY_MAX: u32 = 3;
+    pub const CODE: u32 = 1;
+}
+
+fn outer() -> u32 {
+    RETRY_MAX
+}
+
+fn pick(v: Option<u32>) -> u32 {
+    match v {
+        Some(CODE) if CODE > 0 => CODE,
+        _ => 0,
+    }
+}
+"#;
+        let (symbols, usages) = rust_const_usage_edges(code);
+        assert!(
+            usages.is_empty(),
+            "mod-nested constants must never be usage targets, got: {:?}",
+            usage_triples(&symbols, &usages)
+        );
+    }
+
+    // ---- Track C: Go interface method specs, embedding, receiver kinds ------
+
+    /// Helper: extract a Go source's symbols and relationships.
+    fn go_extract(code: &str) -> (Vec<Symbol>, Vec<SymbolRelationship>) {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let tree = parser.parse(code, Language::Go).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::Go, "cache.go");
+        let relationships =
+            extract_symbol_relationships(&tree, code, Language::Go, "cache.go", &symbols);
+        (symbols, relationships)
+    }
+
+    #[test]
+    fn test_go_interface_method_specs_are_child_symbols_with_signatures() {
+        let code = r#"
+package cache
+
+import "context"
+
+type Base interface {
+	Ping(context.Context) error
+}
+
+type Cache interface {
+	Base
+	Set(string, []byte) error
+}
+
+type Memory struct{}
+
+func (Memory) Ping(ctx context.Context) error { return nil }
+
+func (m *Memory) Set(k string, v []byte) error { return nil }
+"#;
+        let (symbols, _) = go_extract(code);
+
+        fn find_qn<'a>(symbols: &'a [Symbol], qn: &str) -> &'a Symbol {
+            symbols
+                .iter()
+                .find(|s| s.qualified_name == qn)
+                .unwrap_or_else(|| panic!("symbol {qn} not found"))
+        }
+
+        let base = find_qn(&symbols, "Base");
+        assert_eq!(base.symbol_type, SymbolType::Interface);
+        let cache = find_qn(&symbols, "Cache");
+        assert_eq!(cache.symbol_type, SymbolType::Interface);
+
+        // Interface method SPECS are Method symbols parented to the interface,
+        // carrying "(params) result" signature text — the store-side miner's
+        // extractor contract.
+        let ping_spec = find_qn(&symbols, "Base.Ping");
+        assert_eq!(ping_spec.symbol_type, SymbolType::Method);
+        assert_eq!(ping_spec.parent_id.as_deref(), Some(base.id.as_str()));
+        assert_eq!(ping_spec.signature.as_deref(), Some("(context.Context) error"));
+
+        let set_spec = find_qn(&symbols, "Cache.Set");
+        assert_eq!(set_spec.symbol_type, SymbolType::Method);
+        assert_eq!(set_spec.parent_id.as_deref(), Some(cache.id.as_str()));
+        assert_eq!(set_spec.signature.as_deref(), Some("(string, []byte) error"));
+
+        // Concrete methods keep their signatures too (receiver excluded).
+        let ping_impl = find_qn(&symbols, "Ping");
+        assert_eq!(ping_impl.symbol_type, SymbolType::Method);
+        assert_eq!(
+            ping_impl.signature.as_deref(),
+            Some("(ctx context.Context) error")
+        );
+        let set_impl = find_qn(&symbols, "Set");
+        assert_eq!(
+            set_impl.signature.as_deref(),
+            Some("(k string, v []byte) error")
+        );
+    }
+
+    #[test]
+    fn test_go_interface_embedding_emits_extends() {
+        let code = r#"
+package cache
+
+import "io"
+
+type Base interface {
+	Ping() error
+}
+
+type Cache interface {
+	Base
+	Set(string, []byte) error
+}
+
+type MyCloser interface {
+	io.Closer
+}
+
+type Number interface {
+	~int | ~int64
+}
+"#;
+        let (symbols, relationships) = go_extract(code);
+        let id_of = |name: &str| -> String {
+            symbols
+                .iter()
+                .find(|s| s.name == name && s.symbol_type == SymbolType::Interface)
+                .map(|s| s.id.clone())
+                .unwrap_or_else(|| panic!("interface {name} not found"))
+        };
+        let extends: Vec<(String, String)> = relationships
+            .iter()
+            .filter(|r| r.relationship_type == SymbolRelationshipType::Extends)
+            .map(|r| (r.source_symbol_id.clone(), r.target_name.clone()))
+            .collect();
+
+        // `Cache` embeds `Base`; a qualified embedding reduces to its terminal
+        // name; a generic-constraint union is NOT an embedding.
+        assert!(extends.contains(&(id_of("Cache"), "Base".to_string())));
+        assert!(extends.contains(&(id_of("MyCloser"), "Closer".to_string())));
+        assert!(
+            !extends.iter().any(|(source, _)| *source == id_of("Number")),
+            "constraint unions must not emit extends edges, got: {extends:?}"
+        );
+        // Method specs never become embedding targets.
+        assert!(
+            !extends.iter().any(|(_, target)| target == "Set" || target == "Ping"),
+            "method specs must not emit extends edges, got: {extends:?}"
+        );
+    }
+
+    #[test]
+    fn test_go_receiver_kind_metadata_on_contains() {
+        let code = r#"
+package cache
+
+type Memory struct{}
+
+func (Memory) Ping() error { return nil }
+
+func (m *Memory) Set(k string, v []byte) error { return nil }
+"#;
+        let (symbols, relationships) = go_extract(code);
+        let memory_id = symbols
+            .iter()
+            .find(|s| s.name == "Memory" && s.symbol_type == SymbolType::Struct)
+            .map(|s| s.id.clone())
+            .expect("Memory struct not found");
+        let contains_kind = |method: &str| -> Option<String> {
+            relationships
+                .iter()
+                .find(|r| {
+                    r.relationship_type == SymbolRelationshipType::Contains
+                        && r.source_symbol_id == memory_id
+                        && r.target_name == method
+                })
+                .unwrap_or_else(|| panic!("contains edge for {method} not found"))
+                .receiver_kind
+                .clone()
+        };
+
+        assert_eq!(contains_kind("Ping").as_deref(), Some("value"));
+        assert_eq!(contains_kind("Set").as_deref(), Some("pointer"));
+        // No other edge kind carries a receiver kind.
+        assert!(relationships
+            .iter()
+            .filter(|r| r.relationship_type != SymbolRelationshipType::Contains)
+            .all(|r| r.receiver_kind.is_none()));
+    }
+
+    #[test]
+    fn test_go_generic_receiver_reduces_to_base_type() {
+        // Generic receivers (`Pair[K, V]` / `*Pair[K, V]`) must reduce to the
+        // base type name so Contains + receiver_kind still emit.
+        let code = r#"
+package cache
+
+type Pair[K comparable, V any] struct {
+	key K
+	val V
+}
+
+func (p Pair[K, V]) Key() K { return p.key }
+
+func (p *Pair[K, V]) SetVal(v V) { p.val = v }
+"#;
+        let (symbols, relationships) = go_extract(code);
+        let pair_id = symbols
+            .iter()
+            .find(|s| s.name == "Pair" && s.symbol_type == SymbolType::Struct)
+            .map(|s| s.id.clone())
+            .expect("Pair struct not found");
+        let contains_kind = |method: &str| -> Option<String> {
+            relationships
+                .iter()
+                .find(|r| {
+                    r.relationship_type == SymbolRelationshipType::Contains
+                        && r.source_symbol_id == pair_id
+                        && r.target_name == method
+                })
+                .unwrap_or_else(|| panic!("contains edge for {method} not found"))
+                .receiver_kind
+                .clone()
+        };
+        assert_eq!(contains_kind("Key").as_deref(), Some("value"));
+        assert_eq!(contains_kind("SetVal").as_deref(), Some("pointer"));
+    }
+
+    #[test]
+    fn test_go_generic_embedded_interface_emits_extends() {
+        // A generic instantiation embedded in an interface (`Getter[T]`)
+        // extends its BASE interface (`Getter`).
+        let code = r#"
+package cache
+
+type Getter[T any] interface {
+	Get() T
+}
+
+type Store[T any] interface {
+	Getter[T]
+	Put(T)
+}
+"#;
+        let (symbols, relationships) = go_extract(code);
+        let id_of = |name: &str| -> String {
+            symbols
+                .iter()
+                .find(|s| s.name == name && s.symbol_type == SymbolType::Interface)
+                .map(|s| s.id.clone())
+                .unwrap_or_else(|| panic!("interface {name} not found"))
+        };
+        let extends: Vec<(String, String)> = relationships
+            .iter()
+            .filter(|r| r.relationship_type == SymbolRelationshipType::Extends)
+            .map(|r| (r.source_symbol_id.clone(), r.target_name.clone()))
+            .collect();
+        assert!(
+            extends.contains(&(id_of("Store"), "Getter".to_string())),
+            "generic embedding must extend its base interface, got: {extends:?}"
+        );
+    }
+
+    #[test]
+    fn test_go_anonymous_interface_literal_mints_no_method_symbols() {
+        // `method_elem` only mints a Method symbol under a NAMED interface
+        // declaration. Anonymous interface literals in function params and
+        // type assertions produce NO symbols at all.
+        let code = r#"
+package cache
+
+func Wait(s interface{ Done() }) {}
+
+func Cast(v any) bool {
+	_, ok := v.(interface{ Close() error })
+	return ok
+}
+"#;
+        let (symbols, _) = go_extract(code);
+        assert!(
+            !symbols.iter().any(|s| s.name == "Done" || s.name == "Close"),
+            "anonymous interface literals must mint no Method symbols, got: {:?}",
+            symbols
+                .iter()
+                .map(|s| s.qualified_name.as_str())
+                .collect::<Vec<_>>()
+        );
+        // The enclosing functions themselves are unaffected.
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Wait" && s.symbol_type == SymbolType::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Cast" && s.symbol_type == SymbolType::Function));
     }
 }

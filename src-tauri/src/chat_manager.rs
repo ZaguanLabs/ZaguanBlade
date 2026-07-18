@@ -168,6 +168,9 @@ fn maybe_prefix_gemma4_think_token(model_id: &str, prompt: String) -> String {
 
 fn zblade_workflow_guidance() -> &'static str {
     r#"ZBlade workflow guidance:
+- For structural code navigation, use the Symbols tools before grep, broad text search, or whole-file reads. Unknown location: `symbol_search`. Known file but unknown range: `symbol_outline`. Callers of a function: `symbol_references` incoming `call` edges. Interface/trait implementers: `symbol_references` incoming `implements` edges.
+- Copy exact symbol IDs from returned results — never construct one from a path and name — and read the exact returned ranges.
+- Use `rg` or other text search for literal strings, regexes, unsupported file types, or after a focused Symbols miss. Do NOT use Symbols tools for builds, tests, Git, or runtime diagnosis.
 - For user requests that ask you to inspect, update, edit, fix, create, rename, delete, or run project files/commands, use the provided tools immediately. Do not answer only that you are ready or ask what to do next.
 - For file edits, first inspect the relevant file/context with tools, then call `apply_patch` or `write_file` with absolute paths.
 - For broad, ambiguous, multi-file, or unfamiliar tasks, call `fast_context` before reading many files or editing. Use its `confidence`, `index_health`, `project_context`, `graph_context`, `suggested_ranges`, `enriched_files`, `related_files`, `related_docs`, and optional `impact` hints to plan the next reads.
@@ -3590,6 +3593,24 @@ mod tests {
         assert!(prompt.contains("suggested_ranges"));
         assert!(prompt.contains("Do not answer only that you are ready"));
         assert!(prompt.contains("use the provided tools immediately"));
+    }
+
+    #[test]
+    fn zblade_workflow_guidance_leads_with_symbols_first_navigation_rule() {
+        let guidance = zblade_workflow_guidance();
+        let first_bullet = guidance
+            .lines()
+            .find(|line| line.starts_with("- "))
+            .expect("guidance has bullets");
+
+        assert!(first_bullet.contains("structural code navigation"));
+        assert!(first_bullet.contains("symbol_search"));
+        assert!(first_bullet.contains("symbol_outline"));
+        assert!(first_bullet.contains("incoming `call`"));
+        assert!(first_bullet.contains("incoming `implements`"));
+        assert!(guidance.contains("never construct one from a path and name"));
+        assert!(guidance.contains("after a focused Symbols miss"));
+        assert!(guidance.contains("builds, tests, Git, or runtime diagnosis"));
     }
 
     #[test]

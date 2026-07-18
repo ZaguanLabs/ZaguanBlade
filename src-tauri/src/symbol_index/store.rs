@@ -27,50 +27,162 @@ const GENERATED_INDEX_TABLES: &[&str] = &[
     "indexed_files",
 ];
 
+/// Track D — the symbol kinds each relationship kind may legally resolve to.
+///
+/// Global-unique name resolution must consider what KIND of target an edge can
+/// reference: a `call` may land on a callable, never on a Markdown heading with
+/// the same text, and a heading must never make a callable "ambiguous" either.
+/// The allowlist is rendered into a temp join table by
+/// `build_unique_relationship_targets_sql`, so uniqueness is judged per
+/// `(name, kind-class)` instead of per bare name.
+///
+/// Per-kind classes (a kind absent from a row's list is never a candidate):
+///   * `call`       → function, method, class, struct, enum, type — callables
+///     plus constructable types (constructor calls in class/struct languages).
+///   * `implements` → interface, trait, class — implementable contracts.
+///   * `extends`    → class, interface, struct, trait, type — inheritable /
+///     embeddable bases.
+///   * `uses_type`  → class, struct, interface, type, enum, trait — nominal
+///     types a signature/annotation can reference.
+///   * `usage`      → constant, variable, property, enum_member, function,
+///     css_custom_property — value references (a function used as a value, not
+///     called). `css_custom_property` is REQUIRED: `var(--token)` usage edges
+///     across stylesheet files resolved under the old kind-blind back-fill,
+///     and omitting the kind here would permanently orphan them.
+///   * `contains`   → function, method, property, variable, constant,
+///     enum_member — members a container binds.
+///   * `handles`    → function, method — handler callables.
+///
+/// Relationship kinds with NO row (`reads_env`, `export`) are EXCLUDED from
+/// the back-fill entirely, exactly like `import` already is — their targets
+/// are not global symbol names. `heading` appears in NO allowlist: a Markdown
+/// heading must never resolve a call/usage (explicit release gate). `import`
+/// SYMBOLS are likewise in no allowlist, preserving the old candidate filter.
+const RELATIONSHIP_TARGET_KIND_ALLOWLIST: &[(&str, &[&str])] = &[
+    (
+        "call",
+        &["function", "method", "class", "struct", "enum", "type"],
+    ),
+    ("implements", &["interface", "trait", "class"]),
+    (
+        "extends",
+        &["class", "interface", "struct", "trait", "type"],
+    ),
+    (
+        "uses_type",
+        &["class", "struct", "interface", "type", "enum", "trait"],
+    ),
+    (
+        "usage",
+        &[
+            "constant",
+            "variable",
+            "property",
+            "enum_member",
+            "function",
+            "css_custom_property",
+        ],
+    ),
+    (
+        "contains",
+        &[
+            "function",
+            "method",
+            "property",
+            "variable",
+            "constant",
+            "enum_member",
+        ],
+    ),
+    ("handles", &["function", "method"]),
+];
+
+/// Render `RELATIONSHIP_TARGET_KIND_ALLOWLIST` as SQL `VALUES` rows for the
+/// temp allowlist table. Every entry is a compile-time literal from the const
+/// above — nothing user-controlled is interpolated.
+fn relationship_kind_allowlist_values_sql() -> String {
+    let mut rows = Vec::new();
+    for (relationship_type, symbol_types) in RELATIONSHIP_TARGET_KIND_ALLOWLIST {
+        for symbol_type in *symbol_types {
+            rows.push(format!("('{relationship_type}','{symbol_type}')"));
+        }
+    }
+    rows.join(",")
+}
+
 /// M2.4 set-based back-fill, target-driven: resolve each DISTINCT observed
-/// target name once — not once per relationship, and never for symbols nothing
-/// requests. The old form evaluated a correlated candidate `SELECT` plus a
-/// correlated `COUNT(*)` guard PER unresolved relationship row, so thousands
-/// of `calls → get` edges repeated the identical `get` lookup thousands of
-/// times (on Scout's Firefox corpus: complete resolution 110.77s → 44.23s from
-/// this change alone). Three steps inside one transaction:
+/// `(target_name, relationship_type)` pair once — not once per relationship,
+/// and never for symbols nothing requests. The old form evaluated a correlated
+/// candidate `SELECT` plus a correlated `COUNT(*)` guard PER unresolved
+/// relationship row, so thousands of `calls → get` edges repeated the
+/// identical `get` lookup thousands of times (on Scout's Firefox corpus:
+/// complete resolution 110.77s → 44.23s from this change alone). Four steps
+/// inside one transaction:
 ///
-/// 1. `wanted_relationship_names` — the distinct names unresolved rows request.
-/// 2. `unique_relationship_targets` — those names joined against `symbols`,
-///    keeping ONLY names with exactly one valid candidate.
-/// 3. One `UPDATE` from that compact unique-indexed lookup table.
+/// 1. `relationship_kind_allowlist` — the static kind-class table rendered
+///    from `RELATIONSHIP_TARGET_KIND_ALLOWLIST`.
+/// 2. `wanted_relationship_names` — the distinct `(name, relationship_type)`
+///    pairs unresolved rows request.
+/// 3. `unique_relationship_targets` — those pairs joined against `symbols`
+///    THROUGH the allowlist, keeping ONLY pairs with exactly one candidate of
+///    a legal kind.
+/// 4. One `UPDATE` from that compact unique-indexed lookup table.
 ///
-/// CORRECTNESS GUARD (unchanged from the correlated form): a target is written
-/// ONLY when the name matches EXACTLY ONE candidate symbol globally
-/// (`HAVING COUNT(*) = 1`). Candidates exclude `import` placeholders and the
-/// synthetic `__file__` root; the old filter's `name != ''` is implied by the
-/// equality join against wanted names, which are never empty. An ambiguous
-/// name is simply absent from the lookup table and stays NULL. `import`
-/// relationships are skipped, and already-resolved (non-NULL) rows are never
-/// overwritten. `MIN(s.id)` is the single candidate the guard admits.
-/// `confidence = 0.5`: a name-only heuristic (no scope/type analysis) — the
-/// uniqueness guard is what makes it safe, not the score.
-const BUILD_UNIQUE_RELATIONSHIP_TARGETS_SQL: &str = r#"
+/// CORRECTNESS GUARD: a target is written ONLY when the name matches EXACTLY
+/// ONE candidate symbol of a kind the relationship may legally reference
+/// (`HAVING COUNT(*) = 1` per `(name, relationship_type)`; the allowlist PK
+/// guarantees each symbol joins at most once per pair, so the row count IS the
+/// candidate count). Candidates exclude the synthetic `__file__` root, and
+/// `import` placeholders are excluded because `import` is in no kind class;
+/// the old filter's `name != ''` is implied by the equality join against
+/// wanted names, which are never empty. An ambiguous pair is simply absent
+/// from the lookup table and stays NULL. `import` relationships are skipped,
+/// kinds without an allowlist row (`reads_env`, `export`) drop out of the
+/// allowlist join, and already-resolved (non-NULL) rows are never overwritten.
+/// `MIN(s.id)` is the single candidate the guard admits. `confidence = 0.5`:
+/// a name+kind heuristic (no scope analysis) — the uniqueness guard is what
+/// makes it safe, not the score.
+fn build_unique_relationship_targets_sql() -> String {
+    format!(
+        r#"
+DROP TABLE IF EXISTS temp.relationship_kind_allowlist;
+CREATE TEMP TABLE relationship_kind_allowlist (
+    relationship_type TEXT NOT NULL,
+    symbol_type TEXT NOT NULL,
+    PRIMARY KEY (relationship_type, symbol_type)
+) WITHOUT ROWID;
+INSERT INTO relationship_kind_allowlist (relationship_type, symbol_type)
+VALUES {allowlist_rows};
+
 DROP TABLE IF EXISTS temp.wanted_relationship_names;
 CREATE TEMP TABLE wanted_relationship_names AS
-SELECT DISTINCT target_name AS name
+SELECT DISTINCT target_name AS name, relationship_type AS relationship_type
 FROM symbol_relationships
 WHERE target_symbol_id IS NULL
   AND relationship_type != 'import'
   AND target_name != '';
-CREATE UNIQUE INDEX wanted_relationship_names_idx ON wanted_relationship_names(name);
+CREATE UNIQUE INDEX wanted_relationship_names_idx
+    ON wanted_relationship_names(name, relationship_type);
 
 DROP TABLE IF EXISTS temp.unique_relationship_targets;
 CREATE TEMP TABLE unique_relationship_targets AS
-SELECT wanted.name AS name, MIN(s.id) AS id
+SELECT wanted.name AS name,
+       wanted.relationship_type AS relationship_type,
+       MIN(s.id) AS id
 FROM wanted_relationship_names AS wanted
-JOIN symbols AS s ON s.name = wanted.name
-WHERE s.symbol_type != 'import'
-  AND s.qualified_name != '__file__'
-GROUP BY wanted.name
+JOIN relationship_kind_allowlist AS allowed
+  ON allowed.relationship_type = wanted.relationship_type
+JOIN symbols AS s
+  ON s.name = wanted.name AND s.symbol_type = allowed.symbol_type
+WHERE s.qualified_name != '__file__'
+GROUP BY wanted.name, wanted.relationship_type
 HAVING COUNT(*) = 1;
-CREATE UNIQUE INDEX unique_relationship_targets_idx ON unique_relationship_targets(name);
-"#;
+CREATE UNIQUE INDEX unique_relationship_targets_idx
+    ON unique_relationship_targets(name, relationship_type);
+"#,
+        allowlist_rows = relationship_kind_allowlist_values_sql()
+    )
+}
 
 const BACKFILL_GLOBAL_UNIQUE_SQL: &str = r#"
 UPDATE symbol_relationships
@@ -78,6 +190,7 @@ SET target_symbol_id = (
         SELECT candidate.id
         FROM unique_relationship_targets AS candidate
         WHERE candidate.name = symbol_relationships.target_name
+          AND candidate.relationship_type = symbol_relationships.relationship_type
     ),
     resolution_strategy = 'global_unique',
     confidence = 0.5
@@ -88,10 +201,12 @@ WHERE target_symbol_id IS NULL
         SELECT 1
         FROM unique_relationship_targets AS candidate
         WHERE candidate.name = symbol_relationships.target_name
+          AND candidate.relationship_type = symbol_relationships.relationship_type
       )
 "#;
 
 const DROP_UNIQUE_RELATIONSHIP_TARGETS_SQL: &str = r#"
+DROP TABLE relationship_kind_allowlist;
 DROP TABLE wanted_relationship_names;
 DROP TABLE unique_relationship_targets;
 "#;
@@ -148,6 +263,57 @@ DROP TABLE wanted_anchor_lookups;
 DROP TABLE unique_anchor_targets;
 "#;
 
+/// Track H — cap on normalized anchor-query terms. Each term contributes a
+/// bounded handful of unindexable `%…%` LIKE predicates (value + preview per
+/// case variant), so the cap bounds the per-row predicate work of the
+/// full-table scan; extra terms are dropped.
+const ANCHOR_QUERY_MAX_TERMS: usize = 8;
+
+/// Track H — bounded overfetch factor for the anchor-candidate SQL. The SQL
+/// stage is broad OR-retrieval only (mode semantics are verified in Rust), so
+/// every mode overfetches by this factor before Rust filters and truncates.
+const ANCHOR_CANDIDATE_OVERFETCH: usize = 4;
+
+/// Track H — render one query term as a `%…%` LIKE CANDIDATE pattern.
+///
+/// This pattern is retrieval-only — Rust re-verifies every match with literal
+/// `str::contains` — so it must be a SUPERSET of the true matches and never
+/// treat query text as wildcards:
+///   * `\`, `%`, `_` are escaped with `\` (paired with `ESCAPE '\'` in SQL) so
+///     `foo_bar` stops wildcard-matching `foo-bar`;
+///   * every non-ASCII char degrades to `%`: SQLite's LIKE case-folds ASCII
+///     ONLY, so `é` in a pattern would MISS a stored `É` — the wildcard keeps
+///     the row retrievable and Rust's Unicode-lowercased `contains` decides.
+fn anchor_like_candidate_pattern(term: &str) -> String {
+    let mut pattern = String::with_capacity(term.len() + 4);
+    pattern.push('%');
+    // Tracked explicitly: `ends_with('%')` would be fooled by an ESCAPED `\%`.
+    let mut ends_with_wildcard = true;
+    for ch in term.chars() {
+        match ch {
+            '\\' | '%' | '_' => {
+                pattern.push('\\');
+                pattern.push(ch);
+                ends_with_wildcard = false;
+            }
+            ch if ch.is_ascii() => {
+                pattern.push(ch);
+                ends_with_wildcard = false;
+            }
+            _ => {
+                if !ends_with_wildcard {
+                    pattern.push('%');
+                    ends_with_wildcard = true;
+                }
+            }
+        }
+    }
+    if !ends_with_wildcard {
+        pattern.push('%');
+    }
+    pattern
+}
+
 /// Run the whole-index anchor back-fill (build unique-target lookup, update,
 /// drop) in one transaction. Returns the number of anchors newly resolved.
 fn backfill_global_anchor_targets(conn: &mut Connection) -> Result<usize, SymbolStoreError> {
@@ -195,13 +361,23 @@ WHERE anchor.file_path = ?1
 /// constructor / annotation recv_type omits the key and stays byte-identical to
 /// what M5.1 stored, so it is never globally mined).
 fn relationship_metadata_json(relationship: &SymbolRelationship) -> Option<String> {
-    relationship.recv_type.as_ref().map(|recv| {
+    let mut map = serde_json::Map::new();
+    if let Some(recv) = relationship.recv_type.as_ref() {
+        map.insert("recv_type".into(), serde_json::json!(recv));
         if relationship.recv_self {
-            serde_json::json!({ "recv_type": recv, "recv_self": true }).to_string()
-        } else {
-            serde_json::json!({ "recv_type": recv }).to_string()
+            map.insert("recv_self".into(), serde_json::json!(true));
         }
-    })
+    }
+    // Track C: Go `contains` edges carry the method's receiver kind so the
+    // implicit-interface miner can distinguish pointer/value method sets.
+    if let Some(kind) = relationship.receiver_kind.as_ref() {
+        map.insert("receiver".into(), serde_json::json!(kind));
+    }
+    if map.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(map).to_string())
+    }
 }
 
 /// M5.1b: the `(recv_type, recv_self)` carried in a relationship's `metadata_json`
@@ -427,6 +603,434 @@ fn build_global_receiver_registry(
     }
 
     Ok(registry)
+}
+
+/// Track C — the package of a Go file is its parent directory path
+/// (`pkg/cache/mem.go` → `pkg/cache`; a root-level file → `""`).
+fn go_package_dir(file_path: &str) -> &str {
+    file_path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("")
+}
+
+/// Go keywords that can START an unnamed type followed by whitespace
+/// (`chan int`, `func(int) error`, …). A leading token in this set is never a
+/// parameter NAME, so `chan int` normalizes as a type, not as `name type`.
+const GO_TYPE_KEYWORDS: &[&str] = &["chan", "func", "map", "struct", "interface"];
+
+/// Collapse internal whitespace runs to single spaces (`map[string]  int` and
+/// `map[string] int` canonicalize identically).
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `text` starting at `(`: return `(inner, rest_after_close)` for the first
+/// balanced group, or `None` when the text is not a well-formed group
+/// (conservative — the caller falls back to raw text).
+fn split_balanced_group(text: &str) -> Option<(&str, &str)> {
+    let bytes = text.as_bytes();
+    if bytes.first() != Some(&b'(') {
+        return None;
+    }
+    let mut depth = 0usize;
+    for (index, byte) in bytes.iter().enumerate() {
+        match byte {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    // Only the matching `)` may close the opening group.
+                    if *byte != b')' {
+                        return None;
+                    }
+                    return Some((&text[1..index], &text[index + 1..]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Split on commas at bracket depth 0 (`string, map[int, x]y` → 2 items).
+fn split_top_level_commas(text: &str) -> Vec<&str> {
+    let mut items = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (index, byte) in text.bytes().enumerate() {
+        match byte {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                items.push(text[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    items.push(text[start..].trim());
+    items.retain(|item| !item.is_empty());
+    items
+}
+
+/// A bare Go identifier (letter/underscore start, alphanumeric/underscore
+/// body) — the only shape a parameter NAME can take.
+fn is_plain_go_identifier(text: &str) -> bool {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) if first.is_alphabetic() || first == '_' => {}
+        _ => return false,
+    }
+    chars.all(|ch| ch.is_alphanumeric() || ch == '_')
+}
+
+/// When `item` is definitively `name Type` (leading plain identifier that is
+/// not a type keyword, followed by top-level whitespace and a type), return
+/// the type text; otherwise `None` (the item is an unnamed type, or too
+/// ambiguous to strip — conservative).
+fn strip_go_param_name(item: &str) -> Option<&str> {
+    let mut depth = 0usize;
+    for (index, ch) in item.char_indices() {
+        match ch {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ch if ch.is_whitespace() && depth == 0 => {
+                let head = &item[..index];
+                let tail = item[index..].trim_start();
+                if tail.is_empty() {
+                    return None;
+                }
+                if is_plain_go_identifier(head) && !GO_TYPE_KEYWORDS.contains(&head) {
+                    return Some(tail);
+                }
+                return None;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Canonicalize a Go parameter list: strip parameter NAMES, keep parameter
+/// TYPES, collapse whitespace. Go lists are either all-named or all-unnamed,
+/// so if no item is definitively `name Type` every item is kept as a raw type;
+/// grouped names (`a, b string`) inherit the type of the next typed item to
+/// their right. Anything ambiguous keeps its raw (whitespace-collapsed) text —
+/// both sides of a comparison normalize identically, so a conservative raw
+/// keep can only produce a false negative, never a wrong match.
+fn canonical_go_param_list(raw: &str) -> String {
+    let items = split_top_level_commas(raw);
+    if items.is_empty() {
+        return String::new();
+    }
+    let list_is_named = items.iter().any(|item| strip_go_param_name(item).is_some());
+    if !list_is_named {
+        return items
+            .iter()
+            .map(|item| collapse_whitespace(item))
+            .collect::<Vec<_>>()
+            .join(",");
+    }
+    // Named list: walk right-to-left so grouped bare names pick up the type of
+    // the nearest typed item after them.
+    let mut types_reversed: Vec<String> = Vec::with_capacity(items.len());
+    let mut inherited: Option<String> = None;
+    for item in items.iter().rev() {
+        if let Some(type_text) = strip_go_param_name(item) {
+            let canonical = collapse_whitespace(type_text);
+            inherited = Some(canonical.clone());
+            types_reversed.push(canonical);
+        } else if is_plain_go_identifier(item) {
+            match &inherited {
+                Some(type_text) => types_reversed.push(type_text.clone()),
+                // Nothing to inherit: ambiguous — keep the raw text.
+                None => types_reversed.push(collapse_whitespace(item)),
+            }
+        } else {
+            // A complex typeless item inside a named list is not legal Go;
+            // keep it raw and stop inheriting through it.
+            inherited = None;
+            types_reversed.push(collapse_whitespace(item));
+        }
+    }
+    types_reversed.reverse();
+    types_reversed.join(",")
+}
+
+/// Canonicalize a Go result list. `func() (error)` and `func() error` are the
+/// same signature, so a parenthesized group canonicalizes to the bare comma
+/// list with result NAMES stripped like parameters.
+fn canonical_go_result_list(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if let Some((inner, rest)) = split_balanced_group(trimmed) {
+        if rest.trim().is_empty() {
+            return canonical_go_param_list(inner);
+        }
+    }
+    collapse_whitespace(trimmed)
+}
+
+/// Track C — receiver-independent canonical Go method signature. Parameter
+/// NAMES and whitespace are stripped; parameter and result TYPES are kept
+/// (grouped params like `(a, b string)` become two `string` params). The
+/// output embeds the method name, so the canonical string alone IS the
+/// method-set identity `(name, signature)`. Tolerates a leading receiver
+/// group (`(m Memory) Ping(…) error`) by skipping it; anything it cannot
+/// parse confidently keeps its raw whitespace-collapsed text — deterministic
+/// on both comparison sides, so ambiguity yields a false negative at worst.
+fn canonical_go_method_signature(name: &str, signature: &str) -> String {
+    let trimmed = signature.trim();
+    if trimmed.is_empty() {
+        return format!("{name}()");
+    }
+    let Some(open) = trimmed.find('(') else {
+        return format!("{name} {}", collapse_whitespace(trimmed));
+    };
+    let Some((first_inner, after_first)) = split_balanced_group(&trimmed[open..]) else {
+        return format!("{name} {}", collapse_whitespace(trimmed));
+    };
+    // Receiver-independence: `(recv T) Name(params) results` — when the text
+    // after the first group is `<identifier>(…` and the identifier is not a
+    // type keyword, the first group was a receiver; skip it and the name.
+    let after_first_trimmed = after_first.trim_start();
+    let (params_raw, results_raw) = match after_first_trimmed.find('(') {
+        Some(paren) => {
+            let head = after_first_trimmed[..paren].trim_end();
+            if !head.is_empty() && is_plain_go_identifier(head) && !GO_TYPE_KEYWORDS.contains(&head)
+            {
+                match split_balanced_group(&after_first_trimmed[paren..]) {
+                    Some((params, results)) => (params, results),
+                    None => return format!("{name} {}", collapse_whitespace(trimmed)),
+                }
+            } else {
+                (first_inner, after_first)
+            }
+        }
+        None => (first_inner, after_first),
+    };
+    let params = canonical_go_param_list(params_raw);
+    let results = canonical_go_result_list(results_raw);
+    if results.is_empty() {
+        format!("{name}({params})")
+    } else {
+        format!("{name}({params}) {results}")
+    }
+}
+
+/// Go universe/builtin type names — the only BARE identifiers whose meaning is
+/// identical in every package. Any other bare identifier (`Config`) resolves
+/// against its OWN package's declarations, so two textually equal canonical
+/// signatures in different packages may denote different types.
+const GO_UNIVERSE_TYPES: &[&str] = &[
+    "any",
+    "bool",
+    "byte",
+    "comparable",
+    "complex64",
+    "complex128",
+    "error",
+    "float32",
+    "float64",
+    "int",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "rune",
+    "string",
+    "uint",
+    "uint8",
+    "uint16",
+    "uint32",
+    "uint64",
+    "uintptr",
+];
+
+/// `rest` starting just AFTER an opening `[`: return `(inner, after_close)`
+/// for the matching `]`, or `None` when unbalanced / closed by a different
+/// bracket (conservative).
+fn split_go_bracket_group(rest: &str) -> Option<(&str, &str)> {
+    let mut depth = 1usize;
+    for (index, byte) in rest.bytes().enumerate() {
+        match byte {
+            b'[' | b'(' | b'{' => depth += 1,
+            b']' | b')' | b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    if byte != b']' {
+                        return None;
+                    }
+                    return Some((&rest[..index], &rest[index + 1..]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Track C / cross-package guard — is a canonical Go TYPE text
+/// PACKAGE-PORTABLE, i.e. guaranteed to denote the same type no matter which
+/// package's file spelled it? Portable shapes:
+///   * universe/builtin bare identifiers (`string`, `error`, …);
+///   * QUALIFIED names (`context.Context`) — spelled against an import, not
+///     the local package scope (import aliasing is ignored, matching the
+///     handoff's accepted risk level);
+///   * empty `interface{}` / `struct{}` literals;
+///   * composites over portable types: pointers, variadics, slices,
+///     literal-length arrays, maps, chans, and `func` types with unnamed
+///     portable params/results.
+/// Anything else — notably a bare NON-universe identifier like `Config` — is
+/// non-portable: it resolves per-package, so textual equality across packages
+/// proves nothing. Unparseable text is non-portable (false negative over a
+/// compiler-false edge).
+fn is_package_portable_go_type(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if let Some(rest) = trimmed.strip_prefix("...") {
+        return is_package_portable_go_type(rest);
+    }
+    if let Some(rest) = trimmed.strip_prefix('*') {
+        return is_package_portable_go_type(rest);
+    }
+    if let Some(rest) = trimmed.strip_prefix("<-chan") {
+        return is_package_portable_go_type(rest);
+    }
+    if let Some(rest) = trimmed.strip_prefix("chan<-") {
+        return is_package_portable_go_type(rest);
+    }
+    if let Some(rest) = trimmed.strip_prefix("chan ") {
+        return is_package_portable_go_type(rest);
+    }
+    if let Some(rest) = trimmed.strip_prefix("map[") {
+        let Some((key, value)) = split_go_bracket_group(rest) else {
+            return false;
+        };
+        return is_package_portable_go_type(key) && is_package_portable_go_type(value);
+    }
+    if let Some(rest) = trimmed.strip_prefix('[') {
+        let Some((length, element)) = split_go_bracket_group(rest) else {
+            return false;
+        };
+        let length = length.trim();
+        // Slice (`[]T`) or literal-length array (`[4]T`). A CONST-named length
+        // (`[N]T`) resolves per-package — non-portable.
+        if !(length.is_empty() || length.bytes().all(|byte| byte.is_ascii_digit())) {
+            return false;
+        }
+        return is_package_portable_go_type(element);
+    }
+    if let Some(rest) = trimmed.strip_prefix("func") {
+        let rest = rest.trim_start();
+        let Some((params, results)) = split_balanced_group(rest) else {
+            return false;
+        };
+        if !split_top_level_commas(params)
+            .iter()
+            .all(|param| is_package_portable_go_type(param))
+        {
+            return false;
+        }
+        let results = canonical_go_result_list(results);
+        return results.is_empty()
+            || split_top_level_commas(&results)
+                .iter()
+                .all(|result| is_package_portable_go_type(result));
+    }
+    let squashed: String = trimmed.chars().filter(|ch| !ch.is_whitespace()).collect();
+    if squashed == "interface{}" || squashed == "struct{}" {
+        return true;
+    }
+    if trimmed.contains('.')
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_alphanumeric() || ch == '_' || ch == '.')
+    {
+        return true;
+    }
+    is_plain_go_identifier(trimmed) && GO_UNIVERSE_TYPES.contains(&trimmed)
+}
+
+/// Track C / cross-package guard — is a CANONICAL method signature
+/// (`Name(params) results` from `canonical_go_method_signature`) built purely
+/// from package-portable types? Only then does canonical-string equality
+/// between a method in one package and an interface spec in ANOTHER package
+/// imply the compiler would agree. The raw-fallback canonical shapes are not
+/// analyzable and are treated as non-portable.
+fn canonical_go_signature_is_package_portable(canonical: &str) -> bool {
+    let Some(open) = canonical.find('(') else {
+        return false;
+    };
+    if !is_plain_go_identifier(&canonical[..open]) {
+        return false;
+    }
+    let Some((params, results)) = split_balanced_group(&canonical[open..]) else {
+        return false;
+    };
+    if !split_top_level_commas(params)
+        .iter()
+        .all(|param| is_package_portable_go_type(param))
+    {
+        return false;
+    }
+    let results = results.trim();
+    results.is_empty()
+        || split_top_level_commas(results)
+            .iter()
+            .all(|result| is_package_portable_go_type(result))
+}
+
+/// Track C — pointer/value receiver classification of a Go `contains` edge
+/// (`{"receiver":"pointer"}` / `{"receiver":"value"}` in `metadata_json`).
+/// Returns `true` only for an explicit pointer tag. Absent or malformed
+/// metadata and unrecognized values are treated as VALUE receivers
+/// (conservative-INCLUSIVE by the Track C contract: a value-receiver method
+/// belongs to BOTH method sets, so an untagged edge widens the value set for
+/// recall; pointer-only satisfaction still carries its explicit
+/// `receiver_set` marker whenever the extractor tags the edge).
+fn go_contains_receiver_is_pointer(metadata_json: Option<&str>) -> bool {
+    metadata_json
+        .and_then(|metadata| serde_json::from_str::<serde_json::Value>(metadata).ok())
+        .and_then(|value| {
+            value
+                .get("receiver")
+                .and_then(|receiver| receiver.as_str())
+                .map(str::to_string)
+        })
+        .is_some_and(|receiver| receiver == "pointer")
+}
+
+/// Track C — one required method of a Go interface: simple name, canonical
+/// signature, and the package dir of the interface that DECLARED the spec.
+/// An unexported requirement (lowercase first char) can only be satisfied by
+/// a type in that exact package — Go's package-visibility rule; keying by the
+/// DECLARING interface (not the interface being checked) means an unexported
+/// method inherited from an embedded foreign-package interface stays
+/// unsatisfiable outside its home package (prefer the false negative).
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct GoInterfaceRequirement {
+    method_name: String,
+    canonical_signature: String,
+    declaring_package: String,
+    /// Derived once from `canonical_signature` via
+    /// `canonical_go_signature_is_package_portable`: whether every type in the
+    /// signature means the same thing in EVERY package. A non-portable
+    /// requirement is only satisfiable by a type in `declaring_package` —
+    /// `pkga.Applier`'s `Apply(Config) error` must never match `pkgb`'s
+    /// textually identical method over a DIFFERENT `Config`.
+    package_portable: bool,
+}
+
+/// Track C — a Go interface or concrete named type participating in implicit
+/// implementation mining.
+struct GoNamedSymbol {
+    name: String,
+    file_path: String,
+    line: u32,
+    package_dir: String,
 }
 
 /// SQLite-backed symbol store
@@ -687,6 +1291,52 @@ pub struct SemanticAnchor {
 pub struct SemanticAnchorResult {
     pub anchor: SemanticAnchor,
     pub score: f32,
+    /// Track H — how many normalized query terms this row matched. `Some` only
+    /// for the term-based modes (`AllTerms`/`AnyTerms`); `None` in `Phrase`
+    /// mode, where term accounting does not apply.
+    #[serde(default)]
+    pub matched_terms: Option<usize>,
+    /// Track H — the total normalized term count the query produced (the
+    /// denominator of `matched_terms`). `None` in `Phrase` mode.
+    #[serde(default)]
+    pub total_terms: Option<usize>,
+}
+
+/// Track H — how a semantic-anchor query is interpreted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorQueryMode {
+    /// Exact contiguous substring of value/preview — today's historical
+    /// behavior and the delegate for `search_semantic_anchors`.
+    Phrase,
+    /// Every normalized whitespace-split term must match value OR preview.
+    AllTerms,
+    /// Any term may match; rows carry matched/total coverage and are ranked by
+    /// coverage-weighted score.
+    AnyTerms,
+}
+
+impl AnchorQueryMode {
+    /// Parse the wire name used by the tool layer. Unknown strings are `None`
+    /// so the caller can reject them explicitly instead of silently defaulting.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "phrase" => Some(Self::Phrase),
+            "all_terms" => Some(Self::AllTerms),
+            "any_terms" => Some(Self::AnyTerms),
+            _ => None,
+        }
+    }
+}
+
+/// Track H — the full result of a mode-aware anchor search. `empty_query`
+/// distinguishes "the query normalized to nothing" from a legitimate no-match:
+/// an empty phrase search must never look identical to zero matches.
+#[derive(Debug, Clone)]
+pub struct SemanticAnchorSearchOutcome {
+    pub results: Vec<SemanticAnchorResult>,
+    pub empty_query: bool,
+    pub mode: AnchorQueryMode,
+    pub total_terms: usize,
 }
 
 fn query_scoped_count(
@@ -1036,72 +1686,219 @@ impl SymbolStore {
         Ok(anchors.len())
     }
 
+    /// Historical single-phrase anchor search — delegates to
+    /// `search_semantic_anchors_mode` in `Phrase` mode so the ~20 existing
+    /// call sites keep their exact contiguous-substring semantics and shape.
     pub fn search_semantic_anchors(
         &self,
         query: &str,
         file_path: Option<&str>,
         limit: usize,
     ) -> Result<Vec<SemanticAnchorResult>, SymbolStoreError> {
+        Ok(self
+            .search_semantic_anchors_mode(query, file_path, limit, AnchorQueryMode::Phrase)?
+            .results)
+    }
+
+    /// Track H — mode-aware semantic-anchor search over `value`/`preview`.
+    ///
+    /// Two-stage design (review findings G+H): SQL is BROAD CANDIDATE
+    /// RETRIEVAL ONLY — OR-joined per-term LIKE patterns (original-case and
+    /// lowercased variants, metacharacters escaped via `ESCAPE '\'`, non-ASCII
+    /// degraded to wildcards — see `anchor_like_candidate_pattern`) with a
+    /// bounded overfetch. ALL mode semantics live in Rust over
+    /// Unicode-lowercased text, because SQL LIKE alone gets both edges wrong:
+    /// `_`/`%` in a query act as wildcards (AllTerms then OVERCLAIMS
+    /// `matched_terms`), and LIKE case-folds ASCII only (accented queries
+    /// false-empty against differently-cased values).
+    ///
+    /// * `Phrase`: the whole trimmed phrase must be a contiguous
+    ///   case-insensitive substring of value or preview.
+    /// * `AllTerms`: every normalized whitespace-split term must match —
+    ///   verified per term in Rust; `matched_terms` never exceeds what Rust
+    ///   verified.
+    /// * `AnyTerms`: at least one term matches; rows carry matched/total
+    ///   coverage and the final score is the phrase score weighted by
+    ///   `matched/total`.
+    ///
+    /// Results in every mode are scored and sorted in Rust (score descending,
+    /// deterministic location tie-break) and truncated to `limit`. An empty
+    /// trimmed query returns `empty_query = true` with no results — never
+    /// silently identical to a legitimate no-match.
+    ///
+    /// PERFORMANCE CAVEAT: every predicate is an unindexable `%…%` LIKE, so
+    /// each search is a full scan of `semantic_anchors`. Acceptable because
+    /// the table is small relative to `symbols` and the predicate count is
+    /// bounded: at most `ANCHOR_QUERY_MAX_TERMS` terms, at most two pattern
+    /// variants each (two LIKEs per variant).
+    pub fn search_semantic_anchors_mode(
+        &self,
+        query: &str,
+        file_path: Option<&str>,
+        limit: usize,
+        mode: AnchorQueryMode,
+    ) -> Result<SemanticAnchorSearchOutcome, SymbolStoreError> {
         let trimmed = query.trim();
-        if trimmed.is_empty() || limit == 0 {
-            return Ok(Vec::new());
+        if trimmed.is_empty() {
+            return Ok(SemanticAnchorSearchOutcome {
+                results: Vec::new(),
+                empty_query: true,
+                mode,
+                total_terms: 0,
+            });
         }
 
-        let query_pattern = format!("%{}%", trimmed);
-        let conn = self.conn.lock().unwrap();
-        let (sql, values) = if let Some(file_path) = file_path {
-            (
-                r#"
-                SELECT id, file_path, kind, value, line, character, preview, confidence,
-                       owner_symbol_id, target_file_path, target_name, target_symbol_id
-                FROM semantic_anchors
-                WHERE file_path = ?1 AND (value LIKE ?2 OR preview LIKE ?2)
-                ORDER BY CASE
-                    WHEN lower(value) = lower(?3) THEN 0
-                    WHEN lower(value) LIKE lower(?4) THEN 1
-                    ELSE 2
-                END, confidence DESC, file_path, line, character
-                LIMIT ?5
-                "#,
-                vec![
-                    Value::Text(file_path.to_string()),
-                    Value::Text(query_pattern.clone()),
-                    Value::Text(trimmed.to_string()),
-                    Value::Text(format!("{}%", trimmed)),
-                    Value::Integer(limit as i64),
-                ],
-            )
-        } else {
-            (
-                r#"
-                SELECT id, file_path, kind, value, line, character, preview, confidence,
-                       owner_symbol_id, target_file_path, target_name, target_symbol_id
-                FROM semantic_anchors
-                WHERE value LIKE ?1 OR preview LIKE ?1
-                ORDER BY CASE
-                    WHEN lower(value) = lower(?2) THEN 0
-                    WHEN lower(value) LIKE lower(?3) THEN 1
-                    ELSE 2
-                END, confidence DESC, file_path, line, character
-                LIMIT ?4
-                "#,
-                vec![
-                    Value::Text(query_pattern.clone()),
-                    Value::Text(trimmed.to_string()),
-                    Value::Text(format!("{}%", trimmed)),
-                    Value::Integer(limit as i64),
-                ],
-            )
+        // Normalize ONCE: whitespace-split terms kept as (original, Unicode-
+        // lowercase) pairs, deduped by the lowercase form in order, capped so
+        // the LIKE predicate count stays sane. Phrase mode reports a single
+        // "term" (the phrase itself).
+        let term_pairs: Vec<(String, String)> = {
+            let mut seen = HashSet::new();
+            trimmed
+                .split_whitespace()
+                .map(|raw| (raw.to_string(), raw.to_lowercase()))
+                .filter(|(_, lower)| seen.insert(lower.clone()))
+                .take(ANCHOR_QUERY_MAX_TERMS)
+                .collect()
         };
-        let mut stmt = conn.prepare(sql)?;
-        let anchors = stmt
-            .query_map(params_from_iter(values), |row| {
-                let anchor = row_to_semantic_anchor(row)?;
-                let score = semantic_anchor_score(&anchor, trimmed);
-                Ok(SemanticAnchorResult { anchor, score })
-            })?
+        let terms: Vec<&str> = term_pairs.iter().map(|(_, lower)| lower.as_str()).collect();
+        let total_terms = match mode {
+            AnchorQueryMode::Phrase => 1,
+            AnchorQueryMode::AllTerms | AnchorQueryMode::AnyTerms => terms.len(),
+        };
+        if limit == 0 {
+            return Ok(SemanticAnchorSearchOutcome {
+                results: Vec::new(),
+                empty_query: false,
+                mode,
+                total_terms,
+            });
+        }
+
+        // Build the WHERE clause: optional file scope + OR-joined candidate
+        // patterns for EVERY mode (Phrase containment implies each of its
+        // terms is contained, so per-term OR retrieval is a superset there
+        // too). Both case variants are included when they render differently.
+        let mut where_clauses = Vec::new();
+        let mut values = Vec::new();
+        if let Some(file_path) = file_path {
+            where_clauses.push("file_path = ?".to_string());
+            values.push(Value::Text(file_path.to_string()));
+        }
+        let mut like_clauses: Vec<&str> = Vec::new();
+        for (original, lower) in &term_pairs {
+            let mut patterns = vec![anchor_like_candidate_pattern(original)];
+            let lower_pattern = anchor_like_candidate_pattern(lower);
+            if lower_pattern != patterns[0] {
+                patterns.push(lower_pattern);
+            }
+            for pattern in patterns {
+                like_clauses.push(r#"(value LIKE ? ESCAPE '\' OR preview LIKE ? ESCAPE '\')"#);
+                values.push(Value::Text(pattern.clone()));
+                values.push(Value::Text(pattern));
+            }
+        }
+        where_clauses.push(format!("({})", like_clauses.join(" OR ")));
+
+        // The SQL stage no longer enforces mode semantics, so EVERY mode
+        // overfetches a bounded factor beyond the limit; the ORDER BY is only
+        // a bias toward likely-good candidates within that budget.
+        let fetch_limit = limit.saturating_mul(ANCHOR_CANDIDATE_OVERFETCH);
+        let sql = format!(
+            r#"
+            SELECT id, file_path, kind, value, line, character, preview, confidence,
+                   owner_symbol_id, target_file_path, target_name, target_symbol_id
+            FROM semantic_anchors
+            WHERE {where_clause}
+            ORDER BY CASE
+                WHEN lower(value) = ? THEN 0
+                WHEN lower(value) LIKE ? THEN 1
+                ELSE 2
+            END, confidence DESC, file_path, line, character
+            LIMIT ?
+            "#,
+            where_clause = where_clauses.join(" AND ")
+        );
+        let trimmed_lower = trimmed.to_lowercase();
+        values.push(Value::Text(trimmed_lower.clone()));
+        values.push(Value::Text(format!("{}%", trimmed_lower)));
+        values.push(Value::Integer(fetch_limit as i64));
+
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&sql)?;
+        let candidates = stmt
+            .query_map(params_from_iter(values), |row| row_to_semantic_anchor(row))?
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(anchors)
+        drop(stmt);
+        drop(conn);
+
+        // Mode semantics, verified in Rust over Unicode-lowercased text: the
+        // SQL candidates are a superset, and `matched_terms` reports ONLY what
+        // `str::contains` confirmed.
+        let mut results: Vec<SemanticAnchorResult> = Vec::new();
+        for anchor in candidates {
+            let value_lower = anchor.value.to_lowercase();
+            let preview_lower = anchor.preview.to_lowercase();
+            let matched = terms
+                .iter()
+                .filter(|term| value_lower.contains(*term) || preview_lower.contains(*term))
+                .count();
+            let (score, matched_terms, total) = match mode {
+                AnchorQueryMode::Phrase => {
+                    if !(value_lower.contains(&trimmed_lower)
+                        || preview_lower.contains(&trimmed_lower))
+                    {
+                        continue;
+                    }
+                    (semantic_anchor_score(&anchor, trimmed), None, None)
+                }
+                AnchorQueryMode::AllTerms => {
+                    if matched < terms.len() {
+                        continue;
+                    }
+                    (
+                        semantic_anchor_score(&anchor, trimmed),
+                        Some(matched),
+                        Some(terms.len()),
+                    )
+                }
+                AnchorQueryMode::AnyTerms => {
+                    if matched == 0 {
+                        continue;
+                    }
+                    let coverage = matched as f32 / terms.len().max(1) as f32;
+                    (
+                        semantic_anchor_score(&anchor, trimmed) * coverage,
+                        Some(matched),
+                        Some(terms.len()),
+                    )
+                }
+            };
+            results.push(SemanticAnchorResult {
+                anchor,
+                score,
+                matched_terms,
+                total_terms: total,
+            });
+        }
+
+        // Score decides in every mode; deterministic location tie-break.
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.anchor.file_path.cmp(&b.anchor.file_path))
+                .then_with(|| a.anchor.line.cmp(&b.anchor.line))
+                .then_with(|| a.anchor.character.cmp(&b.anchor.character))
+        });
+        results.truncate(limit);
+
+        Ok(SemanticAnchorSearchOutcome {
+            results,
+            empty_query: false,
+            mode,
+            total_terms,
+        })
     }
 
     pub fn get_semantic_anchors_in_file(
@@ -1498,31 +2295,34 @@ impl SymbolStore {
         Ok(())
     }
 
-    /// M2.4 — set-based relationship back-fill.
+    /// M2.4 — set-based relationship back-fill, kind-aware since Track D.
     ///
     /// Resolves `symbol_relationships.target_symbol_id` for rows that are still
     /// NULL by matching `target_name` against the GLOBAL symbol set, replacing
     /// the old per-reference `search_symbols_contextual` round-trips (the
     /// cold-index bottleneck: 81–97% of wall time). Target-driven: distinct
-    /// requested names are resolved once through a temp lookup table instead of
-    /// re-evaluating correlated subqueries per relationship row (see
-    /// `BUILD_UNIQUE_RELATIONSHIP_TARGETS_SQL` for the guard rationale).
+    /// requested `(name, relationship_type)` pairs are resolved once through a
+    /// temp lookup table instead of re-evaluating correlated subqueries per
+    /// relationship row (see `build_unique_relationship_targets_sql` for the
+    /// guard rationale).
     ///
     /// CORRECTNESS GUARD: a target is written ONLY when the name matches
-    /// EXACTLY ONE candidate symbol globally. An ambiguous name (`> 1` match)
-    /// is left NULL — a wrong `target_symbol_id` silently corrupts the
-    /// knowledge graph (symbol_trace / edit_impact). Already-resolved
-    /// (non-NULL) rows are never overwritten, and `import` edges are left to the
-    /// dedicated import canonicalization. Candidate symbols exclude `import`
-    /// placeholders and the synthetic `__file__` root, mirroring the in-memory
-    /// resolver's filter.
+    /// EXACTLY ONE candidate symbol of a kind the relationship may legally
+    /// reference (`RELATIONSHIP_TARGET_KIND_ALLOWLIST`). An ambiguous pair
+    /// (`> 1` legal match) is left NULL — a wrong `target_symbol_id` silently
+    /// corrupts the knowledge graph (symbol_trace / edit_impact). Already-
+    /// resolved (non-NULL) rows are never overwritten, `import` edges are left
+    /// to the dedicated import canonicalization, and kinds with no allowlist
+    /// row (`reads_env`, `export`) are never back-filled. Candidate symbols
+    /// exclude `import` placeholders, `heading` symbols (in no kind class),
+    /// and the synthetic `__file__` root.
     ///
     /// Idempotent: re-running only ever turns NULL into a unique match. Returns
     /// the number of rows newly resolved.
     pub fn backfill_unresolved_relationship_targets(&self) -> Result<usize, SymbolStoreError> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
-        tx.execute_batch(BUILD_UNIQUE_RELATIONSHIP_TARGETS_SQL)?;
+        tx.execute_batch(&build_unique_relationship_targets_sql())?;
         let resolved = tx.execute(BACKFILL_GLOBAL_UNIQUE_SQL, [])?;
         tx.execute_batch(DROP_UNIQUE_RELATIONSHIP_TARGETS_SQL)?;
         tx.commit()?;
@@ -1769,6 +2569,529 @@ impl SymbolStore {
             )?;
             for (rowid, target_id) in &resolved {
                 count += update.execute(params![target_id, rowid])?;
+            }
+        }
+        tx.commit()?;
+        Ok(count)
+    }
+
+    /// Track C — mine Go implicit interface implementations after the
+    /// workspace has been indexed.
+    ///
+    /// Go interfaces are satisfied implicitly, so no explicit `implements`
+    /// syntax can feed the graph. This derives `implements` edges by comparing
+    /// canonical, receiver-independent method signatures
+    /// (`canonical_go_method_signature`): a type `T` implements interface `I`
+    /// when every required `(name, canonical signature)` of `I` — its own
+    /// method specs plus requirements inherited through RESOLVED
+    /// embedded-interface `extends` edges (memoized closure, cycle + depth-256
+    /// guarded, modeled on `GlobalReceiverRegistry::resolve`) — is present in
+    /// `T`'s method set.
+    ///
+    /// Method sets follow Go's pointer/value rule: the VALUE set holds
+    /// value-receiver methods, the POINTER set holds all methods. When the
+    /// VALUE set satisfies, a plain edge is emitted; when only the POINTER set
+    /// satisfies, the edge carries `{"receiver_set":"pointer"}` in
+    /// `metadata_json`. A `contains` edge with NO receiver metadata is treated
+    /// as a value receiver (conservative-inclusive per the Track C contract —
+    /// see `go_contains_receiver_is_pointer`).
+    ///
+    /// Precision rules:
+    ///   * an unexported requirement (lowercase first char) only counts when
+    ///     the type's package dir equals the DECLARING interface's package dir;
+    ///   * a CROSS-PACKAGE requirement only counts when its canonical
+    ///     signature is PACKAGE-PORTABLE (universe/builtin, qualified, or
+    ///     composites thereof — `canonical_go_signature_is_package_portable`):
+    ///     canonical strings are compared as text, and a bare `Config` in two
+    ///     packages is two different types with identical text;
+    ///   * two same-NAMED interfaces satisfied by one type collide on the
+    ///     `(source, target_name, relationship_type, line)` PK — the schema
+    ///     cannot represent both edges, so the whole colliding group is
+    ///     skipped rather than silently clobbering one;
+    ///   * interfaces with ZERO method specs are skipped entirely — the empty
+    ///     interface matches every type, and a full `T implements interface{}`
+    ///     cross-product is pure graph noise;
+    ///   * an interface with an UNRESOLVED (or non-Go-interface) embed target
+    ///     is skipped entirely: its true requirement set includes methods we
+    ///     cannot see (an embedded `io.Reader`, a name-collision), so emitting
+    ///     from the partial set would be a confident false positive — the
+    ///     incompleteness propagates to every interface that embeds it;
+    ///   * a `contains` edge whose method symbol cannot be located unambiguously
+    ///     (resolved id, then unique `(file, name, line)`, then unique
+    ///     `(file, name)`) is dropped, never guessed.
+    ///
+    /// All reads are batched (no per-type/per-interface SQL); the model is
+    /// built in memory before the write transaction, under the same conn lock
+    /// (`mine_receiver_type_relationship_targets` is the template). Idempotent
+    /// recompute: one transaction DELETEs every prior
+    /// `resolution_strategy = 'go_implicit_interface'` projection, then inserts
+    /// the freshly derived set. Emitted edges: `source_symbol_id` = the type,
+    /// `target_name`/`target_symbol_id` = the interface, `line` = the type
+    /// declaration line, confidence 0.75 (below explicit-syntax languages).
+    /// Returns the number of rows actually inserted (PK-colliding groups are
+    /// excluded from both the writes and the count).
+    pub fn mine_go_interface_implementations(&self) -> Result<usize, SymbolStoreError> {
+        let mut conn = self.conn.lock().unwrap();
+
+        // (1) Go interfaces, sorted by id for deterministic edge order.
+        let mut interfaces: BTreeMap<String, GoNamedSymbol> = BTreeMap::new();
+        {
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT id, name, file_path, start_line
+                FROM symbols
+                WHERE symbol_type = 'interface' AND file_path LIKE '%.go'
+                "#,
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)? as u32,
+                ))
+            })?;
+            for row in rows {
+                let (id, name, file_path, line) = row?;
+                let package_dir = go_package_dir(&file_path).to_string();
+                interfaces.insert(
+                    id,
+                    GoNamedSymbol {
+                        name,
+                        file_path,
+                        line,
+                        package_dir,
+                    },
+                );
+            }
+        }
+        if interfaces.is_empty() {
+            // Still clear stale projections: a re-index may have removed the
+            // last Go interface, and the derived set must follow it.
+            let tx = conn.transaction()?;
+            tx.execute(
+                "DELETE FROM symbol_relationships WHERE resolution_strategy = 'go_implicit_interface'",
+                [],
+            )?;
+            tx.commit()?;
+            return Ok(0);
+        }
+
+        // (2) Interface METHOD SPECS: method children of Go interfaces, with
+        // signature text `(params) result` per the Track C extractor contract.
+        // Package-portability is computed ONCE per spec here (not per
+        // type×interface pair in the satisfaction loop).
+        let mut specs: HashMap<String, Vec<(String, String, bool)>> = HashMap::new();
+        {
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT m.parent_id, m.name, m.signature
+                FROM symbols m
+                JOIN symbols i ON m.parent_id = i.id
+                WHERE m.symbol_type = 'method'
+                  AND i.symbol_type = 'interface'
+                  AND i.file_path LIKE '%.go'
+                  AND m.name != ''
+                "#,
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })?;
+            for row in rows {
+                let (interface_id, method_name, signature) = row?;
+                let canonical =
+                    canonical_go_method_signature(&method_name, signature.as_deref().unwrap_or(""));
+                let package_portable = canonical_go_signature_is_package_portable(&canonical);
+                specs.entry(interface_id).or_default().push((
+                    method_name,
+                    canonical,
+                    package_portable,
+                ));
+            }
+        }
+
+        // (3) Embedded-interface links: `extends` edges whose SOURCE is a Go
+        // interface. A resolved target that is itself a Go interface becomes an
+        // embed link; a NULL or non-Go-interface target marks the source
+        // INCOMPLETE — its true requirement set includes methods we cannot see
+        // (e.g. an embedded `io.Reader`), so emitting `implements` from the
+        // partial set would be a false positive. Incompleteness propagates
+        // through the closure walk and such interfaces are skipped entirely.
+        let mut embeds: HashMap<String, Vec<String>> = HashMap::new();
+        let mut incomplete_interfaces: HashSet<String> = HashSet::new();
+        {
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT source_symbol_id, target_symbol_id
+                FROM symbol_relationships
+                WHERE relationship_type = 'extends'
+                "#,
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })?;
+            for row in rows {
+                let (source_id, target_id) = row?;
+                if !interfaces.contains_key(&source_id) {
+                    continue;
+                }
+                match target_id {
+                    Some(target_id)
+                        if target_id != source_id && interfaces.contains_key(&target_id) =>
+                    {
+                        embeds.entry(source_id).or_default().push(target_id);
+                    }
+                    Some(target_id) if target_id == source_id => {}
+                    // Unresolved or non-Go-interface embed target: the
+                    // requirement set is unknowable — never guess.
+                    _ => {
+                        incomplete_interfaces.insert(source_id);
+                    }
+                }
+            }
+        }
+
+        // (4) Concrete Go named types (struct + named type), sorted by id.
+        let mut types: BTreeMap<String, GoNamedSymbol> = BTreeMap::new();
+        {
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT id, name, file_path, start_line
+                FROM symbols
+                WHERE symbol_type IN ('struct', 'type') AND file_path LIKE '%.go'
+                "#,
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)? as u32,
+                ))
+            })?;
+            for row in rows {
+                let (id, name, file_path, line) = row?;
+                let package_dir = go_package_dir(&file_path).to_string();
+                types.insert(
+                    id,
+                    GoNamedSymbol {
+                        name,
+                        file_path,
+                        line,
+                        package_dir,
+                    },
+                );
+            }
+        }
+
+        // (5) Concrete Go method symbols (interface specs excluded via their
+        // interface parent), with the lookup maps the contains-edge resolution
+        // fallback chain needs: id, then (file, name, line), then (file, name).
+        let mut method_canonicals: HashMap<String, String> = HashMap::new();
+        let mut methods_by_location: HashMap<(String, String, u32), Vec<String>> = HashMap::new();
+        let mut methods_by_file_name: HashMap<(String, String), Vec<String>> = HashMap::new();
+        {
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT id, name, file_path, start_line, signature
+                FROM symbols
+                WHERE symbol_type = 'method'
+                  AND file_path LIKE '%.go'
+                  AND (parent_id IS NULL OR parent_id NOT IN (
+                        SELECT id FROM symbols WHERE symbol_type = 'interface'))
+                "#,
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)? as u32,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, name, file_path, line, signature) = row?;
+                let canonical =
+                    canonical_go_method_signature(&name, signature.as_deref().unwrap_or(""));
+                methods_by_location
+                    .entry((file_path.clone(), name.clone(), line))
+                    .or_default()
+                    .push(id.clone());
+                methods_by_file_name
+                    .entry((file_path, name))
+                    .or_default()
+                    .push(id.clone());
+                method_canonicals.insert(id, canonical);
+            }
+        }
+
+        // (6) Per-type method sets from Go `contains` edges. VALUE set =
+        // value-receiver methods; POINTER set = all methods. Canonical strings
+        // embed the method name, so the set element IS the (name, sig) identity.
+        let mut value_sets: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut pointer_sets: HashMap<String, HashSet<String>> = HashMap::new();
+        {
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT source_symbol_id, source_file_path, target_name,
+                       target_symbol_id, line, metadata_json
+                FROM symbol_relationships
+                WHERE relationship_type = 'contains' AND source_file_path LIKE '%.go'
+                "#,
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, i64>(4)? as u32,
+                    row.get::<_, Option<String>>(5)?,
+                ))
+            })?;
+            for row in rows {
+                let (type_id, source_file, method_name, target_id, line, metadata_json) = row?;
+                if !types.contains_key(&type_id) {
+                    continue;
+                }
+                // Resolution fallback chain: resolved target id, then unique
+                // (file, name, line), then unique (file, name); else drop.
+                let method_id = target_id
+                    .filter(|id| method_canonicals.contains_key(id))
+                    .or_else(|| {
+                        methods_by_location
+                            .get(&(source_file.clone(), method_name.clone(), line))
+                            .filter(|ids| ids.len() == 1)
+                            .map(|ids| ids[0].clone())
+                    })
+                    .or_else(|| {
+                        methods_by_file_name
+                            .get(&(source_file.clone(), method_name.clone()))
+                            .filter(|ids| ids.len() == 1)
+                            .map(|ids| ids[0].clone())
+                    });
+                let Some(method_id) = method_id else {
+                    continue;
+                };
+                let Some(canonical) = method_canonicals.get(&method_id) else {
+                    continue;
+                };
+                pointer_sets
+                    .entry(type_id.clone())
+                    .or_default()
+                    .insert(canonical.clone());
+                if !go_contains_receiver_is_pointer(metadata_json.as_deref()) {
+                    value_sets
+                        .entry(type_id)
+                        .or_default()
+                        .insert(canonical.clone());
+                }
+            }
+        }
+
+        // (7) Interface requirement closures: own specs plus requirements
+        // inherited through embeds. Memoized (a cached entry is always a
+        // COMPLETE closure with its completeness flag, so reusing it mid-walk
+        // is safe), cycle-guarded via the visited set, depth-capped at 256
+        // levels like `GlobalReceiverRegistry::resolve`. The closure is
+        // COMPLETE only when every reachable node is complete and the depth
+        // cap never tripped — anything else means unknowable requirements and
+        // the interface is skipped at emission (false negative over guessing).
+        let mut requirement_memo: HashMap<String, (Vec<GoInterfaceRequirement>, bool)> =
+            HashMap::new();
+        for interface_id in interfaces.keys() {
+            if requirement_memo.contains_key(interface_id) {
+                continue;
+            }
+            let mut requirements: HashSet<GoInterfaceRequirement> = HashSet::new();
+            let mut complete = true;
+            let mut visited: HashSet<&str> = HashSet::new();
+            visited.insert(interface_id);
+            let mut level: Vec<&str> = vec![interface_id];
+            let mut steps = 0usize;
+            while !level.is_empty() {
+                let mut next: Vec<&str> = Vec::new();
+                for node in &level {
+                    if *node != interface_id.as_str() {
+                        if let Some((cached, cached_complete)) = requirement_memo.get(*node) {
+                            requirements.extend(cached.iter().cloned());
+                            complete &= *cached_complete;
+                            continue;
+                        }
+                    }
+                    if incomplete_interfaces.contains(*node) {
+                        complete = false;
+                    }
+                    if let Some(own_specs) = specs.get(*node) {
+                        // `interfaces` holds every node the embed filter admitted.
+                        if let Some(declaring) = interfaces.get(*node) {
+                            for (method_name, canonical, package_portable) in own_specs {
+                                requirements.insert(GoInterfaceRequirement {
+                                    method_name: method_name.clone(),
+                                    canonical_signature: canonical.clone(),
+                                    declaring_package: declaring.package_dir.clone(),
+                                    package_portable: *package_portable,
+                                });
+                            }
+                        }
+                    }
+                    if let Some(children) = embeds.get(*node) {
+                        for child in children {
+                            if visited.insert(child) {
+                                next.push(child);
+                            }
+                        }
+                    }
+                }
+                level = next;
+                steps += 1;
+                if steps > 256 {
+                    // Depth cap tripped: the walk may have missed requirements.
+                    complete = false;
+                    break;
+                }
+            }
+            let mut closure: Vec<GoInterfaceRequirement> = requirements.into_iter().collect();
+            // Deterministic order so memo reuse and diagnostics are stable.
+            closure.sort_by(|a, b| {
+                a.method_name
+                    .cmp(&b.method_name)
+                    .then_with(|| a.canonical_signature.cmp(&b.canonical_signature))
+                    .then_with(|| a.declaring_package.cmp(&b.declaring_package))
+            });
+            requirement_memo.insert(interface_id.clone(), (closure, complete));
+        }
+
+        // (8) Satisfaction. One requirement is met when its canonical signature
+        // is in the method set AND — for an unexported name — the type lives in
+        // the requirement's declaring package AND — across packages — the
+        // signature is package-portable. Canonical strings are compared as
+        // TEXT: a bare `Config` in `pkga` and a bare `Config` in `pkgb` are
+        // different types with identical text, so cross-package equality is
+        // only trusted when every type in the signature is universe/builtin,
+        // qualified, or a composite of those (skip = false negative; emitting
+        // would be a compiler-false edge).
+        let requirement_satisfied = |requirement: &GoInterfaceRequirement,
+                                     method_set: &HashSet<String>,
+                                     type_package: &str| {
+            if !method_set.contains(&requirement.canonical_signature) {
+                return false;
+            }
+            let same_package = type_package == requirement.declaring_package;
+            let exported = requirement
+                .method_name
+                .chars()
+                .next()
+                .is_some_and(char::is_uppercase);
+            if !exported && !same_package {
+                return false;
+            }
+            same_package || requirement.package_portable
+        };
+
+        let empty_set: HashSet<String> = HashSet::new();
+        // (type_id, type_file, interface_name, interface_id, line, metadata).
+        let mut derived: Vec<(String, String, String, String, u32, Option<&'static str>)> =
+            Vec::new();
+        for (type_id, type_record) in &types {
+            let Some(pointer_set) = pointer_sets.get(type_id) else {
+                // No methods at all: cannot satisfy any non-empty interface.
+                continue;
+            };
+            let value_set = value_sets.get(type_id).unwrap_or(&empty_set);
+            for (interface_id, interface_record) in &interfaces {
+                let (requirements, complete) = &requirement_memo[interface_id];
+                if !complete {
+                    // The requirement set is unknowable (unresolved embed /
+                    // depth cap) — never emit from a partial set.
+                    continue;
+                }
+                if requirements.is_empty() {
+                    // Empty interface (`interface{}` and spec-less fixtures)
+                    // matches EVERY type — skipped entirely as pure noise.
+                    continue;
+                }
+                let value_satisfies = requirements.iter().all(|requirement| {
+                    requirement_satisfied(requirement, value_set, &type_record.package_dir)
+                });
+                let metadata = if value_satisfies {
+                    None
+                } else {
+                    let pointer_satisfies = requirements.iter().all(|requirement| {
+                        requirement_satisfied(requirement, pointer_set, &type_record.package_dir)
+                    });
+                    if !pointer_satisfies {
+                        continue;
+                    }
+                    Some(r#"{"receiver_set":"pointer"}"#)
+                };
+                derived.push((
+                    type_id.clone(),
+                    type_record.file_path.clone(),
+                    interface_record.name.clone(),
+                    interface_id.clone(),
+                    type_record.line,
+                    metadata,
+                ));
+            }
+        }
+
+        // (9a) PK-collision guard. The `symbol_relationships` PK is
+        // `(source_symbol_id, target_name, relationship_type, line)` — it has
+        // no room for the TARGET ID, so two same-NAMED interfaces (in
+        // different packages) satisfied by one type map to the SAME row and
+        // `INSERT OR REPLACE` would silently keep whichever came last while
+        // the return count claimed both. The schema cannot represent both
+        // edges, and clobbering one is a confident wrong answer, so when a PK
+        // key maps to more than one distinct target interface id the WHOLE
+        // group is skipped (conservative false negative, per the handoff
+        // invariant).
+        let mut pk_target_ids: HashMap<(&str, &str, u32), HashSet<&str>> = HashMap::new();
+        for (type_id, _, interface_name, interface_id, line, _) in &derived {
+            pk_target_ids
+                .entry((type_id.as_str(), interface_name.as_str(), *line))
+                .or_default()
+                .insert(interface_id.as_str());
+        }
+
+        // (9b) Idempotent recompute inside ONE transaction: drop every prior
+        // projection, insert the fresh (collision-free) set. `count` is the
+        // number of rows actually inserted, never the pre-dedup derived size.
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM symbol_relationships WHERE resolution_strategy = 'go_implicit_interface'",
+            [],
+        )?;
+        let mut count = 0usize;
+        {
+            let mut insert = tx.prepare_cached(
+                r#"
+                INSERT OR REPLACE INTO symbol_relationships
+                (source_symbol_id, source_file_path, target_name, target_symbol_id,
+                 relationship_type, line, resolution_strategy, confidence, metadata_json)
+                VALUES (?1, ?2, ?3, ?4, 'implements', ?5, 'go_implicit_interface', 0.75, ?6)
+                "#,
+            )?;
+            for (type_id, type_file, interface_name, interface_id, line, metadata) in &derived {
+                let colliding = pk_target_ids
+                    .get(&(type_id.as_str(), interface_name.as_str(), *line))
+                    .is_some_and(|targets| targets.len() > 1);
+                if colliding {
+                    continue;
+                }
+                count += insert.execute(params![
+                    type_id,
+                    type_file,
+                    interface_name,
+                    interface_id,
+                    line,
+                    metadata.as_deref(),
+                ])?;
             }
         }
         tx.commit()?;
@@ -3588,6 +4911,11 @@ mod tests {
 
     /// The pre-target-driven correlated statements, kept VERBATIM as the
     /// reference semantics for `target_driven_backfill_matches_legacy_correlated_backfill`.
+    /// NOTE: the legacy form is kind-UNAWARE. The fixture below is deliberately
+    /// kind-compatible (every resolvable edge is a `call` and every candidate a
+    /// `function`), so the legacy oracle still pins the uniqueness/exclusion
+    /// semantics; the Track D kind-aware divergences are covered by the
+    /// dedicated `kind_aware_backfill_*` tests.
     const LEGACY_BACKFILL_GLOBAL_UNIQUE_SQL: &str = r#"
 UPDATE symbol_relationships
 SET target_symbol_id = (
@@ -3799,7 +5127,10 @@ WHERE anchor.target_file_path IS NULL
 
         // Idempotent: a second run resolves nothing and changes nothing.
         let before = dump_relationship_resolutions(&current);
-        assert_eq!(current.backfill_unresolved_relationship_targets().unwrap(), 0);
+        assert_eq!(
+            current.backfill_unresolved_relationship_targets().unwrap(),
+            0
+        );
         assert_eq!(dump_relationship_resolutions(&current), before);
     }
 
@@ -5102,6 +6433,7 @@ WHERE anchor.target_file_path IS NULL
                     recv_self: true,
                     resolution_strategy: Some("receiver_type".to_string()),
                     confidence: Some(0.8),
+                    receiver_kind: None,
                 }],
             )
             .unwrap();
@@ -5344,5 +6676,1660 @@ WHERE anchor.target_file_path IS NULL
                 .unwrap(),
             Some(true)
         );
+    }
+
+    // ---- Track D — relationship-kind-aware global resolution ----
+    //
+    // The back-fill may only resolve a name to a symbol KIND the relationship
+    // can legally reference (`RELATIONSHIP_TARGET_KIND_ALLOWLIST`), and
+    // uniqueness is judged inside that kind class. A confidently-wrong target
+    // (a heading satisfying a call) is the exact bug class these guard against.
+
+    /// A still-NULL relationship of an arbitrary kind
+    /// (`create_test_relationship` is Call-only).
+    fn kind_relationship(
+        source_id: &str,
+        file: &str,
+        target: &str,
+        relationship_type: SymbolRelationshipType,
+    ) -> SymbolRelationship {
+        SymbolRelationship {
+            source_symbol_id: source_id.to_string(),
+            source_file_path: file.to_string(),
+            target_name: target.to_string(),
+            target_symbol_id: None,
+            relationship_type,
+            line: 3,
+            ..Default::default()
+        }
+    }
+
+    /// One edge's `(target_symbol_id, resolution_strategy, confidence)`,
+    /// keyed by relationship kind so same-target edges of different kinds
+    /// stay distinguishable.
+    fn edge_resolution_for_kind(
+        store: &SymbolStore,
+        source_id: &str,
+        target_name: &str,
+        relationship_type: SymbolRelationshipType,
+    ) -> (Option<String>, Option<String>, Option<f64>) {
+        let conn = store.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT target_symbol_id, resolution_strategy, confidence
+             FROM symbol_relationships
+             WHERE source_symbol_id = ?1 AND target_name = ?2 AND relationship_type = ?3",
+            params![source_id, target_name, relationship_type.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
+    }
+
+    /// Track D core scenario: a `call` observation of a name shared by a
+    /// METHOD and a Markdown HEADING resolves to the callable — the heading is
+    /// not a legal call target, so it neither wins nor makes the name
+    /// ambiguous. The `usage` observation of the same text stays NULL: neither
+    /// a method nor a heading is a legal value target.
+    #[test]
+    fn kind_aware_backfill_call_resolves_to_method_despite_same_named_heading() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                coverage_symbol(
+                    "m1",
+                    "ResolveModelWithFallbacks",
+                    "src/models.py",
+                    SymbolType::Method,
+                    None,
+                ),
+                coverage_symbol(
+                    "h1",
+                    "ResolveModelWithFallbacks",
+                    "docs/guide.md",
+                    SymbolType::Heading,
+                    None,
+                ),
+                create_test_symbol("caller", "caller.py"),
+            ])
+            .unwrap();
+        let caller_id = "caller.py::caller#function";
+        store
+            .replace_relationships_for_file(
+                "caller.py",
+                &[
+                    kind_relationship(
+                        caller_id,
+                        "caller.py",
+                        "ResolveModelWithFallbacks",
+                        SymbolRelationshipType::Call,
+                    ),
+                    kind_relationship(
+                        caller_id,
+                        "caller.py",
+                        "ResolveModelWithFallbacks",
+                        SymbolRelationshipType::Usage,
+                    ),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(store.backfill_unresolved_relationship_targets().unwrap(), 1);
+
+        let (target, strategy, confidence) = edge_resolution_for_kind(
+            &store,
+            caller_id,
+            "ResolveModelWithFallbacks",
+            SymbolRelationshipType::Call,
+        );
+        assert_eq!(
+            target.as_deref(),
+            Some("m1"),
+            "the call must resolve to the method — the heading must not poison uniqueness"
+        );
+        assert_eq!(strategy.as_deref(), Some("global_unique"));
+        assert_eq!(confidence, Some(0.5));
+
+        let (usage_target, usage_strategy, _) = edge_resolution_for_kind(
+            &store,
+            caller_id,
+            "ResolveModelWithFallbacks",
+            SymbolRelationshipType::Usage,
+        );
+        assert!(
+            usage_target.is_none(),
+            "no legal value candidate exists: a method/heading must not satisfy `usage`"
+        );
+        assert!(usage_strategy.is_none());
+    }
+
+    /// Release gate: a heading is in NO allowlist, so a name that only exists
+    /// as a Markdown heading never resolves any relationship kind.
+    #[test]
+    fn kind_aware_backfill_heading_is_never_a_target() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                coverage_symbol(
+                    "h1",
+                    "SetupGuide",
+                    "docs/setup.md",
+                    SymbolType::Heading,
+                    None,
+                ),
+                create_test_symbol("caller", "caller.py"),
+            ])
+            .unwrap();
+        let caller_id = "caller.py::caller#function";
+        store
+            .replace_relationships_for_file(
+                "caller.py",
+                &[
+                    kind_relationship(
+                        caller_id,
+                        "caller.py",
+                        "SetupGuide",
+                        SymbolRelationshipType::Call,
+                    ),
+                    kind_relationship(
+                        caller_id,
+                        "caller.py",
+                        "SetupGuide",
+                        SymbolRelationshipType::Usage,
+                    ),
+                    kind_relationship(
+                        caller_id,
+                        "caller.py",
+                        "SetupGuide",
+                        SymbolRelationshipType::UsesType,
+                    ),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(store.backfill_unresolved_relationship_targets().unwrap(), 0);
+        for relationship_type in [
+            SymbolRelationshipType::Call,
+            SymbolRelationshipType::Usage,
+            SymbolRelationshipType::UsesType,
+        ] {
+            let (target, strategy, _) =
+                edge_resolution_for_kind(&store, caller_id, "SetupGuide", relationship_type);
+            assert!(
+                target.is_none(),
+                "{relationship_type} resolved to a heading"
+            );
+            assert!(strategy.is_none());
+        }
+    }
+
+    /// Uniqueness is judged INSIDE the kind class: two legal value candidates
+    /// (a constant and a variable) keep `usage` ambiguous, while a unique
+    /// value candidate resolves. A `call` to the value-only name finds zero
+    /// legal candidates and also stays NULL.
+    #[test]
+    fn kind_aware_backfill_ambiguous_value_candidates_stay_unresolved() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                coverage_symbol("c1", "LIMIT", "a.rs", SymbolType::Constant, None),
+                coverage_symbol("v1", "LIMIT", "b.rs", SymbolType::Variable, None),
+                coverage_symbol("c2", "TIMEOUT", "a.rs", SymbolType::Constant, None),
+                create_test_symbol("caller", "caller.rs"),
+            ])
+            .unwrap();
+        let caller_id = "caller.rs::caller#function";
+        store
+            .replace_relationships_for_file(
+                "caller.rs",
+                &[
+                    kind_relationship(
+                        caller_id,
+                        "caller.rs",
+                        "LIMIT",
+                        SymbolRelationshipType::Usage,
+                    ),
+                    kind_relationship(
+                        caller_id,
+                        "caller.rs",
+                        "LIMIT",
+                        SymbolRelationshipType::Call,
+                    ),
+                    kind_relationship(
+                        caller_id,
+                        "caller.rs",
+                        "TIMEOUT",
+                        SymbolRelationshipType::Usage,
+                    ),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(store.backfill_unresolved_relationship_targets().unwrap(), 1);
+
+        let (ambiguous, _, _) =
+            edge_resolution_for_kind(&store, caller_id, "LIMIT", SymbolRelationshipType::Usage);
+        assert!(
+            ambiguous.is_none(),
+            "two legal value candidates must stay unresolved, got {ambiguous:?}"
+        );
+        let (call_target, _, _) =
+            edge_resolution_for_kind(&store, caller_id, "LIMIT", SymbolRelationshipType::Call);
+        assert!(
+            call_target.is_none(),
+            "a constant/variable is not a legal call target"
+        );
+        let (unique, strategy, confidence) =
+            edge_resolution_for_kind(&store, caller_id, "TIMEOUT", SymbolRelationshipType::Usage);
+        assert_eq!(unique.as_deref(), Some("c2"));
+        assert_eq!(strategy.as_deref(), Some("global_unique"));
+        assert_eq!(confidence, Some(0.5));
+    }
+
+    /// `import` stays excluded and the kinds without an allowlist row
+    /// (`export`, `reads_env`) are never back-filled — even when a unique
+    /// same-named symbol exists.
+    #[test]
+    fn kind_aware_backfill_leaves_import_export_reads_env_untouched() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                create_test_symbol("envHelper", "util.ts"),
+                create_test_symbol("caller", "caller.ts"),
+            ])
+            .unwrap();
+        let caller_id = "caller.ts::caller#function";
+        store
+            .replace_relationships_for_file(
+                "caller.ts",
+                &[
+                    kind_relationship(
+                        caller_id,
+                        "caller.ts",
+                        "envHelper",
+                        SymbolRelationshipType::Import,
+                    ),
+                    kind_relationship(
+                        caller_id,
+                        "caller.ts",
+                        "envHelper",
+                        SymbolRelationshipType::Export,
+                    ),
+                    kind_relationship(
+                        caller_id,
+                        "caller.ts",
+                        "envHelper",
+                        SymbolRelationshipType::ReadsEnv,
+                    ),
+                    kind_relationship(
+                        caller_id,
+                        "caller.ts",
+                        "envHelper",
+                        SymbolRelationshipType::Call,
+                    ),
+                ],
+            )
+            .unwrap();
+
+        // Only the call resolves; the excluded kinds stay untouched.
+        assert_eq!(store.backfill_unresolved_relationship_targets().unwrap(), 1);
+        for relationship_type in [
+            SymbolRelationshipType::Import,
+            SymbolRelationshipType::Export,
+            SymbolRelationshipType::ReadsEnv,
+        ] {
+            let (target, strategy, _) =
+                edge_resolution_for_kind(&store, caller_id, "envHelper", relationship_type);
+            assert!(
+                target.is_none(),
+                "{relationship_type} must never be back-filled"
+            );
+            assert!(strategy.is_none());
+        }
+        let (call_target, _, _) =
+            edge_resolution_for_kind(&store, caller_id, "envHelper", SymbolRelationshipType::Call);
+        assert_eq!(call_target.as_deref(), Some("util.ts::envHelper#function"));
+    }
+
+    // ---- Track C — Go implicit interface implementation mining ----
+    //
+    // These drive `mine_go_interface_implementations` over hand-built symbol
+    // and edge sets matching the Track C extractor contract (interface method
+    // specs as Method children with `(params) result` signatures; concrete
+    // methods linked from their receiver type by `contains` edges). Every
+    // deliberate exclusion is asserted — a confidently-wrong `implements`
+    // edge is the bug class these guard against.
+
+    /// A Go symbol with explicit kind, file, line, signature, and parent.
+    fn go_symbol(
+        id: &str,
+        name: &str,
+        symbol_type: SymbolType,
+        file: &str,
+        line: u32,
+        signature: Option<&str>,
+        parent_id: Option<&str>,
+    ) -> Symbol {
+        Symbol {
+            id: id.to_string(),
+            name: name.to_string(),
+            qualified_name: name.to_string(),
+            symbol_type,
+            file_path: file.to_string(),
+            range: Range {
+                start: Position { line, character: 0 },
+                end: Position {
+                    line: line + 2,
+                    character: 0,
+                },
+            },
+            byte_offset: 0,
+            byte_length: 0,
+            parent_id: parent_id.map(str::to_string),
+            docstring: None,
+            signature: signature.map(str::to_string),
+            content_hash: "hash".to_string(),
+        }
+    }
+
+    /// Raw relationship insert so tests control `metadata_json` exactly (the
+    /// public write path only serializes recv_type provenance).
+    fn insert_edge_raw(
+        store: &SymbolStore,
+        source_id: &str,
+        file: &str,
+        target_name: &str,
+        target_id: Option<&str>,
+        relationship_type: &str,
+        line: u32,
+        metadata_json: Option<&str>,
+    ) {
+        let conn = store.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO symbol_relationships
+             (source_symbol_id, source_file_path, target_name, target_symbol_id,
+              relationship_type, line, metadata_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                source_id,
+                file,
+                target_name,
+                target_id,
+                relationship_type,
+                line,
+                metadata_json
+            ],
+        )
+        .unwrap();
+    }
+
+    /// All mined `go_implicit_interface` edges as
+    /// `(source_symbol_id, target_name, target_symbol_id, line, metadata_json)`.
+    fn mined_go_edges(
+        store: &SymbolStore,
+    ) -> Vec<(String, String, Option<String>, i64, Option<String>)> {
+        let conn = store.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT source_symbol_id, target_name, target_symbol_id, line, metadata_json
+                 FROM symbol_relationships
+                 WHERE resolution_strategy = 'go_implicit_interface'
+                 ORDER BY source_symbol_id, target_name",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .unwrap();
+        rows.collect::<Result<Vec<_>, _>>().unwrap()
+    }
+
+    /// The handoff's Fixture 3 core: `Cache` embeds `Base` (RESOLVED extends),
+    /// `Memory` implements both, `Incomplete` only `Base`. Concrete methods
+    /// carry NAMED params; the interface specs are unnamed — the canonical
+    /// signature must bridge them.
+    fn seed_go_cache_fixture(store: &SymbolStore) {
+        store
+            .upsert_symbols(&[
+                go_symbol(
+                    "i_base",
+                    "Base",
+                    SymbolType::Interface,
+                    "cache/iface.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "i_base_ping",
+                    "Ping",
+                    SymbolType::Method,
+                    "cache/iface.go",
+                    2,
+                    Some("(context.Context) error"),
+                    Some("i_base"),
+                ),
+                go_symbol(
+                    "i_cache",
+                    "Cache",
+                    SymbolType::Interface,
+                    "cache/iface.go",
+                    5,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "i_cache_set",
+                    "Set",
+                    SymbolType::Method,
+                    "cache/iface.go",
+                    7,
+                    Some("(string, []byte) error"),
+                    Some("i_cache"),
+                ),
+                go_symbol(
+                    "t_memory",
+                    "Memory",
+                    SymbolType::Struct,
+                    "cache/memory.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "m_memory_ping",
+                    "Ping",
+                    SymbolType::Method,
+                    "cache/memory.go",
+                    3,
+                    Some("(ctx context.Context) error"),
+                    None,
+                ),
+                go_symbol(
+                    "m_memory_set",
+                    "Set",
+                    SymbolType::Method,
+                    "cache/memory.go",
+                    6,
+                    Some("(k string, v []byte) error"),
+                    None,
+                ),
+                go_symbol(
+                    "t_incomplete",
+                    "Incomplete",
+                    SymbolType::Struct,
+                    "cache/incomplete.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "m_incomplete_ping",
+                    "Ping",
+                    SymbolType::Method,
+                    "cache/incomplete.go",
+                    3,
+                    Some("(ctx context.Context) error"),
+                    None,
+                ),
+            ])
+            .unwrap();
+        // Cache embeds Base — a RESOLVED extends edge.
+        insert_edge_raw(
+            store,
+            "i_cache",
+            "cache/iface.go",
+            "Base",
+            Some("i_base"),
+            "extends",
+            6,
+            None,
+        );
+        // Receiver containment; absent metadata = value receiver.
+        insert_edge_raw(
+            store,
+            "t_memory",
+            "cache/memory.go",
+            "Ping",
+            Some("m_memory_ping"),
+            "contains",
+            3,
+            None,
+        );
+        insert_edge_raw(
+            store,
+            "t_memory",
+            "cache/memory.go",
+            "Set",
+            Some("m_memory_set"),
+            "contains",
+            6,
+            None,
+        );
+        insert_edge_raw(
+            store,
+            "t_incomplete",
+            "cache/incomplete.go",
+            "Ping",
+            Some("m_incomplete_ping"),
+            "contains",
+            3,
+            None,
+        );
+    }
+
+    /// Complete + incomplete implementations with embedded-interface
+    /// inheritance, plus the audit trail and idempotent recompute.
+    #[test]
+    fn go_mining_complete_and_incomplete_with_embedded_inheritance() {
+        let store = SymbolStore::in_memory().unwrap();
+        seed_go_cache_fixture(&store);
+
+        assert_eq!(store.mine_go_interface_implementations().unwrap(), 3);
+        let edges = mined_go_edges(&store);
+        let keys: Vec<(String, String)> = edges
+            .iter()
+            .map(|(source, target, ..)| (source.clone(), target.clone()))
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                ("t_incomplete".to_string(), "Base".to_string()),
+                ("t_memory".to_string(), "Base".to_string()),
+                ("t_memory".to_string(), "Cache".to_string()),
+            ],
+            "Memory implements Base+Cache; Incomplete implements Base ONLY"
+        );
+        for (_, target_name, target_id, line, metadata) in &edges {
+            assert!(
+                metadata.is_none(),
+                "value-set satisfaction carries no metadata"
+            );
+            assert_eq!(*line, 1, "edge line is the type declaration line");
+            match target_name.as_str() {
+                "Base" => assert_eq!(target_id.as_deref(), Some("i_base")),
+                "Cache" => assert_eq!(target_id.as_deref(), Some("i_cache")),
+                other => panic!("unexpected interface target {other}"),
+            }
+        }
+        {
+            let conn = store.conn.lock().unwrap();
+            let (strategy, confidence): (String, f64) = conn
+                .query_row(
+                    "SELECT resolution_strategy, confidence FROM symbol_relationships
+                     WHERE source_symbol_id = 't_memory' AND target_name = 'Cache'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(strategy, "go_implicit_interface");
+            assert_eq!(confidence, 0.75);
+        }
+
+        // Idempotent recompute: the same derived set, no duplicates.
+        assert_eq!(store.mine_go_interface_implementations().unwrap(), 3);
+        assert_eq!(mined_go_edges(&store).len(), 3);
+    }
+
+    /// Package visibility: an unexported spec (`load`) is satisfiable only by
+    /// a type in the interface's own package directory.
+    #[test]
+    fn go_mining_unexported_method_requires_same_package() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                go_symbol(
+                    "i_store",
+                    "Store",
+                    SymbolType::Interface,
+                    "pkga/iface.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "i_store_load",
+                    "load",
+                    SymbolType::Method,
+                    "pkga/iface.go",
+                    2,
+                    Some("() error"),
+                    Some("i_store"),
+                ),
+                go_symbol(
+                    "t_same",
+                    "SamePkg",
+                    SymbolType::Struct,
+                    "pkga/impl.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "m_same_load",
+                    "load",
+                    SymbolType::Method,
+                    "pkga/impl.go",
+                    3,
+                    Some("() error"),
+                    None,
+                ),
+                go_symbol(
+                    "t_other",
+                    "OtherPkg",
+                    SymbolType::Struct,
+                    "pkgb/impl.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "m_other_load",
+                    "load",
+                    SymbolType::Method,
+                    "pkgb/impl.go",
+                    3,
+                    Some("() error"),
+                    None,
+                ),
+            ])
+            .unwrap();
+        insert_edge_raw(
+            &store,
+            "t_same",
+            "pkga/impl.go",
+            "load",
+            Some("m_same_load"),
+            "contains",
+            3,
+            None,
+        );
+        insert_edge_raw(
+            &store,
+            "t_other",
+            "pkgb/impl.go",
+            "load",
+            Some("m_other_load"),
+            "contains",
+            3,
+            None,
+        );
+
+        assert_eq!(store.mine_go_interface_implementations().unwrap(), 1);
+        let edges = mined_go_edges(&store);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(
+            edges[0].0, "t_same",
+            "an unexported spec is only satisfiable from the interface's own package"
+        );
+    }
+
+    /// Pointer/value method sets: pointer-only satisfaction is emitted WITH
+    /// the `receiver_set` marker; value-receiver and untagged (= value,
+    /// conservative-inclusive) methods satisfy plainly.
+    #[test]
+    fn go_mining_pointer_only_satisfaction_is_tagged() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                go_symbol(
+                    "i_closer",
+                    "Closer",
+                    SymbolType::Interface,
+                    "io/iface.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "i_closer_close",
+                    "Close",
+                    SymbolType::Method,
+                    "io/iface.go",
+                    2,
+                    Some("() error"),
+                    Some("i_closer"),
+                ),
+                go_symbol(
+                    "t_ptr",
+                    "PtrCloser",
+                    SymbolType::Struct,
+                    "io/ptr.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "m_ptr_close",
+                    "Close",
+                    SymbolType::Method,
+                    "io/ptr.go",
+                    3,
+                    Some("() error"),
+                    None,
+                ),
+                go_symbol(
+                    "t_val",
+                    "ValCloser",
+                    SymbolType::Struct,
+                    "io/val.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "m_val_close",
+                    "Close",
+                    SymbolType::Method,
+                    "io/val.go",
+                    3,
+                    Some("() error"),
+                    None,
+                ),
+                go_symbol(
+                    "t_untagged",
+                    "UntaggedCloser",
+                    SymbolType::Struct,
+                    "io/untagged.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "m_untagged_close",
+                    "Close",
+                    SymbolType::Method,
+                    "io/untagged.go",
+                    3,
+                    Some("() error"),
+                    None,
+                ),
+            ])
+            .unwrap();
+        insert_edge_raw(
+            &store,
+            "t_ptr",
+            "io/ptr.go",
+            "Close",
+            Some("m_ptr_close"),
+            "contains",
+            3,
+            Some(r#"{"receiver":"pointer"}"#),
+        );
+        insert_edge_raw(
+            &store,
+            "t_val",
+            "io/val.go",
+            "Close",
+            Some("m_val_close"),
+            "contains",
+            3,
+            Some(r#"{"receiver":"value"}"#),
+        );
+        insert_edge_raw(
+            &store,
+            "t_untagged",
+            "io/untagged.go",
+            "Close",
+            Some("m_untagged_close"),
+            "contains",
+            3,
+            None,
+        );
+
+        assert_eq!(store.mine_go_interface_implementations().unwrap(), 3);
+        let edges = mined_go_edges(&store);
+        let metadata_by_source: HashMap<String, Option<String>> = edges
+            .into_iter()
+            .map(|(source, _, _, _, metadata)| (source, metadata))
+            .collect();
+        assert_eq!(
+            metadata_by_source["t_ptr"].as_deref(),
+            Some(r#"{"receiver_set":"pointer"}"#),
+            "pointer-only satisfaction must be tagged"
+        );
+        assert_eq!(metadata_by_source["t_val"], None);
+        assert_eq!(
+            metadata_by_source["t_untagged"], None,
+            "absent receiver metadata is treated as a value receiver"
+        );
+    }
+
+    /// Test-only fakes are ordinary Go types — `_test.go` files are retained.
+    #[test]
+    fn go_mining_retains_test_only_fakes() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                go_symbol(
+                    "i_pinger",
+                    "Pinger",
+                    SymbolType::Interface,
+                    "cache/iface.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "i_pinger_ping",
+                    "Ping",
+                    SymbolType::Method,
+                    "cache/iface.go",
+                    2,
+                    Some("() error"),
+                    Some("i_pinger"),
+                ),
+                go_symbol(
+                    "t_fake",
+                    "FakePinger",
+                    SymbolType::Struct,
+                    "cache/fake_test.go",
+                    4,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "m_fake_ping",
+                    "Ping",
+                    SymbolType::Method,
+                    "cache/fake_test.go",
+                    6,
+                    Some("() error"),
+                    None,
+                ),
+            ])
+            .unwrap();
+        insert_edge_raw(
+            &store,
+            "t_fake",
+            "cache/fake_test.go",
+            "Ping",
+            Some("m_fake_ping"),
+            "contains",
+            6,
+            None,
+        );
+
+        assert_eq!(store.mine_go_interface_implementations().unwrap(), 1);
+        let edges = mined_go_edges(&store);
+        assert_eq!(edges[0].0, "t_fake");
+        assert_eq!(edges[0].1, "Pinger");
+        assert_eq!(
+            edges[0].3, 4,
+            "edge line is the fake's type declaration line"
+        );
+    }
+
+    /// The empty interface matches EVERY type — deriving that cross-product
+    /// would be pure graph noise, so spec-less interfaces are skipped.
+    #[test]
+    fn go_mining_skips_empty_interfaces() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                go_symbol(
+                    "i_any",
+                    "Any",
+                    SymbolType::Interface,
+                    "pkg/iface.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "t_thing",
+                    "Thing",
+                    SymbolType::Struct,
+                    "pkg/thing.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "m_thing_run",
+                    "Run",
+                    SymbolType::Method,
+                    "pkg/thing.go",
+                    3,
+                    Some("() error"),
+                    None,
+                ),
+            ])
+            .unwrap();
+        insert_edge_raw(
+            &store,
+            "t_thing",
+            "pkg/thing.go",
+            "Run",
+            Some("m_thing_run"),
+            "contains",
+            3,
+            None,
+        );
+
+        assert_eq!(store.mine_go_interface_implementations().unwrap(), 0);
+        assert!(mined_go_edges(&store).is_empty());
+    }
+
+    /// An interface embedding an UNRESOLVED target (e.g. a library
+    /// `io.Reader`) has an unknowable requirement set — emitting from the
+    /// partial set would be a confident false positive, so it is skipped.
+    #[test]
+    fn go_mining_skips_interfaces_with_unresolved_embeds() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                go_symbol(
+                    "i_sub",
+                    "Sub",
+                    SymbolType::Interface,
+                    "pkg/iface.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "i_sub_ping",
+                    "Ping",
+                    SymbolType::Method,
+                    "pkg/iface.go",
+                    3,
+                    Some("() error"),
+                    Some("i_sub"),
+                ),
+                go_symbol(
+                    "t_impl",
+                    "Impl",
+                    SymbolType::Struct,
+                    "pkg/impl.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "m_impl_ping",
+                    "Ping",
+                    SymbolType::Method,
+                    "pkg/impl.go",
+                    3,
+                    Some("() error"),
+                    None,
+                ),
+            ])
+            .unwrap();
+        // Sub embeds a library interface the index cannot see: extends target
+        // is NULL (unresolved) — Sub's true requirements are unknowable.
+        insert_edge_raw(
+            &store,
+            "i_sub",
+            "pkg/iface.go",
+            "LibIface",
+            None,
+            "extends",
+            2,
+            None,
+        );
+        insert_edge_raw(
+            &store,
+            "t_impl",
+            "pkg/impl.go",
+            "Ping",
+            Some("m_impl_ping"),
+            "contains",
+            3,
+            None,
+        );
+
+        assert_eq!(
+            store.mine_go_interface_implementations().unwrap(),
+            0,
+            "a partial requirement set must never emit implements edges"
+        );
+        assert!(mined_go_edges(&store).is_empty());
+    }
+
+    /// The receiver-independent canonical signature: names and whitespace are
+    /// stripped, types kept; grouped params expand; receivers are skipped;
+    /// the method name participates in identity.
+    #[test]
+    fn canonical_go_signature_strips_names_and_receivers() {
+        assert_eq!(
+            canonical_go_method_signature("Ping", "(ctx context.Context) error"),
+            canonical_go_method_signature("Ping", "(context.Context) error")
+        );
+        // Grouped params expand: `(a, b string)` == `(x string, y string)`.
+        assert_eq!(
+            canonical_go_method_signature("Cmp", "(a, b string) int"),
+            canonical_go_method_signature("Cmp", "(x string, y string) int")
+        );
+        // A leading receiver group is skipped.
+        assert_eq!(
+            canonical_go_method_signature("Ping", "(m Memory) Ping(ctx context.Context) error"),
+            canonical_go_method_signature("Ping", "(context.Context) error")
+        );
+        // Parenthesized single result == bare result.
+        assert_eq!(
+            canonical_go_method_signature("Do", "() (error)"),
+            canonical_go_method_signature("Do", "() error")
+        );
+        // `chan`/`func` keyword types are never mistaken for names/receivers.
+        assert_eq!(
+            canonical_go_method_signature("Feed", "(chan int) func(int) error"),
+            canonical_go_method_signature("Feed", "(c chan int) func(int) error")
+        );
+        // Multi-value named results normalize like params.
+        assert_eq!(
+            canonical_go_method_signature("Read", "(p []byte) (n int, err error)"),
+            canonical_go_method_signature("Read", "([]byte) (int, error)")
+        );
+        // The method NAME participates in identity.
+        assert_ne!(
+            canonical_go_method_signature("Ping", "() error"),
+            canonical_go_method_signature("Pong", "() error")
+        );
+        // Different parameter types stay different.
+        assert_ne!(
+            canonical_go_method_signature("Set", "(string, []byte) error"),
+            canonical_go_method_signature("Set", "(string, string) error")
+        );
+    }
+
+    // ---- Track H — semantic-anchor query modes ----
+
+    /// Raw anchor insert so several files' anchors can accumulate without the
+    /// per-file replace semantics of `replace_semantic_anchors_for_file`.
+    fn insert_anchor_raw(store: &SymbolStore, id: &str, file: &str, value: &str, preview: &str) {
+        let conn = store.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO semantic_anchors
+             (id, file_path, kind, value, line, character, preview, confidence, indexed_at)
+             VALUES (?1, ?2, 'section_label', ?3, 10, 0, ?4, 0.9, 0)",
+            params![id, file, value, preview],
+        )
+        .unwrap();
+    }
+
+    /// A reversed-word-order query misses in Phrase mode but hits in AllTerms
+    /// mode with full coverage — the false-empty fix Track H exists for.
+    #[test]
+    fn anchor_all_terms_hits_where_phrase_misses() {
+        let store = SymbolStore::in_memory().unwrap();
+        insert_anchor_raw(
+            &store,
+            "an1",
+            "components/header.tsx",
+            "Mobile navigation",
+            "{/* Mobile navigation */}",
+        );
+
+        let phrase = store
+            .search_semantic_anchors_mode("navigation mobile", None, 10, AnchorQueryMode::Phrase)
+            .unwrap();
+        assert!(phrase.results.is_empty());
+        assert!(
+            !phrase.empty_query,
+            "a legitimate no-match is NOT an empty query"
+        );
+        assert_eq!(phrase.mode, AnchorQueryMode::Phrase);
+
+        let all = store
+            .search_semantic_anchors_mode("navigation mobile", None, 10, AnchorQueryMode::AllTerms)
+            .unwrap();
+        assert_eq!(all.results.len(), 1);
+        assert_eq!(all.results[0].anchor.id, "an1");
+        assert_eq!(all.results[0].matched_terms, Some(2));
+        assert_eq!(all.results[0].total_terms, Some(2));
+        assert_eq!(all.total_terms, 2);
+        assert_eq!(all.mode, AnchorQueryMode::AllTerms);
+
+        // AllTerms is still AND: a query with one non-matching term misses.
+        let miss = store
+            .search_semantic_anchors_mode(
+                "navigation zzz_absent",
+                None,
+                10,
+                AnchorQueryMode::AllTerms,
+            )
+            .unwrap();
+        assert!(miss.results.is_empty());
+        assert!(!miss.empty_query);
+    }
+
+    /// AnyTerms counts per-row coverage and ranks full-coverage rows above
+    /// partial ones (same confidence, so coverage decides).
+    #[test]
+    fn anchor_any_terms_counts_and_ranks_by_coverage() {
+        let store = SymbolStore::in_memory().unwrap();
+        insert_anchor_raw(&store, "an_full", "a.tsx", "Mobile navigation icons", "p");
+        insert_anchor_raw(&store, "an_partial", "b.tsx", "Desktop navigation", "p");
+
+        let any = store
+            .search_semantic_anchors_mode(
+                "mobile navigation icons",
+                None,
+                10,
+                AnchorQueryMode::AnyTerms,
+            )
+            .unwrap();
+        assert_eq!(any.total_terms, 3);
+        assert_eq!(any.results.len(), 2);
+        assert_eq!(any.results[0].anchor.id, "an_full");
+        assert_eq!(any.results[0].matched_terms, Some(3));
+        assert_eq!(any.results[0].total_terms, Some(3));
+        assert_eq!(any.results[1].anchor.id, "an_partial");
+        assert_eq!(any.results[1].matched_terms, Some(1));
+        assert!(
+            any.results[0].score > any.results[1].score,
+            "full coverage must outrank partial coverage"
+        );
+    }
+
+    /// An empty (or whitespace-only) query is FLAGGED, in every mode — never
+    /// silently identical to a legitimate no-match.
+    #[test]
+    fn anchor_empty_query_is_flagged_never_a_silent_no_match() {
+        let store = SymbolStore::in_memory().unwrap();
+        insert_anchor_raw(&store, "an1", "a.tsx", "Right side actions", "p");
+
+        for mode in [
+            AnchorQueryMode::Phrase,
+            AnchorQueryMode::AllTerms,
+            AnchorQueryMode::AnyTerms,
+        ] {
+            let outcome = store
+                .search_semantic_anchors_mode("   ", None, 10, mode)
+                .unwrap();
+            assert!(outcome.empty_query, "{mode:?} must flag the empty query");
+            assert!(outcome.results.is_empty());
+            assert_eq!(outcome.total_terms, 0);
+        }
+
+        let miss = store
+            .search_semantic_anchors_mode("zzz_not_here", None, 10, AnchorQueryMode::Phrase)
+            .unwrap();
+        assert!(!miss.empty_query);
+        assert!(miss.results.is_empty());
+    }
+
+    /// The legacy entry point keeps its exact Phrase behavior and shape; the
+    /// new per-result term fields stay `None` there.
+    #[test]
+    fn anchor_legacy_search_delegates_to_phrase_mode() {
+        let store = SymbolStore::in_memory().unwrap();
+        insert_anchor_raw(&store, "an1", "a.tsx", "Mobile navigation", "p");
+
+        let results = store
+            .search_semantic_anchors("Mobile navigation", None, 10)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].anchor.id, "an1");
+        assert_eq!(results[0].matched_terms, None);
+        assert_eq!(results[0].total_terms, None);
+
+        assert!(store
+            .search_semantic_anchors("", None, 10)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn anchor_query_mode_parse_accepts_wire_names_only() {
+        assert_eq!(
+            AnchorQueryMode::parse("phrase"),
+            Some(AnchorQueryMode::Phrase)
+        );
+        assert_eq!(
+            AnchorQueryMode::parse("all_terms"),
+            Some(AnchorQueryMode::AllTerms)
+        );
+        assert_eq!(
+            AnchorQueryMode::parse("any_terms"),
+            Some(AnchorQueryMode::AnyTerms)
+        );
+        assert_eq!(AnchorQueryMode::parse("fuzzy"), None);
+        assert_eq!(AnchorQueryMode::parse(""), None);
+    }
+
+    /// Review finding G — LIKE metacharacters in a query term are LITERAL:
+    /// `foo_bar` must not wildcard-match a `foo-bar` value, and
+    /// `matched_terms` must never exceed what Rust literally verified.
+    #[test]
+    fn anchor_all_terms_underscore_is_literal_not_wildcard() {
+        let store = SymbolStore::in_memory().unwrap();
+        insert_anchor_raw(&store, "an_underscore", "a.css", "token foo_bar", "p");
+        insert_anchor_raw(&store, "an_dash", "b.css", "token foo-bar", "p");
+
+        let all = store
+            .search_semantic_anchors_mode("foo_bar", None, 10, AnchorQueryMode::AllTerms)
+            .unwrap();
+        assert_eq!(all.results.len(), 1, "the dash variant must NOT match");
+        assert_eq!(all.results[0].anchor.id, "an_underscore");
+        assert_eq!(all.results[0].matched_terms, Some(1));
+
+        // AnyTerms on the dash row: only the literal `token` term matched —
+        // the old SQL-counted path would have overclaimed 2.
+        let any = store
+            .search_semantic_anchors_mode("foo_bar token", None, 10, AnchorQueryMode::AnyTerms)
+            .unwrap();
+        let dash = any
+            .results
+            .iter()
+            .find(|result| result.anchor.id == "an_dash")
+            .expect("dash row matches via its `token` term");
+        assert_eq!(dash.matched_terms, Some(1));
+        let underscore = any
+            .results
+            .iter()
+            .find(|result| result.anchor.id == "an_underscore")
+            .expect("underscore row matches both terms");
+        assert_eq!(underscore.matched_terms, Some(2));
+    }
+
+    /// Review finding H — SQLite LIKE case-folds ASCII ONLY, so accented
+    /// queries used to false-empty against values differing only in the case
+    /// of a non-ASCII letter. Rust's Unicode-lowercased verification (fed by
+    /// wildcard-degraded candidate patterns) must match both directions.
+    #[test]
+    fn anchor_accented_terms_match_across_unicode_case() {
+        let store = SymbolStore::in_memory().unwrap();
+        insert_anchor_raw(&store, "an_upper", "a.tsx", "CAFÉ menu", "p");
+
+        for mode in [
+            AnchorQueryMode::Phrase,
+            AnchorQueryMode::AllTerms,
+            AnchorQueryMode::AnyTerms,
+        ] {
+            let outcome = store
+                .search_semantic_anchors_mode("café", None, 10, mode)
+                .unwrap();
+            assert_eq!(
+                outcome.results.len(),
+                1,
+                "{mode:?} must match CAFÉ with query café"
+            );
+            assert_eq!(outcome.results[0].anchor.id, "an_upper");
+        }
+
+        // The reverse direction: uppercase accented query, lowercase value.
+        insert_anchor_raw(&store, "an_lower", "b.tsx", "menú día", "p");
+        let all = store
+            .search_semantic_anchors_mode("MENÚ DÍA", None, 10, AnchorQueryMode::AllTerms)
+            .unwrap();
+        assert_eq!(all.results.len(), 1);
+        assert_eq!(all.results[0].anchor.id, "an_lower");
+        assert_eq!(all.results[0].matched_terms, Some(2));
+    }
+
+    /// Review finding E — the `usage` allowlist must include
+    /// `css_custom_property`: a `var(--token)` usage edge targeting a
+    /// globally-unique design token in ANOTHER stylesheet resolved under the
+    /// old kind-blind back-fill and must keep resolving.
+    #[test]
+    fn usage_backfill_resolves_css_custom_property_targets() {
+        let store = SymbolStore::in_memory().unwrap();
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute_batch(
+                r#"
+                INSERT INTO symbols (id, name, qualified_name, symbol_type, file_path,
+                                     start_line, start_char, end_line, end_char, indexed_at)
+                VALUES
+                    ('s_token', '--accent', 'tokens.css:--accent', 'css_custom_property', 'tokens.css', 3, 0, 3, 0, 0);
+
+                INSERT INTO symbol_relationships
+                    (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line)
+                VALUES
+                    ('r_button', 'button.css', '--accent', NULL, 'usage', 12);
+                "#,
+            )
+            .unwrap();
+        }
+
+        assert_eq!(store.backfill_unresolved_relationship_targets().unwrap(), 1);
+        let conn = store.conn.lock().unwrap();
+        let (target, strategy): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT target_symbol_id, resolution_strategy FROM symbol_relationships
+                 WHERE source_symbol_id = 'r_button'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(target.as_deref(), Some("s_token"));
+        assert_eq!(strategy.as_deref(), Some("global_unique"));
+    }
+
+    /// Review finding D — the `symbol_relationships` PK
+    /// `(source_symbol_id, target_name, relationship_type, line)` cannot hold
+    /// two same-NAMED interfaces satisfied by one type; the whole colliding
+    /// PK group must be skipped (false negative over a silent clobber) and
+    /// the return value must count the rows actually inserted.
+    #[test]
+    fn go_mining_same_named_interface_collision_skips_group_and_counts_inserts() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                go_symbol(
+                    "i_store_a",
+                    "Store",
+                    SymbolType::Interface,
+                    "pkga/iface.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "i_store_a_ping",
+                    "Ping",
+                    SymbolType::Method,
+                    "pkga/iface.go",
+                    2,
+                    Some("() error"),
+                    Some("i_store_a"),
+                ),
+                go_symbol(
+                    "i_store_b",
+                    "Store",
+                    SymbolType::Interface,
+                    "pkgb/iface.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "i_store_b_ping",
+                    "Ping",
+                    SymbolType::Method,
+                    "pkgb/iface.go",
+                    2,
+                    Some("() error"),
+                    Some("i_store_b"),
+                ),
+                // Control pair: DISTINCT names — both edges must be emitted.
+                go_symbol(
+                    "i_alpha",
+                    "Alpha",
+                    SymbolType::Interface,
+                    "pkgd/iface.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "i_alpha_ping",
+                    "Ping",
+                    SymbolType::Method,
+                    "pkgd/iface.go",
+                    2,
+                    Some("() error"),
+                    Some("i_alpha"),
+                ),
+                go_symbol(
+                    "i_beta",
+                    "Beta",
+                    SymbolType::Interface,
+                    "pkge/iface.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "i_beta_ping",
+                    "Ping",
+                    SymbolType::Method,
+                    "pkge/iface.go",
+                    2,
+                    Some("() error"),
+                    Some("i_beta"),
+                ),
+                go_symbol(
+                    "t_impl",
+                    "Impl",
+                    SymbolType::Struct,
+                    "pkgc/impl.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "m_impl_ping",
+                    "Ping",
+                    SymbolType::Method,
+                    "pkgc/impl.go",
+                    3,
+                    Some("() error"),
+                    None,
+                ),
+            ])
+            .unwrap();
+        insert_edge_raw(
+            &store,
+            "t_impl",
+            "pkgc/impl.go",
+            "Ping",
+            Some("m_impl_ping"),
+            "contains",
+            3,
+            None,
+        );
+
+        // Impl satisfies all four interfaces (exported, package-portable
+        // `Ping() error`), but the two named `Store` collide on the PK
+        // `(t_impl, 'Store', 'implements', 1)` — the schema cannot represent
+        // both, so BOTH are skipped and the count reflects only real inserts.
+        assert_eq!(store.mine_go_interface_implementations().unwrap(), 2);
+        let edges = mined_go_edges(&store);
+        let keys: Vec<(String, String, Option<String>)> = edges
+            .iter()
+            .map(|(source, target, target_id, ..)| {
+                (source.clone(), target.clone(), target_id.clone())
+            })
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                (
+                    "t_impl".to_string(),
+                    "Alpha".to_string(),
+                    Some("i_alpha".to_string())
+                ),
+                (
+                    "t_impl".to_string(),
+                    "Beta".to_string(),
+                    Some("i_beta".to_string())
+                ),
+            ],
+            "zero implements edges for the colliding (type, 'Store') pair; \
+             the distinct-name control pair emits both"
+        );
+    }
+
+    /// Review finding F — canonical Go signatures are compared as TEXT, so a
+    /// bare non-universe identifier (`Config`) only proves a match inside the
+    /// declaring package. Cross-package satisfaction requires every type in
+    /// the signature to be package-portable; same-package comparison is
+    /// unchanged.
+    #[test]
+    fn go_mining_cross_package_requires_package_portable_signature() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[
+                go_symbol(
+                    "i_applier",
+                    "Applier",
+                    SymbolType::Interface,
+                    "pkga/iface.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "i_applier_apply",
+                    "Apply",
+                    SymbolType::Method,
+                    "pkga/iface.go",
+                    2,
+                    Some("(Config) error"),
+                    Some("i_applier"),
+                ),
+                go_symbol(
+                    "i_pinger",
+                    "Pinger",
+                    SymbolType::Interface,
+                    "pkga/iface.go",
+                    5,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "i_pinger_ping",
+                    "Ping",
+                    SymbolType::Method,
+                    "pkga/iface.go",
+                    6,
+                    Some("(string) error"),
+                    Some("i_pinger"),
+                ),
+                // Same-package implementer: its bare `Config` IS pkga's.
+                go_symbol(
+                    "t_local",
+                    "LocalApplier",
+                    SymbolType::Struct,
+                    "pkga/impl.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "m_local_apply",
+                    "Apply",
+                    SymbolType::Method,
+                    "pkga/impl.go",
+                    3,
+                    Some("(c Config) error"),
+                    None,
+                ),
+                // Cross-package implementer: ITS `Config` is pkgb's DIFFERENT
+                // type — the canonical strings match textually only.
+                go_symbol(
+                    "t_remote",
+                    "RemoteApplier",
+                    SymbolType::Struct,
+                    "pkgb/impl.go",
+                    1,
+                    None,
+                    None,
+                ),
+                go_symbol(
+                    "m_remote_apply",
+                    "Apply",
+                    SymbolType::Method,
+                    "pkgb/impl.go",
+                    3,
+                    Some("(c Config) error"),
+                    None,
+                ),
+                go_symbol(
+                    "m_remote_ping",
+                    "Ping",
+                    SymbolType::Method,
+                    "pkgb/impl.go",
+                    6,
+                    Some("(s string) error"),
+                    None,
+                ),
+            ])
+            .unwrap();
+        insert_edge_raw(
+            &store,
+            "t_local",
+            "pkga/impl.go",
+            "Apply",
+            Some("m_local_apply"),
+            "contains",
+            3,
+            None,
+        );
+        insert_edge_raw(
+            &store,
+            "t_remote",
+            "pkgb/impl.go",
+            "Apply",
+            Some("m_remote_apply"),
+            "contains",
+            3,
+            None,
+        );
+        insert_edge_raw(
+            &store,
+            "t_remote",
+            "pkgb/impl.go",
+            "Ping",
+            Some("m_remote_ping"),
+            "contains",
+            6,
+            None,
+        );
+
+        assert_eq!(store.mine_go_interface_implementations().unwrap(), 2);
+        let edges = mined_go_edges(&store);
+        let keys: Vec<(String, String)> = edges
+            .iter()
+            .map(|(source, target, ..)| (source.clone(), target.clone()))
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                ("t_local".to_string(), "Applier".to_string()),
+                ("t_remote".to_string(), "Pinger".to_string()),
+            ],
+            "same-package non-portable matches; cross-package builtin-only \
+             matches; cross-package `Config` must NOT emit an edge"
+        );
+    }
+
+    /// The package-portability classifier itself, over signatures built by
+    /// `canonical_go_method_signature` (the exact strings satisfaction sees).
+    #[test]
+    fn go_package_portable_signature_classification() {
+        let canonical = canonical_go_method_signature;
+        // Universe/builtin, qualified, and composites thereof are portable.
+        assert!(canonical_go_signature_is_package_portable(&canonical(
+            "Ping", "() error"
+        )));
+        assert!(canonical_go_signature_is_package_portable(&canonical(
+            "Get",
+            "(k string, v []byte) (int, error)"
+        )));
+        assert!(canonical_go_signature_is_package_portable(&canonical(
+            "Watch",
+            "(ctx context.Context, m map[string][]int64) error"
+        )));
+        assert!(canonical_go_signature_is_package_portable(&canonical(
+            "Feed",
+            "(c chan int, p *string, rest ...float64) error"
+        )));
+        assert!(canonical_go_signature_is_package_portable(&canonical(
+            "Fixed",
+            "(b [4]byte) error"
+        )));
+        // Bare non-universe identifiers resolve per-package: NOT portable.
+        assert!(!canonical_go_signature_is_package_portable(&canonical(
+            "Apply",
+            "(Config) error"
+        )));
+        assert!(!canonical_go_signature_is_package_portable(&canonical(
+            "Load",
+            "(b [n]byte) error"
+        )));
+        assert!(!canonical_go_signature_is_package_portable(&canonical(
+            "Merge",
+            "(m map[string]Config) error"
+        )));
     }
 }

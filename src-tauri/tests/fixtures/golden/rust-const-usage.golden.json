@@ -1,0 +1,179 @@
+{
+  "case": "rust-const-usage",
+  "language": "Rust",
+  "parse_status": "ok",
+  "symbol_count": 10,
+  "relationship_count": 8,
+  "symbols": [
+    {
+      "name": "WORKFLOW_TEXT",
+      "kind": "constant",
+      "qualified_name": "WORKFLOW_TEXT",
+      "start_line": 3,
+      "start_col": 0,
+      "end_line": 3,
+      "end_col": 39,
+      "parent_qualified_name": null,
+      "docstring": "! edges; lexical shadows (param, let, loop binding, match arm) suppress them.",
+      "signature": null
+    },
+    {
+      "name": "RETRY_LIMIT",
+      "kind": "constant",
+      "qualified_name": "RETRY_LIMIT",
+      "start_line": 4,
+      "start_col": 0,
+      "end_line": 4,
+      "end_col": 29,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "consume",
+      "kind": "function",
+      "qualified_name": "consume",
+      "start_line": 6,
+      "start_col": 0,
+      "end_line": 6,
+      "end_col": 41,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "(_text: &str, _limit: usize)"
+    },
+    {
+      "name": "direct_use",
+      "kind": "function",
+      "qualified_name": "direct_use",
+      "start_line": 9,
+      "start_col": 0,
+      "end_line": 11,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "Direct value reference — Usage edge to WORKFLOW_TEXT.",
+      "signature": "() &'static str"
+    },
+    {
+      "name": "call_argument_use",
+      "kind": "function",
+      "qualified_name": "call_argument_use",
+      "start_line": 14,
+      "start_col": 0,
+      "end_line": 16,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "Call-argument references — Usage edges to both constants.",
+      "signature": "()"
+    },
+    {
+      "name": "closure_use",
+      "kind": "function",
+      "qualified_name": "closure_use",
+      "start_line": 19,
+      "start_col": 0,
+      "end_line": 22,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "Reference inside a closure body — Usage edge to RETRY_LIMIT.",
+      "signature": "() usize"
+    },
+    {
+      "name": "param_shadow",
+      "kind": "function",
+      "qualified_name": "param_shadow",
+      "start_line": 26,
+      "start_col": 0,
+      "end_line": 28,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "reference must NOT emit a Usage edge.",
+      "signature": "(WORKFLOW_TEXT: &str) &str"
+    },
+    {
+      "name": "let_shadow",
+      "kind": "function",
+      "qualified_name": "let_shadow",
+      "start_line": 32,
+      "start_col": 0,
+      "end_line": 35,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "(Usage edge), the reference after the `let` does not.",
+      "signature": "() usize"
+    },
+    {
+      "name": "loop_binding_shadow",
+      "kind": "function",
+      "qualified_name": "loop_binding_shadow",
+      "start_line": 39,
+      "start_col": 0,
+      "end_line": 45,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "constant.",
+      "signature": "() usize"
+    },
+    {
+      "name": "match_arm_shadow",
+      "kind": "function",
+      "qualified_name": "match_arm_shadow",
+      "start_line": 49,
+      "start_col": 0,
+      "end_line": 54,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "reference must NOT resolve to the constant. The scrutinee still does.",
+      "signature": "(value: usize) usize"
+    }
+  ],
+  "relationships": [
+    {
+      "relationship_type": "usage",
+      "source_qualified_name": "direct_use",
+      "target_name": "WORKFLOW_TEXT",
+      "line": 10
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "call_argument_use",
+      "target_name": "consume",
+      "line": 15
+    },
+    {
+      "relationship_type": "usage",
+      "source_qualified_name": "call_argument_use",
+      "target_name": "RETRY_LIMIT",
+      "line": 15
+    },
+    {
+      "relationship_type": "usage",
+      "source_qualified_name": "call_argument_use",
+      "target_name": "WORKFLOW_TEXT",
+      "line": 15
+    },
+    {
+      "relationship_type": "usage",
+      "source_qualified_name": "closure_use",
+      "target_name": "RETRY_LIMIT",
+      "line": 20
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "closure_use",
+      "target_name": "add",
+      "line": 21
+    },
+    {
+      "relationship_type": "usage",
+      "source_qualified_name": "let_shadow",
+      "target_name": "RETRY_LIMIT",
+      "line": 33
+    },
+    {
+      "relationship_type": "usage",
+      "source_qualified_name": "match_arm_shadow",
+      "target_name": "RETRY_LIMIT",
+      "line": 50
+    }
+  ]
+}

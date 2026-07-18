@@ -47,6 +47,33 @@ pub struct IndexedCorpus {
 /// M0.1 DoD reconciliation needs those per-stage timers, we drive the cold index
 /// through `index_directory("")` — the documented fallback, which indexes the
 /// root. For a fresh DB this produces an identical cold index of `root`.
+/// Recursively copy the fixture tree at `src` into `dst`.
+///
+/// Integration tests must never index a fixture directory inside the repo
+/// (CARGO_MANIFEST_DIR) directly — the corpus is copied into a fresh `TempDir`
+/// workspace first and indexed by RELATIVE path, mirroring the
+/// `write_symbol_fixture` pattern in `language_service::service` tests.
+// Per-binary dead-code convention: every file under tests/ compiles this
+// module into its own binary; only symbol_ranking uses this helper.
+#[allow(dead_code)]
+pub fn copy_dir_recursive(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst)
+        .unwrap_or_else(|error| panic!("failed to create {}: {error}", dst.display()));
+    let entries = std::fs::read_dir(src)
+        .unwrap_or_else(|error| panic!("failed to read fixture dir {}: {error}", src.display()));
+    for entry in entries {
+        let entry = entry.expect("read fixture dir entry");
+        let target = dst.join(entry.file_name());
+        if entry.file_type().expect("fixture entry file type").is_dir() {
+            copy_dir_recursive(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).unwrap_or_else(|error| {
+                panic!("failed to copy fixture {}: {error}", entry.path().display())
+            });
+        }
+    }
+}
+
 pub fn index_corpus(root: &Path) -> IndexedCorpus {
     let db_tmp = TempDir::new().expect("create temp dir for cold symbol db");
     let db_path = db_tmp.path().join("symbols.db");

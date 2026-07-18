@@ -1,0 +1,10 @@
+{
+  "top_venues": {
+    "title": "Melhores locais",
+    "subtitle": "Locais em destaque na sua cidade"
+  },
+  "i18n": {
+    "locale": "pt-BR",
+    "location_picker": "Escolher local"
+  }
+}

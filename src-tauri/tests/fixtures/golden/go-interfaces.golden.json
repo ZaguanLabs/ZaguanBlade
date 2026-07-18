@@ -1,0 +1,263 @@
+{
+  "case": "go-interfaces",
+  "language": "Go",
+  "parse_status": "ok",
+  "symbol_count": 15,
+  "relationship_count": 12,
+  "symbols": [
+    {
+      "name": "context",
+      "kind": "import",
+      "qualified_name": "context",
+      "start_line": 5,
+      "start_col": 7,
+      "end_line": 5,
+      "end_col": 16,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": null
+    },
+    {
+      "name": "Base",
+      "kind": "interface",
+      "qualified_name": "Base",
+      "start_line": 8,
+      "start_col": 5,
+      "end_line": 10,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "Base is embedded by Cache below.",
+      "signature": null
+    },
+    {
+      "name": "Ping",
+      "kind": "method",
+      "qualified_name": "Base.Ping",
+      "start_line": 9,
+      "start_col": 1,
+      "end_line": 9,
+      "end_col": 32,
+      "parent_qualified_name": "Base",
+      "docstring": null,
+      "signature": "(ctx context.Context) error"
+    },
+    {
+      "name": "Cache",
+      "kind": "interface",
+      "qualified_name": "Cache",
+      "start_line": 13,
+      "start_col": 5,
+      "end_line": 17,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "Cache embeds Base and adds two method specs of its own.",
+      "signature": null
+    },
+    {
+      "name": "Get",
+      "kind": "method",
+      "qualified_name": "Cache.Get",
+      "start_line": 15,
+      "start_col": 1,
+      "end_line": 15,
+      "end_col": 31,
+      "parent_qualified_name": "Cache",
+      "docstring": null,
+      "signature": "(key string) ([]byte, bool)"
+    },
+    {
+      "name": "Set",
+      "kind": "method",
+      "qualified_name": "Cache.Set",
+      "start_line": 16,
+      "start_col": 1,
+      "end_line": 16,
+      "end_col": 36,
+      "parent_qualified_name": "Cache",
+      "docstring": null,
+      "signature": "(key string, value []byte) error"
+    },
+    {
+      "name": "MemoryCache",
+      "kind": "struct",
+      "qualified_name": "MemoryCache",
+      "start_line": 20,
+      "start_col": 5,
+      "end_line": 22,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "MemoryCache is a complete implementation using pointer receivers.",
+      "signature": null
+    },
+    {
+      "name": "Ping",
+      "kind": "method",
+      "qualified_name": "Ping",
+      "start_line": 24,
+      "start_col": 0,
+      "end_line": 24,
+      "end_col": 68,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "(ctx context.Context) error"
+    },
+    {
+      "name": "Get",
+      "kind": "method",
+      "qualified_name": "Get",
+      "start_line": 26,
+      "start_col": 0,
+      "end_line": 29,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "(key string) ([]byte, bool)"
+    },
+    {
+      "name": "Set",
+      "kind": "method",
+      "qualified_name": "Set",
+      "start_line": 31,
+      "start_col": 0,
+      "end_line": 34,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "(key string, value []byte) error"
+    },
+    {
+      "name": "ReadOnlyCache",
+      "kind": "struct",
+      "qualified_name": "ReadOnlyCache",
+      "start_line": 37,
+      "start_col": 5,
+      "end_line": 37,
+      "end_col": 27,
+      "parent_qualified_name": null,
+      "docstring": "ReadOnlyCache is deliberately incomplete: it never defines Set.",
+      "signature": null
+    },
+    {
+      "name": "Ping",
+      "kind": "method",
+      "qualified_name": "Ping",
+      "start_line": 39,
+      "start_col": 0,
+      "end_line": 39,
+      "end_col": 69,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "(ctx context.Context) error"
+    },
+    {
+      "name": "Get",
+      "kind": "method",
+      "qualified_name": "Get",
+      "start_line": 41,
+      "start_col": 0,
+      "end_line": 41,
+      "end_col": 75,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "(key string) ([]byte, bool)"
+    },
+    {
+      "name": "NullCache",
+      "kind": "struct",
+      "qualified_name": "NullCache",
+      "start_line": 44,
+      "start_col": 5,
+      "end_line": 44,
+      "end_col": 23,
+      "parent_qualified_name": null,
+      "docstring": "NullCache satisfies only the embedded Base interface, via a value receiver.",
+      "signature": null
+    },
+    {
+      "name": "Ping",
+      "kind": "method",
+      "qualified_name": "Ping",
+      "start_line": 46,
+      "start_col": 0,
+      "end_line": 46,
+      "end_col": 65,
+      "parent_qualified_name": null,
+      "docstring": null,
+      "signature": "(ctx context.Context) error"
+    }
+  ],
+  "relationships": [
+    {
+      "relationship_type": "import",
+      "source_qualified_name": "context",
+      "target_name": "context",
+      "line": 5
+    },
+    {
+      "relationship_type": "uses_type",
+      "source_qualified_name": "Base.Ping",
+      "target_name": "Context",
+      "line": 9
+    },
+    {
+      "relationship_type": "extends",
+      "source_qualified_name": "Cache",
+      "target_name": "Base",
+      "line": 13
+    },
+    {
+      "relationship_type": "contains",
+      "source_qualified_name": "MemoryCache",
+      "target_name": "Ping",
+      "line": 24
+    },
+    {
+      "relationship_type": "uses_type",
+      "source_qualified_name": "Ping",
+      "target_name": "Context",
+      "line": 24
+    },
+    {
+      "relationship_type": "contains",
+      "source_qualified_name": "MemoryCache",
+      "target_name": "Get",
+      "line": 26
+    },
+    {
+      "relationship_type": "contains",
+      "source_qualified_name": "MemoryCache",
+      "target_name": "Set",
+      "line": 31
+    },
+    {
+      "relationship_type": "contains",
+      "source_qualified_name": "ReadOnlyCache",
+      "target_name": "Ping",
+      "line": 39
+    },
+    {
+      "relationship_type": "uses_type",
+      "source_qualified_name": "Ping",
+      "target_name": "Context",
+      "line": 39
+    },
+    {
+      "relationship_type": "contains",
+      "source_qualified_name": "ReadOnlyCache",
+      "target_name": "Get",
+      "line": 41
+    },
+    {
+      "relationship_type": "contains",
+      "source_qualified_name": "NullCache",
+      "target_name": "Ping",
+      "line": 46
+    },
+    {
+      "relationship_type": "uses_type",
+      "source_qualified_name": "Ping",
+      "target_name": "Context",
+      "line": 46
+    }
+  ]
+}

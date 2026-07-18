@@ -1,0 +1,77 @@
+{
+  "case": "tsx-components",
+  "language": "Tsx",
+  "parse_status": "ok",
+  "symbol_count": 2,
+  "relationship_count": 7,
+  "symbols": [
+    {
+      "name": "Header",
+      "kind": "function",
+      "qualified_name": "Header",
+      "start_line": 2,
+      "start_col": 0,
+      "end_line": 15,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "PascalCase JSX elements are call observations; native/lowercase tags are not.",
+      "signature": "()"
+    },
+    {
+      "name": "Settings",
+      "kind": "function",
+      "qualified_name": "Settings",
+      "start_line": 18,
+      "start_col": 0,
+      "end_line": 26,
+      "end_col": 1,
+      "parent_qualified_name": null,
+      "docstring": "Section: settings body",
+      "signature": "()"
+    }
+  ],
+  "relationships": [
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "Header",
+      "target_name": "LanguageSwitcher",
+      "line": 5
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "Header",
+      "target_name": "RegionSelector",
+      "line": 6
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "Header",
+      "target_name": "ModeToggle",
+      "line": 7
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "Header",
+      "target_name": "Trigger",
+      "line": 8
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "Settings",
+      "target_name": "LanguageSwitcher",
+      "line": 21
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "Settings",
+      "target_name": "RegionSelector",
+      "line": 22
+    },
+    {
+      "relationship_type": "call",
+      "source_qualified_name": "Settings",
+      "target_name": "ModeToggle",
+      "line": 23
+    }
+  ]
+}

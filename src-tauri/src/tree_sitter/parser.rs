@@ -153,7 +153,8 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["ts"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::TypeScript),
         support: SupportLevel::Full,
-        extractor_version: 2,
+        // v3: Track A JSX component-call extraction (TS family shares the spec).
+        extractor_version: 3,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -162,7 +163,8 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["tsx"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::Tsx),
         support: SupportLevel::Full,
-        extractor_version: 2,
+        // v3: Track A JSX component-call extraction.
+        extractor_version: 3,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -173,7 +175,8 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
             target: Language::Tsx,
         },
         support: SupportLevel::Partial,
-        extractor_version: 2,
+        // v3: Track A JSX component-call extraction (projects through Tsx).
+        extractor_version: 3,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -182,7 +185,8 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["js", "mjs", "cjs"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::JavaScript),
         support: SupportLevel::Full,
-        extractor_version: 2,
+        // v3: Track A JSX component-call extraction.
+        extractor_version: 3,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -191,7 +195,8 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["jsx"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::JavaScript),
         support: SupportLevel::Full,
-        extractor_version: 2,
+        // v3: Track A JSX component-call extraction.
+        extractor_version: 3,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -209,7 +214,8 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["rs"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::Rust),
         support: SupportLevel::Full,
-        extractor_version: 2,
+        // v3: Track B file-local constant `usage` edges.
+        extractor_version: 3,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -218,7 +224,8 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["go"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::Go),
         support: SupportLevel::Full,
-        extractor_version: 2,
+        // v3: Track C interface method specs, interface embedding, receiver kinds.
+        extractor_version: 3,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {

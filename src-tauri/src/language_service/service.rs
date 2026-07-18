@@ -12,6 +12,7 @@ use std::sync::{mpsc, Arc, RwLock};
 use crate::buffer_snapshot::{BufferSnapshot, BufferSnapshotSource, BufferSnapshotStore};
 use crate::gitignore_filter::GitignoreFilter;
 use crate::project_settings;
+use crate::symbol_index::store::{AnchorQueryMode, SemanticAnchorSearchOutcome};
 use crate::symbol_index::{
     FileIndexRecord, FileRelationshipRecord, ModuleRelationshipAggregate,
     RelationshipIntegrityStats, RelationshipObservationKind, SearchQuery, SearchResult,
@@ -937,6 +938,88 @@ impl From<crate::symbol_index::store::SymbolStoreError> for LanguageError {
     }
 }
 
+/// Track F — the relationship kinds each language's extractor emits
+/// observations for AT ALL (observational coverage).
+///
+/// A kind's presence in a list means "this extractor produces SOME edges of
+/// this kind" — it is explicitly NOT a claim of exhaustive coverage. Known
+/// gaps exist inside listed kinds: Rust `call` does not see calls buried in
+/// macro token trees, and Rust `usage` (Track B) covers only FILE-LOCAL
+/// constant references, not cross-file ones. Because listed kinds can still
+/// miss real edges, the tools layer treats an EMPTY relationship result for a
+/// listed kind as `partial_coverage` — evidence of absence is never claimed
+/// from these lists alone.
+///
+/// Release-gate honesty metadata consumed by empty-result trust reporting: an
+/// empty reference set for a kind a language never models must read as "not
+/// modelled", never as "unused". Each list is derived from the extraction code,
+/// not aspiration:
+/// - `call`: the unified relationship walk for every full grammar (TS family
+///   including JSX component elements, Python, Rust including macro
+///   invocations, Go);
+/// - `import`: derived from extracted Import symbols (all full grammars);
+/// - `uses_type` / `reads_env`: the M4.1/M4.2 concerns of the shared walk (all
+///   full grammars);
+/// - structural: TS family `extends` + `implements`; Python `extends` (class
+///   bases); Rust `implements` (`impl Trait for Type`) plus `usage` (Track B
+///   file-local constant references); Go `contains` (receiver→method) and
+///   `extends` (struct embedding) plus `implements` (Track C post-index
+///   implicit-interface mining);
+/// - `handles`: requires route detection, which only Python and the TS family
+///   support.
+///
+/// Languages whose capability declares `relationships: false` (C/C++ is
+/// definitions-only, Markdown and every scanner language extract no edges)
+/// honestly model NOTHING — the empty list. A language that later gains
+/// `relationships: true` without an audited entry below also reports the empty
+/// list (prefer the false negative over claiming unverified coverage).
+pub fn modelled_relationship_kinds(language: Language) -> &'static [&'static str] {
+    if !language.capability().extracts.relationships {
+        return &[];
+    }
+    match language {
+        Language::TypeScript
+        | Language::Tsx
+        | Language::Astro
+        | Language::JavaScript
+        | Language::Jsx => &[
+            "call",
+            "import",
+            "extends",
+            "implements",
+            "uses_type",
+            "reads_env",
+            "handles",
+        ],
+        Language::Python => &[
+            "call",
+            "import",
+            "extends",
+            "uses_type",
+            "reads_env",
+            "handles",
+        ],
+        Language::Rust => &[
+            "call",
+            "import",
+            "implements",
+            "usage",
+            "uses_type",
+            "reads_env",
+        ],
+        Language::Go => &[
+            "call",
+            "import",
+            "contains",
+            "extends",
+            "implements",
+            "uses_type",
+            "reads_env",
+        ],
+        _ => &[],
+    }
+}
+
 impl LanguageService {
     /// Create a new language service for a workspace
     pub fn new(
@@ -1635,6 +1718,16 @@ impl LanguageService {
                 // touches edges the prior two passes left NULL.
                 self.symbol_store
                     .mine_receiver_type_relationship_targets()?;
+
+                health.message = "Mining Go interface implementations...".to_string();
+                self.set_index_health(health.clone());
+                progress(&health);
+
+                // Track C — derive implicit Go interface satisfaction (`implements`
+                // edges) from the fully-committed global method sets. Go has no
+                // explicit `implements` syntax, so this post-index mining pass is
+                // the only source of those edges.
+                self.symbol_store.mine_go_interface_implementations()?;
                 self.symbol_store.resolve_semantic_anchor_targets(None)?;
             }
         }
@@ -2416,6 +2509,12 @@ impl LanguageService {
         // M2.4 — incremental single-file reindex resolves edges same-file/imported
         // only; the global-unique back-fill is deferred to the next full reindex
         // so its COUNT(*) stays truly global (not "unique among files seen so far").
+        //
+        // Track C — but mined Go `implements` edges MUST be re-derived here:
+        // `replace_file_index` deletes relationships by source_file_path, which
+        // wipes this file's types' mined implicit-interface edges, and nothing
+        // else re-mines them before the next full workspace index.
+        self.remine_go_interface_implementations_after_single_file_index(file_path);
         let db_write_ms = db_write_start.elapsed().as_millis() as u64;
 
         // Update cache
@@ -2922,6 +3021,9 @@ impl LanguageService {
             // the GLOBAL receiver-type registry (runs after the back-fill).
             self.symbol_store
                 .mine_receiver_type_relationship_targets()?;
+            // Track C — derive implicit Go interface satisfaction (`implements`
+            // edges) from the committed global method sets.
+            self.symbol_store.mine_go_interface_implementations()?;
             self.symbol_store.resolve_semantic_anchor_targets(None)?;
         }
 
@@ -3199,6 +3301,24 @@ impl LanguageService {
         Ok(self
             .symbol_store
             .search_semantic_anchors(query, file_path, limit)?)
+    }
+
+    /// Track H — mode-aware anchor search (`phrase` / `all_terms` / `any_terms`)
+    /// with outcome metadata, so an empty phrase search is distinguishable from
+    /// "no term matched". Same freshness pre-step as `search_semantic_anchors`.
+    pub fn search_semantic_anchors_mode(
+        &self,
+        query: &str,
+        file_path: Option<&str>,
+        limit: usize,
+        mode: AnchorQueryMode,
+    ) -> Result<SemanticAnchorSearchOutcome, LanguageError> {
+        if let Some(path) = file_path {
+            self.ensure_file_fresh(path)?;
+        }
+        Ok(self
+            .symbol_store
+            .search_semantic_anchors_mode(query, file_path, limit, mode)?)
     }
 
     pub fn get_file_semantic_anchors(
@@ -4611,6 +4731,11 @@ impl LanguageService {
         // M2.4 — incremental single-file path: no global-unique back-fill here;
         // edges resolve same-file/imported and are globally back-filled on the
         // next full reindex (keeps the back-fill's COUNT(*) truly global).
+        //
+        // Track C — mined Go `implements` edges are re-derived, though: the
+        // replace above deletes them by source_file_path (see
+        // `remine_go_interface_implementations_after_single_file_index`).
+        self.remine_go_interface_implementations_after_single_file_index(file_path);
         self.symbol_store
             .mark_file_indexed_with_metadata_and_extractor_version(
                 file_path,
@@ -4636,6 +4761,34 @@ impl LanguageService {
         }
 
         Ok(symbols)
+    }
+
+    /// Track C — re-mine Go implicit-interface `implements` edges after a
+    /// SINGLE-FILE index commit of a Go file.
+    ///
+    /// Every single-file commit path (`replace_file_index` in
+    /// `index_file_with_timings`, `replace_relationships_for_file` in
+    /// `index_file_content`) deletes the file's relationships by
+    /// source_file_path — including the mined `go_implicit_interface` edges of
+    /// the types defined in that file. Only the full workspace index re-mines,
+    /// so without this call a single-file re-index silently drops those edges
+    /// until the next full index.
+    ///
+    /// Gated on the `.go` extension so every other language pays one string
+    /// check. A mining failure must NEVER fail the index operation: the index
+    /// commit already succeeded, so log and degrade (the edges stay absent
+    /// until the next full index — the pre-existing behavior).
+    fn remine_go_interface_implementations_after_single_file_index(&self, file_path: &str) {
+        if !file_path.ends_with(".go") {
+            return;
+        }
+        if let Err(error) = self.symbol_store.mine_go_interface_implementations() {
+            eprintln!(
+                "[LanguageService] Go interface re-mining after indexing {} failed \
+                 (implements edges may be stale until the next full index): {}",
+                file_path, error
+            );
+        }
     }
 
     fn snapshot_key(&self, file_path: &str) -> String {
@@ -7099,6 +7252,11 @@ fn extract_semantic_anchors(file_path: &str, content: &str) -> Vec<SemanticAncho
         return anchors;
     }
 
+    extract_jsx_section_label_anchors(file_path, content, &mut anchors, &mut seen, limit);
+    if anchors.len() >= limit {
+        return anchors;
+    }
+
     // M5.14 — the generic quoted-literal / token scan below only adds value on
     // front-end, style and markup files, where string literals and tokens are
     // genuine cross-references (routes, CSS custom properties, event/command/
@@ -7211,6 +7369,101 @@ fn extract_rationale_anchors(
             limit,
         );
     }
+}
+
+/// Track H — index standalone single-line JSX section comments
+/// (`{/* Mobile navigation */}`) as `section_label` anchors, so a known-file
+/// query can land on precise internal lines even when a 600-line React
+/// component is structurally one function. The TRIMMED line must be exactly ONE
+/// such comment (nothing else on the line) — an inline/trailing comment next to
+/// JSX is not a section boundary, so it is skipped (prefer the false negative).
+/// Section labels are semantic evidence, NEVER structural graph edges:
+/// `target_name`/`target_file_path` stay `None`, which also keeps them out of
+/// the anchor-target backfill (it keys on `target_name`).
+///
+/// Template-literal guard (HEURISTIC, false-negative direction): a
+/// `{/* ... */}` line INSIDE a backtick template literal (e.g. a test fixture
+/// embedding JSX source as a string) is data, not a section boundary. We track
+/// the running parity of unescaped backticks in the preceding content and skip
+/// candidate lines while the parity is odd. A stray backtick in ordinary code
+/// can therefore suppress later labels (acceptable false negative), but
+/// template-literal contents can never mint an anchor.
+fn extract_jsx_section_label_anchors(
+    file_path: &str,
+    content: &str,
+    anchors: &mut Vec<SemanticAnchor>,
+    seen: &mut HashSet<(String, String, u32, u32)>,
+    limit: usize,
+) {
+    if !jsx_section_label_scan_applies(file_path) {
+        return;
+    }
+
+    let mut inside_template_literal = false;
+    for (line_index, line) in content.lines().enumerate() {
+        if anchors.len() >= limit {
+            return;
+        }
+        // Parity as of the START of this line decides whether the line is
+        // template-literal data; the line's own backticks flip the parity for
+        // the lines after it.
+        let started_inside_template_literal = inside_template_literal;
+        if count_unescaped_backticks(line) % 2 == 1 {
+            inside_template_literal = !inside_template_literal;
+        }
+        if started_inside_template_literal {
+            continue;
+        }
+        let trimmed = line.trim();
+        let Some(inner) = trimmed
+            .strip_prefix("{/*")
+            .and_then(|rest| rest.strip_suffix("*/}"))
+        else {
+            continue;
+        };
+        // An embedded comment boundary means the line is NOT one single comment
+        // (e.g. `{/* a */}{/* b */}`) — skip rather than mint a garbled label.
+        if inner.contains("*/") || inner.contains("/*") {
+            continue;
+        }
+        let label = inner.trim();
+        if label.is_empty() || label.chars().count() > 120 {
+            continue;
+        }
+        // Column of the opening `{` (byte offset, matching the other extractors).
+        let character = (line.len() - line.trim_start().len()) as u32;
+        push_semantic_anchor(
+            anchors,
+            seen,
+            file_path,
+            "section_label",
+            label,
+            line_index as u32,
+            character,
+            label.chars().take(240).collect::<String>(),
+            0.9,
+            limit,
+        );
+    }
+}
+
+/// Count backticks on a line that are not escaped by a preceding odd run of
+/// backslashes. Used for the cheap template-literal parity heuristic in
+/// `extract_jsx_section_label_anchors`.
+fn count_unescaped_backticks(line: &str) -> usize {
+    let mut count = 0usize;
+    let mut backslash_run = 0usize;
+    for character in line.chars() {
+        if character == '\\' {
+            backslash_run += 1;
+            continue;
+        }
+        if character == '`' && backslash_run % 2 == 0 {
+            count += 1;
+        }
+        backslash_run = 0;
+    }
+    count
 }
 
 fn extract_markdown_document_anchors(
@@ -7508,6 +7761,18 @@ fn generic_literal_anchor_scan_applies(file_path: &str) -> bool {
                 | Language::Html
                 | Language::Markdown
         )
+    )
+}
+
+/// Track H — languages in which a `{/* … */}` JSX comment can actually occur:
+/// TSX, JSX, JavaScript-with-JSX (`.js` files may contain JSX) and Astro. Plain
+/// TypeScript (`.ts`) cannot contain JSX, and everywhere else the `{/* … */}`
+/// shape is not a comment at all — excluded so no false section labels are
+/// minted from unrelated syntax.
+fn jsx_section_label_scan_applies(file_path: &str) -> bool {
+    matches!(
+        Language::capability_for_path(file_path).map(|capability| capability.language),
+        Some(Language::Tsx | Language::Jsx | Language::JavaScript | Language::Astro)
     )
 }
 
@@ -13514,6 +13779,10 @@ mod tests {
                 .symbol_store
                 .mine_receiver_type_relationship_targets()
                 .unwrap();
+            service
+                .symbol_store
+                .mine_go_interface_implementations()
+                .unwrap();
 
             let after = resolved_call_targets(&service, dog_bark, "speak");
             assert!(
@@ -13572,6 +13841,10 @@ mod tests {
             service
                 .symbol_store
                 .mine_receiver_type_relationship_targets()
+                .unwrap();
+            service
+                .symbol_store
+                .mine_go_interface_implementations()
                 .unwrap();
 
             let after = resolved_call_targets(&service, use_fn, "compute");
@@ -16551,6 +16824,196 @@ export function chooseTransport() {
         );
     }
 
+    /// Track H — a standalone `{/* … */}` comment inside a component is indexed
+    /// as a `section_label` anchor owned by the enclosing component symbol; an
+    /// inline (non-standalone) JSX comment on a code line is not.
+    #[test]
+    fn jsx_section_labels_index_standalone_comments_with_owning_component() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(
+            temp_dir.path().join("nav.tsx"),
+            r#"
+export function MobileNav() {
+    return (
+        <nav>
+            {/* Mobile navigation */}
+            <a href="/">Home</a> {/* inline trailing comment */}
+        </nav>
+    );
+}
+"#,
+        )
+        .unwrap();
+
+        service.index_file("nav.tsx").unwrap();
+        let owner = service
+            .search_symbols_filtered("MobileNav", Some("nav.tsx"), None, 5)
+            .unwrap()
+            .remove(0)
+            .symbol;
+
+        let labels = service
+            .search_semantic_anchors("Mobile navigation", Some("nav.tsx"), 10)
+            .unwrap()
+            .into_iter()
+            .filter(|result| result.anchor.kind == "section_label")
+            .collect::<Vec<_>>();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].anchor.value, "Mobile navigation");
+        assert_eq!(
+            labels[0].anchor.owner_symbol_id.as_deref(),
+            Some(owner.id.as_str())
+        );
+        // Section labels are semantic evidence, never graph-looking links: no
+        // target fields, so the anchor-target backfill (keyed on target_name)
+        // can never resolve them.
+        assert!(labels[0].anchor.target_name.is_none());
+        assert!(labels[0].anchor.target_symbol_id.is_none());
+
+        // The trailing comment shares a line with JSX — not a section boundary.
+        assert!(service
+            .search_semantic_anchors("inline trailing comment", Some("nav.tsx"), 10)
+            .unwrap()
+            .iter()
+            .all(|result| result.anchor.kind != "section_label"));
+    }
+
+    /// Track H — section-label boundaries: only exact standalone single-line
+    /// comments, labels bounded at 120 chars, and only JSX-capable files.
+    #[test]
+    fn jsx_section_labels_reject_inline_overlong_and_non_jsx_lines() {
+        let long_label = "x".repeat(121);
+        let content = format!(
+            "{{/* Mobile navigation */}}\n\
+             <nav> {{/* not standalone */}}\n\
+             {{/* a */}}{{/* b */}}\n\
+             {{/* trailing */}} <div>\n\
+             {{/*   */}}\n\
+             {{/* {long_label} */}}\n"
+        );
+        let labels = extract_semantic_anchors("app/nav.tsx", &content)
+            .into_iter()
+            .filter(|anchor| anchor.kind == "section_label")
+            .collect::<Vec<_>>();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].value, "Mobile navigation");
+        assert_eq!(labels[0].line, 0);
+        assert!((labels[0].confidence - 0.9).abs() < 1e-6);
+
+        // Exactly 120 chars is still within bounds.
+        let at_limit = "y".repeat(120);
+        assert!(
+            extract_semantic_anchors("app/nav.tsx", &format!("{{/* {at_limit} */}}\n"))
+                .iter()
+                .any(|anchor| anchor.kind == "section_label" && anchor.value == at_limit)
+        );
+
+        // `.ts` cannot contain JSX, and outside the JSX family the shape is not
+        // a comment at all — no section labels there.
+        for path in ["app/nav.ts", "notes.md", "styles.css"] {
+            assert!(
+                extract_semantic_anchors(path, "{/* Mobile navigation */}\n")
+                    .iter()
+                    .all(|anchor| anchor.kind != "section_label"),
+                "{path} must not produce section labels"
+            );
+        }
+    }
+
+    /// Track H — the backtick-parity heuristic: a `{/* ... */}` line inside a
+    /// template literal is DATA and must not mint a section label; a real one
+    /// after the literal closes still does.
+    #[test]
+    fn jsx_section_labels_skip_comment_lines_inside_template_literals() {
+        let content = "const fixture = `\n\
+             {/* Inside template literal */}\n\
+             `;\n\
+             {/* Real section */}\n";
+        let labels = extract_semantic_anchors("app/nav.tsx", content)
+            .into_iter()
+            .filter(|anchor| anchor.kind == "section_label")
+            .collect::<Vec<_>>();
+        assert_eq!(labels.len(), 1, "template-literal contents must be skipped");
+        assert_eq!(labels[0].value, "Real section");
+        assert_eq!(labels[0].line, 3);
+
+        // An escaped backtick does not close the literal; the label two lines
+        // later is still inside and must be skipped.
+        let escaped = "const fixture = `\n\
+             text with \\` escaped backtick\n\
+             {/* Still inside */}\n\
+             `;\n";
+        assert!(
+            extract_semantic_anchors("app/nav.tsx", escaped)
+                .iter()
+                .all(|anchor| anchor.kind != "section_label"),
+            "escaped backticks must not close the template literal"
+        );
+
+        // A line whose backticks OPEN AND CLOSE a literal (even parity) does
+        // not poison subsequent lines.
+        let balanced = "const label = `inline`;\n\
+             {/* After balanced literal */}\n";
+        assert!(extract_semantic_anchors("app/nav.tsx", balanced)
+            .iter()
+            .any(|anchor| anchor.kind == "section_label"
+                && anchor.value == "After balanced literal"));
+    }
+
+    /// Track H — the mode-aware wrapper delegates to the store with the same
+    /// freshness pre-step as the plain search.
+    #[test]
+    fn search_semantic_anchors_mode_delegates_to_the_store() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(
+            temp_dir.path().join("toolbar.tsx"),
+            r#"
+export function Toolbar() {
+    return (
+        <div>
+            {/* Right side actions */}
+            <button>Go</button>
+        </div>
+    );
+}
+"#,
+        )
+        .unwrap();
+        service.index_file("toolbar.tsx").unwrap();
+
+        let outcome = service
+            .search_semantic_anchors_mode(
+                "Right side actions",
+                Some("toolbar.tsx"),
+                10,
+                AnchorQueryMode::Phrase,
+            )
+            .unwrap();
+        assert!(!outcome.empty_query);
+        assert!(outcome
+            .results
+            .iter()
+            .any(|result| result.anchor.kind == "section_label"
+                && result.anchor.value == "Right side actions"));
+    }
+
+    /// Track F — `modelled_relationship_kinds` reports the extractor's
+    /// per-language OBSERVATIONAL coverage (kinds it emits at all, not
+    /// exhaustively), empty for languages that model no edges.
+    #[test]
+    fn modelled_relationship_kinds_report_honest_per_language_coverage() {
+        assert!(modelled_relationship_kinds(Language::Rust).contains(&"call"));
+        // Track B: file-local Rust constant references are `usage` edges.
+        assert!(modelled_relationship_kinds(Language::Rust).contains(&"usage"));
+        // Track C: Go `implements` comes from the implicit-interface mining pass.
+        assert!(modelled_relationship_kinds(Language::Go).contains(&"implements"));
+        assert!(modelled_relationship_kinds(Language::Tsx).contains(&"handles"));
+        assert!(!modelled_relationship_kinds(Language::Python).contains(&"implements"));
+        assert!(modelled_relationship_kinds(Language::Markdown).is_empty());
+        // C/C++ is definitions-only (N8): the relationship walk is gated off.
+        assert!(modelled_relationship_kinds(Language::Cpp).is_empty());
+    }
+
     #[test]
     fn markdown_links_and_code_mentions_resolve_without_guessing_ambiguity() {
         let (service, temp_dir) = create_test_service();
@@ -19469,5 +19932,911 @@ func helper() {}
             "require target survives: {names:?}"
         );
         assert!(names.contains(&"Svc"), "class survives: {names:?}");
+    }
+
+    // =========================================================================
+    // Deterministic test corpus (2026-07-18 handoff, "Deterministic test
+    // corpus" + "Release gates"). Fixture files live under
+    // `tests/fixtures/symbol_tracks/` and are copied VERBATIM into a fresh
+    // TempDir workspace, then indexed by RELATIVE path — tests never index the
+    // developer's checkout. Test names are `fixtureN_`-prefixed so the
+    // release-gate mapping stays greppable.
+    // =========================================================================
+
+    /// Copy one fixture corpus (a subdirectory of
+    /// `tests/fixtures/symbol_tracks/`) into the TempDir workspace root,
+    /// preserving the corpus's internal relative layout.
+    fn write_symbol_track_fixture(workspace_root: &Path, fixture_dir: &str) {
+        let source_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/symbol_tracks")
+            .join(fixture_dir);
+        copy_fixture_tree(&source_root, workspace_root);
+    }
+
+    fn copy_fixture_tree(source: &Path, destination: &Path) {
+        fs::create_dir_all(destination)
+            .unwrap_or_else(|error| panic!("create {}: {error}", destination.display()));
+        for entry in fs::read_dir(source)
+            .unwrap_or_else(|error| panic!("read fixture dir {}: {error}", source.display()))
+        {
+            let entry = entry.unwrap();
+            let target = destination.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_fixture_tree(&entry.path(), &target);
+            } else {
+                fs::copy(entry.path(), &target).unwrap_or_else(|error| {
+                    panic!("copy fixture {}: {error}", entry.path().display())
+                });
+            }
+        }
+    }
+
+    /// Find one raw symbol of a file by name (panicking with context).
+    fn fixture_symbol(service: &LanguageService, file_path: &str, name: &str) -> Symbol {
+        service
+            .get_file_symbols_raw(file_path)
+            .unwrap()
+            .into_iter()
+            .find(|symbol| symbol.name == name)
+            .unwrap_or_else(|| panic!("no symbol named {name:?} in {file_path}"))
+    }
+
+    // ---- Fixture 1 — TSX component calls, section labels, ranking ----------
+
+    /// Release gate: "JSX component reference recall — all fixture call sites
+    /// returned". Each component is used twice in `Header` and once in
+    /// `Settings` → exactly three incoming call observations, at the exact
+    /// JSX-use lines (0-based).
+    #[test]
+    fn fixture1_tsx_components_have_exactly_three_call_observations() {
+        let (service, temp_dir) = create_test_service();
+        write_symbol_track_fixture(temp_dir.path(), "fixture1_tsx_components");
+        service.reconcile_index().unwrap();
+
+        let expected: [(&str, &str, [(&str, u32); 3]); 3] = [
+            (
+                "LanguageSwitcher",
+                "components/language-switcher.tsx",
+                [
+                    ("components/header.tsx", 8),
+                    ("components/header.tsx", 14),
+                    ("components/settings.tsx", 7),
+                ],
+            ),
+            (
+                "RegionSelector",
+                "components/region-selector.tsx",
+                [
+                    ("components/header.tsx", 9),
+                    ("components/header.tsx", 15),
+                    ("components/settings.tsx", 8),
+                ],
+            ),
+            (
+                "ModeToggle",
+                "components/mode-toggle.tsx",
+                [
+                    ("components/header.tsx", 10),
+                    ("components/header.tsx", 16),
+                    ("components/settings.tsx", 9),
+                ],
+            ),
+        ];
+
+        for (component, definition_file, expected_sites) in expected {
+            let symbol = fixture_symbol(&service, definition_file, component);
+            let references = service
+                .find_relationship_references_to_symbol(&symbol, SymbolRelationshipType::Call, 50)
+                .unwrap();
+            let mut observed: Vec<(String, u32)> = references
+                .iter()
+                .filter(|reference| {
+                    reference.relationship_type == SymbolRelationshipType::Call
+                })
+                .map(|reference| (reference.source_symbol.file_path.clone(), reference.line))
+                .collect();
+            observed.sort();
+            let expected_sites: Vec<(String, u32)> = expected_sites
+                .iter()
+                .map(|(file, line)| (file.to_string(), *line))
+                .collect();
+            assert_eq!(
+                observed, expected_sites,
+                "{component} must have exactly the three fixture call sites"
+            );
+            for reference in &references {
+                assert!(
+                    reference.source_symbol.name == "Header"
+                        || reference.source_symbol.name == "Settings",
+                    "{component} call source must be the enclosing component, got {:?}",
+                    reference.source_symbol.name
+                );
+            }
+        }
+    }
+
+    /// Release gate: "no native-tag false positives". Native/lowercase JSX
+    /// elements (`nav`, `button`, `section`, `select`, `option`) and the
+    /// lowercase namespace root `motion` (`<motion.div />`) never emit call
+    /// observations.
+    #[test]
+    fn fixture1_native_and_lowercase_jsx_elements_emit_no_call_observations() {
+        let (service, temp_dir) = create_test_service();
+        write_symbol_track_fixture(temp_dir.path(), "fixture1_tsx_components");
+        service.reconcile_index().unwrap();
+
+        for native in ["nav", "button", "section", "select", "option", "motion", "div"] {
+            let references = service
+                .symbol_store
+                .find_references_to_target(native, SymbolRelationshipType::Call, 10)
+                .unwrap();
+            assert!(
+                references.is_empty(),
+                "native/lowercase element {native:?} must not emit call observations: {:?}",
+                references
+                    .iter()
+                    .map(|r| (r.source_symbol.file_path.clone(), r.line))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// Track H — standalone JSX section comments inside the one large `Header`
+    /// component are `section_label` anchors: path-narrowed AllTerms search
+    /// returns them with the component as owner and exact internal lines.
+    #[test]
+    fn fixture1_section_label_anchors_are_path_narrowed_and_owned_by_header() {
+        let (service, temp_dir) = create_test_service();
+        write_symbol_track_fixture(temp_dir.path(), "fixture1_tsx_components");
+        service.reconcile_index().unwrap();
+
+        let header = fixture_symbol(&service, "components/header.tsx", "Header");
+        for (query, label, line) in [
+            ("mobile navigation", "Mobile navigation", 7u32),
+            ("right side actions", "Right side actions", 13u32),
+        ] {
+            let outcome = service
+                .search_semantic_anchors_mode(
+                    query,
+                    Some("components/header.tsx"),
+                    10,
+                    AnchorQueryMode::AllTerms,
+                )
+                .unwrap();
+            assert!(!outcome.empty_query);
+            let hit = outcome
+                .results
+                .iter()
+                .find(|result| {
+                    result.anchor.kind == "section_label" && result.anchor.value == label
+                })
+                .unwrap_or_else(|| panic!("section label {label:?} not found for {query:?}"));
+            assert_eq!(hit.anchor.line, line, "section label {label:?} line");
+            assert_eq!(
+                hit.anchor.owner_symbol_id.as_deref(),
+                Some(header.id.as_str()),
+                "section label {label:?} must be owned by the Header component"
+            );
+        }
+    }
+
+    /// Release gates: "Short-fragment prefix match impossible when either token
+    /// is under 3 characters" + "Weak-frequency distractor cannot win". The
+    /// broad navigation query must NOT surface the `top_venues` translation
+    /// file as a confident structural result — the distractor stays reachable
+    /// through the semantic-anchor lane only.
+    #[test]
+    fn fixture1_broad_navigation_query_does_not_promote_translation_distractor() {
+        let (service, temp_dir) = create_test_service();
+        write_symbol_track_fixture(temp_dir.path(), "fixture1_tsx_components");
+        service.reconcile_index().unwrap();
+
+        // The distractor IS indexed — as semantic-anchor evidence.
+        let anchors = service
+            .search_semantic_anchors("top_venues", None, 10)
+            .unwrap();
+        assert!(
+            anchors.iter().any(|result| {
+                result.anchor.file_path == "locales/pt-BR/venues.json"
+                    && result.anchor.value.starts_with("top_venues")
+            }),
+            "translation key must exist in the semantic-anchor lane"
+        );
+
+        // The handoff's regression query: `i18n` fragments (`i`, `n`) must not
+        // satisfy `icons`/`navigation`, and repeated weak hits must not promote
+        // the translation file structurally. An empty structural result is
+        // acceptable here; the distractor winning is not.
+        let results = service
+            .search_symbols("mobile top navigation icons locale location", 10)
+            .unwrap();
+        assert!(
+            !results.iter().any(|result| {
+                result.symbol.file_path == "locales/pt-BR/venues.json"
+                    || result.symbol.name.contains("top_venues")
+            }),
+            "translation distractor must not be a structural match: {:?}",
+            results
+                .iter()
+                .map(|r| (r.symbol.file_path.clone(), r.symbol.name.clone(), r.score))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // ---- Fixture 2 — Rust constant usage vs. lexical shadowing --------------
+
+    /// Release gate: "Rust constant usage — all unshadowed fixture uses
+    /// returned; no shadowed false positives". Exact edge-set assertion:
+    /// direct use, call-argument use, closure-body use, and the shadowing
+    /// `let`'s INITIALIZER resolve; the parameter shadow, the post-`let`
+    /// reference, the `for`-binding body use, and the match-arm binding use
+    /// emit nothing.
+    #[test]
+    fn fixture2_rust_const_usage_edges_respect_lexical_shadowing() {
+        let (service, temp_dir) = create_test_service();
+        write_symbol_track_fixture(temp_dir.path(), "fixture2_rust_shadowing");
+        service.reconcile_index().unwrap();
+
+        let constant = fixture_symbol(&service, "consts.rs", "RETRY_LIMIT");
+        let references = service
+            .symbol_store
+            .find_references_to_symbol_id(&constant.id, SymbolRelationshipType::Usage, 50)
+            .unwrap();
+
+        let mut observed: Vec<(String, u32)> = references
+            .iter()
+            .map(|reference| (reference.source_symbol.name.clone(), reference.line))
+            .collect();
+        observed.sort();
+        assert_eq!(
+            observed,
+            vec![
+                ("call_argument_use".to_string(), 9),
+                ("closure_use".to_string(), 13),
+                ("direct_use".to_string(), 5),
+                ("let_shadow".to_string(), 22),
+            ],
+            "exactly the four lexically-valid outer-constant uses must resolve"
+        );
+
+        for reference in &references {
+            assert_eq!(
+                reference.resolution_strategy.as_deref(),
+                Some("file_local_const"),
+                "Track B edges carry the file_local_const strategy"
+            );
+            let confidence = reference
+                .resolution_confidence
+                .expect("file_local_const edges carry a confidence");
+            assert!(
+                (confidence - 0.9).abs() < 1e-4,
+                "file_local_const confidence must be 0.9, got {confidence}"
+            );
+        }
+
+        // Deliberate exclusions, by line: parameter shadow (18), post-let
+        // shadowed reference (23), for-binding body use (28), match-arm
+        // binding use (34).
+        for excluded_line in [18u32, 23, 28, 34] {
+            assert!(
+                !references.iter().any(|r| r.line == excluded_line),
+                "line {excluded_line} is shadowed and must not produce a usage edge"
+            );
+        }
+        for excluded_source in ["parameter_shadow", "loop_shadow", "match_shadow"] {
+            assert!(
+                !references
+                    .iter()
+                    .any(|r| r.source_symbol.name == excluded_source),
+                "{excluded_source} only touches shadowed bindings and must emit no edge"
+            );
+        }
+    }
+
+    // ---- Fixture 3 — Go implicit interface implementations ------------------
+
+    fn implements_sources(service: &LanguageService, interface: &Symbol) -> Vec<SymbolReference> {
+        service
+            .symbol_store
+            .find_references_to_symbol_id(&interface.id, SymbolRelationshipType::Implements, 50)
+            .unwrap()
+    }
+
+    /// Release gate: "Go implementation recall — complete fixture method sets
+    /// returned, including test fake; exclusions correct". Mined after
+    /// `reconcile_index` (the pass runs inside reconcile, after backfill).
+    /// Pointer-only satisfaction (`DiskStore`) must still produce the edge —
+    /// its `receiver_set: pointer` tag is pinned by the store-level miner
+    /// tests, which the service layer does not re-expose.
+    #[test]
+    fn fixture3_go_implicit_interface_implementation_set_is_complete() {
+        let (service, temp_dir) = create_test_service();
+        write_symbol_track_fixture(temp_dir.path(), "fixture3_go_interfaces");
+        service.reconcile_index().unwrap();
+
+        let base = fixture_symbol(&service, "cache/contract.go", "Base");
+        assert_eq!(base.symbol_type, SymbolType::Interface);
+        let cache = fixture_symbol(&service, "cache/contract.go", "Cache");
+        assert_eq!(cache.symbol_type, SymbolType::Interface);
+
+        let base_refs = implements_sources(&service, &base);
+        let mut base_sources: Vec<String> = base_refs
+            .iter()
+            .map(|r| r.source_symbol.name.clone())
+            .collect();
+        base_sources.sort();
+        assert_eq!(
+            base_sources,
+            vec!["DiskStore", "FakeCache", "Incomplete", "Memory"],
+            "Base is satisfied by every type with Ping — value, pointer-only, \
+             incomplete-for-Cache, and the test fake"
+        );
+
+        let cache_refs = implements_sources(&service, &cache);
+        let mut cache_sources: Vec<String> = cache_refs
+            .iter()
+            .map(|r| r.source_symbol.name.clone())
+            .collect();
+        cache_sources.sort();
+        assert_eq!(
+            cache_sources,
+            vec!["DiskStore", "FakeCache", "Memory"],
+            "Cache (embedding Base) requires Ping AND Set — Incomplete is excluded"
+        );
+        assert!(
+            !cache_sources.contains(&"Incomplete".to_string()),
+            "Incomplete must never implement Cache"
+        );
+
+        for reference in base_refs.iter().chain(cache_refs.iter()) {
+            assert_eq!(
+                reference.resolution_strategy.as_deref(),
+                Some("go_implicit_interface"),
+                "mined edges carry the go_implicit_interface strategy"
+            );
+            let confidence = reference
+                .resolution_confidence
+                .expect("mined edges carry a confidence");
+            assert!(
+                (confidence - 0.75).abs() < 1e-4,
+                "go_implicit_interface confidence must be 0.75, got {confidence}"
+            );
+        }
+
+        // The test-only fake is retained and comes from the _test.go file.
+        let fake = cache_refs
+            .iter()
+            .find(|r| r.source_symbol.name == "FakeCache")
+            .expect("test fake must implement Cache");
+        assert_eq!(fake.source_symbol.file_path, "cache/fake_test.go");
+    }
+
+    /// Go package visibility: an unexported interface method can only be
+    /// satisfied from the interface's own package. The same-package
+    /// implementer is the positive control proving the exclusion is
+    /// package-based, not signature-based.
+    #[test]
+    fn fixture3_go_unexported_interface_method_is_package_scoped() {
+        let (service, temp_dir) = create_test_service();
+        write_symbol_track_fixture(temp_dir.path(), "fixture3_go_interfaces");
+        service.reconcile_index().unwrap();
+
+        let refresher = fixture_symbol(&service, "internala/contract.go", "refresher");
+        assert_eq!(refresher.symbol_type, SymbolType::Interface);
+
+        let refs = implements_sources(&service, &refresher);
+        let mut sources: Vec<String> =
+            refs.iter().map(|r| r.source_symbol.name.clone()).collect();
+        sources.sort();
+        assert_eq!(
+            sources,
+            vec!["LocalRefresher"],
+            "only the same-package type may satisfy the unexported method; \
+             RemoteRefresher (package internalb) must be excluded"
+        );
+    }
+
+    /// Track C regression — a SINGLE-FILE re-index of a Go file replaces that
+    /// file's relationships by source_file_path, which used to silently delete
+    /// its types' mined `go_implicit_interface` edges until the next FULL
+    /// workspace index. The single-file path must re-mine.
+    #[test]
+    fn fixture3_single_file_go_reindex_preserves_mined_implements_edges() {
+        let (service, temp_dir) = create_test_service();
+        write_symbol_track_fixture(temp_dir.path(), "fixture3_go_interfaces");
+        service.reconcile_index().unwrap();
+
+        let cache = fixture_symbol(&service, "cache/contract.go", "Cache");
+        assert!(
+            implements_sources(&service, &cache)
+                .iter()
+                .any(|reference| reference.source_symbol.name == "Memory"),
+            "full workspace index must mine Memory implements Cache"
+        );
+
+        // Touch the implementer's file so the single-file path actually
+        // replaces its rows (a fresh hash short-circuits before deleting).
+        let memory_path = temp_dir.path().join("cache/memory.go");
+        let mut content = fs::read_to_string(&memory_path).unwrap();
+        content.push_str("\n// touched to force a real single-file re-index\n");
+        fs::write(&memory_path, content).unwrap();
+        service.index_file("cache/memory.go").unwrap();
+
+        assert!(
+            implements_sources(&service, &cache)
+                .iter()
+                .any(|reference| reference.source_symbol.name == "Memory"),
+            "single-file re-index of cache/memory.go must re-mine the \
+             Memory implements Cache edge, not drop it until the next full index"
+        );
+    }
+
+    // ---- Fixture 4 — relationship-kind-aware resolution collisions ----------
+
+    /// Track D release gate: a `call` resolves to the callable despite a
+    /// same-named Markdown heading (function AND method cases), and headings
+    /// are never reference targets for any relationship kind.
+    #[test]
+    fn fixture4_call_resolution_is_kind_aware_despite_heading_collisions() {
+        let (service, temp_dir) = create_test_service();
+        write_symbol_track_fixture(temp_dir.path(), "fixture4_resolution_collisions");
+        service.reconcile_index().unwrap();
+
+        // Function vs. heading: the cross-file, non-imported call resolves via
+        // the kind-aware global-unique backfill — the heading neither wins nor
+        // makes the callable ambiguous.
+        let archive_fn = fixture_symbol(&service, "src/tasks.py", "archive_stale_sessions");
+        let archive_refs = service
+            .symbol_store
+            .find_references_to_symbol_id(&archive_fn.id, SymbolRelationshipType::Call, 10)
+            .unwrap();
+        assert_eq!(
+            archive_refs.len(),
+            1,
+            "exactly one call site resolves to the function"
+        );
+        assert_eq!(archive_refs[0].source_symbol.name, "run_maintenance");
+        assert_eq!(archive_refs[0].source_symbol.file_path, "src/caller.py");
+        assert_eq!(archive_refs[0].line, 4);
+        assert_eq!(
+            archive_refs[0].resolution_strategy.as_deref(),
+            Some("global_unique"),
+            "the kind-aware backfill resolves the call"
+        );
+
+        // Method vs. heading.
+        let rotate_method = fixture_symbol(&service, "src/worker.py", "rotate_billing_keys");
+        let rotate_refs = service
+            .symbol_store
+            .find_references_to_symbol_id(&rotate_method.id, SymbolRelationshipType::Call, 10)
+            .unwrap();
+        assert_eq!(rotate_refs.len(), 1);
+        assert_eq!(rotate_refs[0].source_symbol.name, "run_maintenance");
+        assert_eq!(rotate_refs[0].line, 5);
+        assert_eq!(
+            rotate_refs[0].resolution_strategy.as_deref(),
+            Some("global_unique")
+        );
+
+        // Headings are never targets, for ANY relationship kind.
+        for heading_name in ["archive_stale_sessions", "rotate_billing_keys"] {
+            let heading = service
+                .get_file_symbols_raw("docs/notes.md")
+                .unwrap()
+                .into_iter()
+                .find(|s| s.name == heading_name && s.symbol_type == SymbolType::Heading)
+                .unwrap_or_else(|| panic!("heading {heading_name:?} not indexed"));
+            for kind in [
+                SymbolRelationshipType::Call,
+                SymbolRelationshipType::Usage,
+                SymbolRelationshipType::Implements,
+                SymbolRelationshipType::Extends,
+                SymbolRelationshipType::UsesType,
+                SymbolRelationshipType::Handles,
+                SymbolRelationshipType::Contains,
+            ] {
+                let refs = service
+                    .symbol_store
+                    .find_references_to_symbol_id(&heading.id, kind, 10)
+                    .unwrap();
+                assert!(
+                    refs.is_empty(),
+                    "heading {heading_name:?} must never be a {kind:?} target"
+                );
+            }
+        }
+    }
+
+    /// Track D: `usage` resolves only to a globally UNIQUE value-kind
+    /// candidate. Two same-named constants leave the edge unresolved; import
+    /// placeholders and synthetic `__file__` roots are excluded from every
+    /// candidate set.
+    #[test]
+    fn fixture4_usage_resolution_requires_unique_value_candidate() {
+        let (service, temp_dir) = create_test_service();
+        write_symbol_track_fixture(temp_dir.path(), "fixture4_resolution_collisions");
+        service.reconcile_index().unwrap();
+
+        let probe = fixture_symbol(&service, "src/probe.py", "read_retention");
+        // Store-layer probe edges (the extractors do not emit cross-language
+        // usage edges): one ambiguous value target, one unique value target,
+        // one call colliding only with an import placeholder, one call
+        // colliding only with a synthetic file-root name.
+        let probe_edges = vec![
+            SymbolRelationship {
+                source_symbol_id: probe.id.clone(),
+                source_file_path: "src/probe.py".to_string(),
+                target_name: "RETENTION_WINDOW".to_string(),
+                target_symbol_id: None,
+                relationship_type: SymbolRelationshipType::Usage,
+                line: 0,
+                ..Default::default()
+            },
+            SymbolRelationship {
+                source_symbol_id: probe.id.clone(),
+                source_file_path: "src/probe.py".to_string(),
+                target_name: "IDLE_TIMEOUT".to_string(),
+                target_symbol_id: None,
+                relationship_type: SymbolRelationshipType::Usage,
+                line: 1,
+                ..Default::default()
+            },
+            SymbolRelationship {
+                source_symbol_id: probe.id.clone(),
+                source_file_path: "src/probe.py".to_string(),
+                target_name: "widget_kit".to_string(),
+                target_symbol_id: None,
+                relationship_type: SymbolRelationshipType::Call,
+                line: 0,
+                ..Default::default()
+            },
+            SymbolRelationship {
+                source_symbol_id: probe.id.clone(),
+                source_file_path: "src/probe.py".to_string(),
+                target_name: "tasks.py".to_string(),
+                target_symbol_id: None,
+                relationship_type: SymbolRelationshipType::Call,
+                line: 1,
+                ..Default::default()
+            },
+        ];
+        service
+            .symbol_store
+            .replace_relationships_for_file("src/probe.py", &probe_edges)
+            .unwrap();
+        service
+            .symbol_store
+            .backfill_unresolved_relationship_targets()
+            .unwrap();
+
+        // Unique value candidate → resolved with the global-unique strategy.
+        let idle = fixture_symbol(&service, "src/consts_a.rs", "IDLE_TIMEOUT");
+        let idle_refs = service
+            .symbol_store
+            .find_references_to_symbol_id(&idle.id, SymbolRelationshipType::Usage, 10)
+            .unwrap();
+        assert_eq!(idle_refs.len(), 1, "unique value target must resolve");
+        assert_eq!(idle_refs[0].source_symbol.name, "read_retention");
+        assert_eq!(
+            idle_refs[0].resolution_strategy.as_deref(),
+            Some("global_unique")
+        );
+
+        // Two valid value candidates → the edge MUST stay unresolved.
+        let retention_rows = service
+            .symbol_store
+            .find_references_to_target("RETENTION_WINDOW", SymbolRelationshipType::Usage, 10)
+            .unwrap();
+        assert_eq!(retention_rows.len(), 1);
+        assert!(
+            retention_rows[0].target_symbol_id.is_none(),
+            "two same-named constants must leave the usage edge unresolved"
+        );
+
+        // Import placeholders are candidates for NO relationship kind.
+        assert!(
+            service
+                .get_file_symbols_raw("src/caller.py")
+                .unwrap()
+                .iter()
+                .any(|s| s.name == "widget_kit" && s.symbol_type == SymbolType::Import),
+            "the import placeholder must exist for the exclusion to be meaningful"
+        );
+        let widget_rows = service
+            .symbol_store
+            .find_references_to_target("widget_kit", SymbolRelationshipType::Call, 10)
+            .unwrap();
+        assert_eq!(widget_rows.len(), 1);
+        assert!(
+            widget_rows[0].target_symbol_id.is_none(),
+            "an import placeholder must never resolve a call"
+        );
+
+        // Synthetic `__file__` roots are excluded from every candidate set.
+        assert!(
+            service
+                .get_file_symbols_raw("src/tasks.py")
+                .unwrap()
+                .iter()
+                .any(|s| s.name == "tasks.py" && s.qualified_name == "__file__"),
+            "the synthetic file root must exist for the exclusion to be meaningful"
+        );
+        let root_rows = service
+            .symbol_store
+            .find_references_to_target("tasks.py", SymbolRelationshipType::Call, 10)
+            .unwrap();
+        assert_eq!(root_rows.len(), 1);
+        assert!(
+            root_rows[0].target_symbol_id.is_none(),
+            "a synthetic file root must never resolve a call"
+        );
+    }
+
+    // ---- Fixture 6 — extractor-version invalidation -------------------------
+
+    /// The reconcile fast-path fingerprint must incorporate every file's
+    /// CURRENT extractor version (handoff: "Extractor version must participate
+    /// in every shortcut fingerprint"). This pins the canonical projection —
+    /// if the format changes, this test must change WITH it, and the version
+    /// component must survive the change.
+    #[test]
+    fn fixture6_reconcile_fingerprint_includes_extractor_versions() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(temp_dir.path().join("a.ts"), "export function alphaOne() {}\n").unwrap();
+        fs::write(temp_dir.path().join("b.py"), "def beta_one():\n    return 1\n").unwrap();
+
+        let files = service.supported_language_files(".");
+        let fingerprint = service
+            .compute_reconcile_fingerprint(&files)
+            .expect("fingerprint computable");
+
+        let ts_meta = file_index_metadata(&temp_dir.path().join("a.ts")).unwrap();
+        let py_meta = file_index_metadata(&temp_dir.path().join("b.py")).unwrap();
+        let ts_version = LanguageService::extractor_version_for_index_file("a.ts").unwrap();
+        let py_version = LanguageService::extractor_version_for_index_file("b.py").unwrap();
+
+        let canonical_current = format!(
+            "2\na.ts\u{1f}{}\u{1f}{}\u{1f}{}\nb.py\u{1f}{}\u{1f}{}\u{1f}{}",
+            ts_meta.file_size,
+            ts_meta.modified_at,
+            ts_version,
+            py_meta.file_size,
+            py_meta.modified_at,
+            py_version
+        );
+        assert_eq!(
+            fingerprint,
+            compute_hash(&canonical_current),
+            "fingerprint must be the hash of (path, size, mtime, extractor_version) entries"
+        );
+
+        // The SAME worktree under an older TypeScript extractor produces a
+        // DIFFERENT fingerprint — an extractor upgrade invalidates the
+        // no-change fast path even with byte-identical files.
+        let canonical_stale = format!(
+            "2\na.ts\u{1f}{}\u{1f}{}\u{1f}0\nb.py\u{1f}{}\u{1f}{}\u{1f}{}",
+            ts_meta.file_size, ts_meta.modified_at, py_meta.file_size, py_meta.modified_at, py_version
+        );
+        assert_ne!(
+            fingerprint,
+            compute_hash(&canonical_stale),
+            "changing only an extractor version must change the fingerprint"
+        );
+    }
+
+    /// End-to-end extractor upgrade: an index built by an older TypeScript
+    /// extractor (stale per-file rows AND a checkpoint fingerprinted by the
+    /// old code) must skip the no-change fast path, structurally re-extract
+    /// ONLY the affected language's files, leave the other language's rows
+    /// byte-for-byte untouched, and finish Fresh with zero failures.
+    #[test]
+    fn fixture6_stale_extractor_version_reextracts_only_affected_language() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(temp_dir.path().join("a.ts"), "export function alphaOne() {}\n").unwrap();
+        fs::write(temp_dir.path().join("b.py"), "def beta_one():\n    return 1\n").unwrap();
+
+        let first = service.reconcile_index().unwrap();
+        assert!(!first.fast_path);
+        assert_eq!(first.health.status, IndexHealthStatus::Fresh);
+
+        // Control: the unchanged worktree takes the fast path.
+        let second = service.reconcile_index().unwrap();
+        assert!(second.fast_path, "control: unchanged worktree is fast-pathed");
+
+        // Simulate "indexed by extractor version 0, reopened with the current
+        // version": the per-file row AND the persisted checkpoint fingerprint
+        // both carry the OLD version, exactly as an old binary left them.
+        let ts_record = service
+            .symbol_store
+            .indexed_file_record("a.ts")
+            .unwrap()
+            .unwrap();
+        service
+            .symbol_store
+            .mark_file_indexed_with_metadata_and_extractor_version(
+                "a.ts",
+                &ts_record.file_hash,
+                ts_record.symbol_count,
+                ts_record.file_size,
+                ts_record.line_count,
+                ts_record.modified_at,
+                Some(0),
+            )
+            .unwrap();
+        let py_before = service
+            .symbol_store
+            .indexed_file_record("b.py")
+            .unwrap()
+            .unwrap();
+
+        let ts_meta = file_index_metadata(&temp_dir.path().join("a.ts")).unwrap();
+        let py_meta = file_index_metadata(&temp_dir.path().join("b.py")).unwrap();
+        let py_version = LanguageService::extractor_version_for_index_file("b.py").unwrap();
+        let stale_fingerprint = compute_hash(&format!(
+            "2\na.ts\u{1f}{}\u{1f}{}\u{1f}0\nb.py\u{1f}{}\u{1f}{}\u{1f}{}",
+            ts_meta.file_size, ts_meta.modified_at, py_meta.file_size, py_meta.modified_at, py_version
+        ));
+        let raw_checkpoint = service
+            .symbol_store
+            .get_index_meta(RECONCILE_CHECKPOINT_KEY)
+            .unwrap()
+            .expect("checkpoint stored by the healthy reconcile");
+        let mut checkpoint: serde_json::Value = serde_json::from_str(&raw_checkpoint).unwrap();
+        checkpoint["fingerprint"] = serde_json::Value::String(stale_fingerprint);
+        service
+            .symbol_store
+            .set_index_meta(RECONCILE_CHECKPOINT_KEY, &checkpoint.to_string())
+            .unwrap();
+
+        // The "upgraded" reconcile: no fast path, exactly one file re-indexed.
+        let third = service.reconcile_index().unwrap();
+        assert!(
+            !third.fast_path,
+            "a stale extractor version must invalidate the no-change fast path"
+        );
+        assert_eq!(
+            third.files_indexed, 1,
+            "only the affected language's file is re-extracted"
+        );
+        assert_eq!(third.files_removed, 0);
+        assert_eq!(third.health.status, IndexHealthStatus::Fresh);
+        assert_eq!(third.health.stale_files, 0, "zero failures reported");
+        assert_eq!(third.health.missing_files, 0, "zero failures reported");
+        assert_eq!(third.health.queued_files, 0);
+
+        // The TS row was STRUCTURALLY re-extracted (not metadata-refreshed):
+        // its extractor version is current again and its symbols survive.
+        let ts_after = service
+            .symbol_store
+            .indexed_file_record("a.ts")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            ts_after.extractor_version,
+            LanguageService::extractor_version_for_index_file("a.ts")
+        );
+        assert!(service
+            .get_file_symbols_raw("a.ts")
+            .unwrap()
+            .iter()
+            .any(|s| s.name == "alphaOne"));
+
+        // The Python row was not needlessly rebuilt.
+        let py_after = service
+            .symbol_store
+            .indexed_file_record("b.py")
+            .unwrap()
+            .unwrap();
+        assert_eq!(py_after.extractor_version, py_before.extractor_version);
+        assert_eq!(
+            py_after.indexed_at, py_before.indexed_at,
+            "the unaffected language's row must be untouched"
+        );
+    }
+
+    /// A stale extractor version must defeat the metadata-only refresh
+    /// shortcut: unchanged bytes with drifted size/mtime normally get a
+    /// cheap metadata rewrite, but a version mismatch must force structural
+    /// re-extraction instead.
+    #[test]
+    fn fixture6_stale_extractor_version_defeats_metadata_only_refresh() {
+        let (service, temp_dir) = create_test_service();
+        fs::write(temp_dir.path().join("v.ts"), "export function gammaOne() {}\n").unwrap();
+        service.index_file("v.ts").unwrap();
+
+        let record = service
+            .symbol_store
+            .indexed_file_record("v.ts")
+            .unwrap()
+            .unwrap();
+        let real_mtime = file_index_metadata(&temp_dir.path().join("v.ts"))
+            .unwrap()
+            .modified_at;
+        let drifted_mtime = Some(real_mtime - 10);
+
+        // Control: current version + drifted metadata + unchanged bytes →
+        // the metadata-only shortcut refreshes the row and skips re-indexing.
+        service
+            .symbol_store
+            .mark_file_indexed_with_metadata_and_extractor_version(
+                "v.ts",
+                &record.file_hash,
+                record.symbol_count,
+                record.file_size,
+                record.line_count,
+                drifted_mtime,
+                record.extractor_version,
+            )
+            .unwrap();
+        let control = service
+            .symbol_store
+            .indexed_file_record("v.ts")
+            .unwrap()
+            .unwrap();
+        assert!(
+            !service
+                .indexed_file_needs_refresh("v.ts", &control, true)
+                .unwrap(),
+            "control: unchanged bytes with a current version take the metadata shortcut"
+        );
+        let refreshed = service
+            .symbol_store
+            .indexed_file_record("v.ts")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            refreshed.modified_at,
+            Some(real_mtime),
+            "control: the metadata-only path rewrote the drifted mtime"
+        );
+
+        // Stale version + drifted metadata + unchanged bytes → the file MUST
+        // be queued for structural re-extraction, and the row must NOT be
+        // silently metadata-refreshed to the current version.
+        service
+            .symbol_store
+            .mark_file_indexed_with_metadata_and_extractor_version(
+                "v.ts",
+                &record.file_hash,
+                record.symbol_count,
+                record.file_size,
+                record.line_count,
+                drifted_mtime,
+                Some(0),
+            )
+            .unwrap();
+        let stale = service
+            .symbol_store
+            .indexed_file_record("v.ts")
+            .unwrap()
+            .unwrap();
+        assert!(
+            service
+                .indexed_file_needs_refresh("v.ts", &stale, true)
+                .unwrap(),
+            "a stale extractor version must force re-extraction even for unchanged bytes"
+        );
+        let untouched = service
+            .symbol_store
+            .indexed_file_record("v.ts")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            untouched.extractor_version,
+            Some(0),
+            "needs_refresh must not metadata-refresh a stale-versioned row"
+        );
+
+        // The actual re-index restores the current extractor version.
+        service.index_file("v.ts").unwrap();
+        let reindexed = service
+            .symbol_store
+            .indexed_file_record("v.ts")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            reindexed.extractor_version,
+            LanguageService::extractor_version_for_index_file("v.ts")
+        );
     }
 }

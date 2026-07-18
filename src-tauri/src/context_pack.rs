@@ -16,6 +16,20 @@ use crate::project_settings::get_zblade_dir;
 use crate::symbol_index::SymbolStore;
 use crate::tree_sitter::{Symbol, SymbolRelationshipType, SymbolType};
 
+/// Confidence floor applied to raw symbol-search scores before they may
+/// contribute to a primary file. With the strict ranking in
+/// `symbol_index::search`, a raw score below this is boost-only noise and must
+/// not accumulate into file relevance.
+const MIN_PRIMARY_RAW_SCORE: f32 = 0.2;
+/// Maximum number of lines in an ordinary suggested range.
+const MAX_CONTEXT_RANGE_LINES: u32 = 160;
+/// Maximum number of lines in a Markdown/documentation suggested range.
+const MAX_DOC_RANGE_LINES: u32 = 120;
+/// Two evidence ranges whose gap is at most this many lines are clustered.
+const RANGE_CLUSTER_GAP_LINES: u32 = 8;
+/// Maximum number of disjoint suggested ranges per file.
+const MAX_CONTEXT_RANGES: usize = 3;
+
 #[derive(Debug, Clone)]
 pub struct ContextPackRequest {
     pub id: String,
@@ -572,6 +586,18 @@ fn display_language_name(language: &str) -> &str {
     }
 }
 
+/// One above-floor symbol hit buffered for per-file aggregation.
+struct PrimaryHit {
+    raw_score: f32,
+    /// Index of the query facet (position in the normalized query list).
+    facet_index: usize,
+    symbol: Symbol,
+    reason: String,
+    why: Vec<String>,
+    exact_range: ContextRange,
+    padded_range: ContextRange,
+}
+
 fn collect_primary_files_for_queries(
     service: &LanguageService,
     queries: &[String],
@@ -580,13 +606,16 @@ fn collect_primary_files_for_queries(
     active_file: Option<&str>,
     open_files: &[String],
 ) -> Vec<ContextFileResult> {
-    let mut by_path: HashMap<String, ContextFileResult> = HashMap::new();
+    let mut hits_by_path: HashMap<String, Vec<PrimaryHit>> = HashMap::new();
     let search_limit = max_results.saturating_mul(6).max(20);
 
-    for query in queries {
-        let Ok(results) =
-            service.search_symbols_contextual(query, search_limit, active_file, open_files)
-        else {
+    for (facet_index, query) in queries.iter().enumerate() {
+        // Non-contextual retrieval on purpose: editor-state (active/open file)
+        // boosts are applied exactly ONCE per file in `aggregate_primary_hits`
+        // via `score_symbol_result`. Contextual retrieval would bake the same
+        // boosts into every raw hit score and double-count them. This path
+        // also applies visible-symbol filtering.
+        let Ok(results) = service.search_symbols(query, search_limit) else {
             continue;
         };
 
@@ -595,50 +624,147 @@ fn collect_primary_files_for_queries(
             if should_skip_path(&path) || is_test_path(&path) || is_doc_path(&path) {
                 continue;
             }
-            let score = score_symbol_result(
-                result.score,
-                &result.symbol,
-                intent,
-                active_file,
-                open_files,
-            );
+            // Confidence floor on the RAW score, before any buffering: hits
+            // below the floor may not accumulate into file relevance at all.
+            if result.score < MIN_PRIMARY_RAW_SCORE {
+                continue;
+            }
             let reason = symbol_reason(&result.symbol, intent);
-            let suggested_ranges = vec![range_for_symbol(&result.symbol)];
-            let why = primary_file_why(
-                query,
-                &result.symbol,
-                intent,
-                active_file,
-                open_files,
-                result.score,
-                score,
-            );
-
-            by_path
-                .entry(path.clone())
-                .and_modify(|existing| {
-                    existing.score = existing.score.saturating_add(4).min(100);
-                    merge_unique_reasons(&mut existing.why, &why, 8);
-                    if score > existing.score {
-                        existing.score = score;
-                        existing.reason = reason.clone();
-                        existing.suggested_ranges = suggested_ranges.clone();
-                    }
-                })
-                .or_insert(ContextFileResult {
-                    path,
-                    score,
-                    reason,
-                    why,
-                    suggested_ranges,
-                });
+            let why = primary_file_why(query, &result.symbol, result.score);
+            let exact_range = exact_range_for_symbol(&result.symbol);
+            let padded_range = range_for_symbol(&result.symbol);
+            hits_by_path.entry(path).or_default().push(PrimaryHit {
+                raw_score: result.score,
+                facet_index,
+                symbol: result.symbol,
+                reason,
+                why,
+                exact_range,
+                padded_range,
+            });
         }
     }
 
-    let mut items: Vec<ContextFileResult> = by_path.into_values().collect();
+    let mut items: Vec<ContextFileResult> = hits_by_path
+        .into_iter()
+        .filter_map(|(path, hits)| {
+            aggregate_primary_hits(path, hits, queries.len(), intent, active_file, open_files)
+        })
+        .collect();
     items.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
     items.truncate(max_results);
     items
+}
+
+/// Combine buffered per-symbol hits for one file into a single ranked result.
+///
+/// Hits are first deduplicated per SYMBOL: one symbol matched by several
+/// query facets keeps only its best raw score, so it cannot fill multiple
+/// diminishing-returns slots. Raw scores then combine with diminishing
+/// returns over DISTINCT symbols (`best + 0.25*second + 0.10*third`, further
+/// hits ignored) so a pile of weak hits cannot outrank one strong hit, plus
+/// a small bonus for covering additional DISTINCT query facets (+0.05 each,
+/// capped at +0.15; facet coverage counts every hit, including deduplicated
+/// ones). Active/open/intent boosts are then applied exactly once per file
+/// during quantization, never per hit.
+fn aggregate_primary_hits(
+    path: String,
+    mut hits: Vec<PrimaryHit>,
+    facet_count: usize,
+    intent: Option<&str>,
+    active_file: Option<&str>,
+    open_files: &[String],
+) -> Option<ContextFileResult> {
+    // Defensive re-check of the confidence floor: never aggregate noise.
+    hits.retain(|hit| hit.raw_score >= MIN_PRIMARY_RAW_SCORE);
+    if hits.is_empty() {
+        return None;
+    }
+    hits.sort_by(|a, b| {
+        b.raw_score
+            .partial_cmp(&a.raw_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.facet_index.cmp(&b.facet_index))
+    });
+
+    // Facet coverage counts DISTINCT facets across ALL hits (before symbol
+    // dedupe): a symbol matched by two facets still covers both facets.
+    let matched_facets = hits
+        .iter()
+        .map(|hit| hit.facet_index)
+        .collect::<HashSet<_>>()
+        .len();
+
+    // Dedupe per SYMBOL, keeping the best-scored hit (the list is sorted by
+    // raw score descending). One symbol matched by multiple query facets must
+    // occupy only ONE diminishing-returns slot. The key includes name+range
+    // alongside the store id so symbols without an assigned id still dedupe
+    // by identity rather than colliding on the empty string.
+    let mut seen_symbols = HashSet::new();
+    hits.retain(|hit| {
+        seen_symbols.insert((
+            hit.symbol.id.clone(),
+            hit.symbol.name.clone(),
+            hit.symbol.range.start.line,
+            hit.symbol.range.start.character,
+            hit.symbol.range.end.line,
+            hit.symbol.range.end.character,
+        ))
+    });
+
+    let combined_raw = hits[0].raw_score
+        + hits.get(1).map_or(0.0, |hit| hit.raw_score * 0.25)
+        + hits.get(2).map_or(0.0, |hit| hit.raw_score * 0.10);
+    let facet_bonus = 0.05 * matched_facets.saturating_sub(1).min(3) as f32;
+    let best = &hits[0];
+    // Quantize ONCE per file, applying active/open/intent boosts here only.
+    let score = score_symbol_result(
+        combined_raw + facet_bonus,
+        &best.symbol,
+        intent,
+        active_file,
+        open_files,
+    )
+    .min(100);
+
+    let mut why = best.why.clone();
+    for hit in hits.iter().skip(1) {
+        merge_unique_reasons(&mut why, &hit.why, 8);
+    }
+    let mut summary_lines = vec![
+        format!(
+            "strongest evidence: {} `{}` (raw score {:.2})",
+            best.symbol.symbol_type,
+            symbol_display_name(&best.symbol),
+            best.raw_score
+        ),
+        format!(
+            "facet coverage: matched {} of {} query facet(s)",
+            matched_facets, facet_count
+        ),
+    ];
+    if let Some(intent) = intent {
+        summary_lines.push(format!("intent `{}` influenced ranking", intent));
+    }
+    if active_file.is_some_and(|active| active == path) {
+        summary_lines.push("active file boost applied".to_string());
+    }
+    if open_files.iter().any(|open| open == &path) {
+        summary_lines.push("open file boost applied".to_string());
+    }
+    // Hit-derived lines are capped at 8 above; 13 guarantees room for all
+    // five possible file-level summary lines.
+    merge_unique_reasons(&mut why, &summary_lines, 13);
+
+    Some(ContextFileResult {
+        path,
+        score,
+        reason: best.reason.clone(),
+        why,
+        // The exact matched-symbol range stays FIRST so downstream clustering
+        // keeps it as the highest-priority anchor.
+        suggested_ranges: vec![best.exact_range, best.padded_range],
+    })
 }
 
 fn collect_fallback_path_matches_for_queries(
@@ -688,7 +814,8 @@ fn collect_fallback_path_matches_for_queries(
             ],
             suggested_ranges: vec![ContextRange {
                 start_line: 1,
-                end_line: 160,
+                // Same cap as every other ordinary suggested range.
+                end_line: MAX_CONTEXT_RANGE_LINES,
             }],
         });
     }
@@ -726,7 +853,9 @@ fn enrich_context_file(
     let matched_symbols = symbols
         .iter()
         .filter(|symbol| {
-            let symbol_range = range_for_symbol(symbol);
+            // Overlap on the EXACT symbol range (both sides 1-based inclusive)
+            // so padding cannot fabricate a match.
+            let symbol_range = exact_range_for_symbol(symbol);
             item.suggested_ranges
                 .iter()
                 .any(|range| ranges_overlap(&symbol_range, range))
@@ -737,7 +866,10 @@ fn enrich_context_file(
 
     let semantic_anchors = collect_context_semantic_anchors(service, &item.path, &symbols)?;
     let related_files = collect_context_related_files(service, &item.path, &symbols)?;
-    let suggested_ranges = merge_context_ranges(
+    let range_cap = range_cap_for_path(&item.path);
+    // Priority order: the item's own ranges first (exact matched-symbol range
+    // leads), then key-symbol context, then semantic-anchor context.
+    let (suggested_ranges, ranges_clipped) = cluster_context_ranges(
         item.suggested_ranges
             .iter()
             .copied()
@@ -749,9 +881,11 @@ fn enrich_context_file(
                     .map(range_for_symbol),
             )
             .chain(semantic_anchors.iter().take(3).map(|anchor| ContextRange {
-                start_line: anchor.line.saturating_add(1).saturating_sub(8).max(1),
-                end_line: anchor.line.saturating_add(1).saturating_add(24),
+                // anchor.line is already 1-based in the summary.
+                start_line: anchor.line.saturating_sub(8).max(1),
+                end_line: anchor.line.saturating_add(24),
             })),
+        range_cap,
     );
     let confidence = if item.score >= 80 && !symbol_summaries.is_empty() {
         "high"
@@ -761,7 +895,7 @@ fn enrich_context_file(
         "low"
     }
     .to_string();
-    let why = enrichment_why(
+    let mut why = enrichment_why(
         item,
         symbol_summaries.len(),
         matched_symbols.len(),
@@ -769,6 +903,9 @@ fn enrich_context_file(
         related_files.len(),
         &confidence,
     );
+    if ranges_clipped {
+        merge_unique_reasons(&mut why, &[range_clipped_reason(range_cap)], 19);
+    }
     let next_step = if let Some(range) = suggested_ranges.first() {
         format!(
             "Read {} lines {}-{} first, then follow related_files if the edit surface is unclear.",
@@ -819,7 +956,9 @@ fn enrichment_why(
             format!("{} related file(s) found", related_file_count),
             format!("enrichment confidence is {}", confidence),
         ],
-        12,
+        // Aggregated primary whys can reach 13 lines; leave room for these
+        // five enrichment lines on top.
+        18,
     );
     why
 }
@@ -1018,6 +1157,8 @@ fn build_context_impact(
             &[format!("direct edit target `{}`", symbol.name)],
             6,
         );
+        // Exact range first so clustering anchors on the edit target itself.
+        entry.2.push(exact_range_for_symbol(symbol));
         entry.2.push(range_for_symbol(symbol));
 
         let mut incoming_count = 0usize;
@@ -1102,18 +1243,22 @@ fn build_context_impact(
         });
     }
 
-    let mut impacted_files = impacted
-        .into_iter()
-        .map(|(path, (score, reasons, ranges))| ContextImpactFile {
+    let mut impacted_files = Vec::with_capacity(impacted.len());
+    for (path, (score, mut reasons, ranges)) in impacted {
+        let range_cap = range_cap_for_path(&path);
+        // The disjoint-range budget lives inside the clustering fn now.
+        let (suggested_ranges, ranges_clipped) =
+            cluster_context_ranges(ranges.into_iter(), range_cap);
+        if ranges_clipped {
+            merge_unique_reasons(&mut reasons, &[range_clipped_reason(range_cap)], 7);
+        }
+        impacted_files.push(ContextImpactFile {
             path,
             score,
             reasons,
-            suggested_ranges: merge_context_ranges(ranges.into_iter())
-                .into_iter()
-                .take(4)
-                .collect(),
-        })
-        .collect::<Vec<_>>();
+            suggested_ranges,
+        });
+    }
     impacted_files.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
     impacted_files.truncate(max_results.min(8));
 
@@ -1211,7 +1356,8 @@ fn collect_context_impact_target_symbols(
             if !is_context_impact_target_symbol(&symbol) {
                 continue;
             }
-            let range = range_for_symbol(&symbol);
+            // Exact symbol range: padding must not fabricate an edit target.
+            let range = exact_range_for_symbol(&symbol);
             let range_match = item
                 .suggested_ranges
                 .iter()
@@ -1339,26 +1485,124 @@ fn is_context_key_symbol(symbol: &Symbol) -> bool {
         )
 }
 
-fn merge_context_ranges<I>(ranges: I) -> Vec<ContextRange>
+/// Cluster prioritized evidence ranges into at most MAX_CONTEXT_RANGES
+/// disjoint ranges.
+///
+/// Input order is PRIORITY order: the first range is the strongest evidence
+/// (callers keep the exact matched-symbol range first). Ranges whose gap is at
+/// most RANGE_CLUSTER_GAP_LINES lines are unioned into one cluster; each
+/// cluster is capped at `max_lines`, clipped around its highest-priority
+/// member so that evidence is never clipped out. Returns the clusters sorted
+/// by start line, plus a flag that is true when any line clipping happened or
+/// a range had to be dropped for the disjoint-range budget.
+fn cluster_context_ranges<I>(ranges: I, max_lines: u32) -> (Vec<ContextRange>, bool)
 where
     I: IntoIterator<Item = ContextRange>,
 {
-    let mut merged = Vec::<ContextRange>::new();
+    struct Cluster {
+        start: u32,
+        end: u32,
+        // Highest-priority member range; clipping must keep it visible.
+        anchor_start: u32,
+        anchor_end: u32,
+    }
+
+    let max_lines = max_lines.max(1);
+    let mut clusters: Vec<Cluster> = Vec::new();
+    let mut clipped = false;
+
     for range in ranges {
-        if range.end_line < range.start_line {
+        if range.end_line < range.start_line || range.start_line == 0 {
             continue;
         }
-        if merged.iter().any(|existing| {
-            existing.start_line <= range.end_line && range.start_line <= existing.end_line
-        }) {
-            continue;
+        // A range and a cluster belong together when they overlap or the gap
+        // between them is at most RANGE_CLUSTER_GAP_LINES lines.
+        let mut matched: Vec<usize> = Vec::new();
+        for (index, cluster) in clusters.iter().enumerate() {
+            let near = range.start_line <= cluster.end.saturating_add(RANGE_CLUSTER_GAP_LINES + 1)
+                && cluster.start <= range.end_line.saturating_add(RANGE_CLUSTER_GAP_LINES + 1);
+            if near {
+                matched.push(index);
+            }
         }
-        merged.push(range);
-        if merged.len() >= 6 {
-            break;
+
+        if let Some(&first) = matched.first() {
+            // Union into the highest-priority (earliest-created) near cluster,
+            // keeping its anchor; a bridging range may then merge later
+            // clusters into it as well.
+            clusters[first].start = clusters[first].start.min(range.start_line);
+            clusters[first].end = clusters[first].end.max(range.end_line);
+            for &index in matched.iter().skip(1).rev() {
+                let other = clusters.remove(index);
+                clusters[first].start = clusters[first].start.min(other.start);
+                clusters[first].end = clusters[first].end.max(other.end);
+            }
+        } else if clusters.len() < MAX_CONTEXT_RANGES {
+            clusters.push(Cluster {
+                start: range.start_line,
+                end: range.end_line,
+                anchor_start: range.start_line,
+                anchor_end: range.end_line,
+            });
+        } else {
+            // No room for another disjoint cluster; drop the weaker evidence
+            // and say so.
+            clipped = true;
         }
     }
-    merged
+
+    let mut result = Vec::with_capacity(clusters.len());
+    for cluster in clusters {
+        let span = cluster.end - cluster.start + 1;
+        if span <= max_lines {
+            result.push(ContextRange {
+                start_line: cluster.start,
+                end_line: cluster.end,
+            });
+            continue;
+        }
+        clipped = true;
+        let anchor_span = cluster.anchor_end - cluster.anchor_start + 1;
+        let start = if anchor_span >= max_lines {
+            // The anchor itself exceeds the cap; keep its head.
+            cluster.anchor_start
+        } else {
+            // Prefer the cluster start, but stay close enough to keep the
+            // whole anchor range inside the capped window.
+            cluster
+                .start
+                .max(cluster.anchor_end.saturating_sub(max_lines - 1))
+        };
+        result.push(ContextRange {
+            start_line: start,
+            end_line: start.saturating_add(max_lines - 1),
+        });
+    }
+    result.sort_by(|a, b| {
+        a.start_line
+            .cmp(&b.start_line)
+            .then_with(|| a.end_line.cmp(&b.end_line))
+    });
+    (result, clipped)
+}
+
+/// Why-string appended by callers when `cluster_context_ranges` reports
+/// clipping, so the model knows the suggestion is intentionally bounded.
+fn range_clipped_reason(max_lines: u32) -> String {
+    format!(
+        "ranges clipped to at most {} disjoint ranges of {} lines",
+        MAX_CONTEXT_RANGES, max_lines
+    )
+}
+
+/// Line cap for suggested ranges in `path`: Markdown/doc files get the tighter
+/// documentation cap.
+fn range_cap_for_path(path: &str) -> u32 {
+    if is_doc_path(path) {
+        MAX_DOC_RANGE_LINES
+    } else {
+        MAX_CONTEXT_RANGE_LINES
+    }
 }
 
 fn collect_related_tests(
@@ -1510,7 +1754,12 @@ fn doc_section_range(service: &LanguageService, heading: &Symbol) -> ContextRang
 
     ContextRange {
         start_line,
-        end_line: end_line.max(start_line).min(start_line.saturating_add(120)),
+        // `start..=start + (MAX_DOC_RANGE_LINES - 1)` is an INCLUSIVE span of
+        // exactly MAX_DOC_RANGE_LINES lines; this range is emitted un-clipped
+        // by the related-docs lane, so the cap must hold here.
+        end_line: end_line
+            .max(start_line)
+            .min(start_line.saturating_add(MAX_DOC_RANGE_LINES.saturating_sub(1))),
     }
 }
 
@@ -1628,36 +1877,18 @@ fn symbol_reason(symbol: &Symbol, intent: Option<&str>) -> String {
     }
 }
 
-fn primary_file_why(
-    query: &str,
-    symbol: &Symbol,
-    intent: Option<&str>,
-    active_file: Option<&str>,
-    open_files: &[String],
-    raw_score: f32,
-    final_score: u32,
-) -> Vec<String> {
-    let mut why = Vec::new();
-    why.push(format!(
-        "query `{}` matched indexed {} `{}`",
-        truncate_chars(query, 80),
-        symbol.symbol_type,
-        symbol_display_name(symbol)
-    ));
-    why.push(format!(
-        "symbol search score {:.2} became file score {}",
-        raw_score, final_score
-    ));
-    if let Some(intent) = intent {
-        why.push(format!("intent `{}` influenced ranking", intent));
-    }
-    if active_file.is_some_and(|path| path == symbol.file_path) {
-        why.push("active file boost applied".to_string());
-    }
-    if open_files.iter().any(|path| path == &symbol.file_path) {
-        why.push("open file boost applied".to_string());
-    }
-    why
+/// Per-hit rationale lines. Intent/active/open boost lines are file-level and
+/// added once during aggregation, not here.
+fn primary_file_why(query: &str, symbol: &Symbol, raw_score: f32) -> Vec<String> {
+    vec![
+        format!(
+            "query `{}` matched indexed {} `{}`",
+            truncate_chars(query, 80),
+            symbol.symbol_type,
+            symbol_display_name(symbol)
+        ),
+        format!("symbol search raw score {:.2}", raw_score),
+    ]
 }
 
 fn symbol_display_name(symbol: &Symbol) -> &str {
@@ -1688,21 +1919,30 @@ fn merge_unique_reasons(target: &mut Vec<String>, incoming: &[String], limit: us
     }
 }
 
+/// Exact 1-based inclusive line range of the symbol itself, with no padding.
+/// `Symbol.range` lines are 0-based; `ContextRange` lines are 1-based.
+fn exact_range_for_symbol(symbol: &Symbol) -> ContextRange {
+    let start = symbol.range.start.line.saturating_add(1).max(1);
+    let end = symbol.range.end.line.saturating_add(1).max(start);
+    ContextRange {
+        start_line: start,
+        end_line: end,
+    }
+}
+
+/// Padded context range around the symbol (up to 20 lines before, 60 after),
+/// capped at MAX_CONTEXT_RANGE_LINES total so an oversized symbol cannot
+/// produce an unbounded suggestion. The symbol's first line always stays
+/// inside the capped range; the exact range is preserved separately by
+/// `exact_range_for_symbol`.
 fn range_for_symbol(symbol: &Symbol) -> ContextRange {
-    let start = symbol
-        .range
-        .start
-        .line
-        .saturating_add(1)
-        .saturating_sub(20)
-        .max(1);
-    let end = symbol
-        .range
-        .end
-        .line
-        .saturating_add(1)
+    let exact = exact_range_for_symbol(symbol);
+    let start = exact.start_line.saturating_sub(20).max(1);
+    let end = exact
+        .end_line
         .saturating_add(60)
-        .max(start);
+        .max(start)
+        .min(start.saturating_add(MAX_CONTEXT_RANGE_LINES - 1));
     ContextRange {
         start_line: start,
         end_line: end,
@@ -1778,6 +2018,42 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tree_sitter::{Position, Range};
+
+    fn test_symbol(name: &str, start_line_0: u32, end_line_0: u32) -> Symbol {
+        Symbol::new(
+            name.to_string(),
+            SymbolType::Function,
+            "src/lib.rs".to_string(),
+            Range::new(Position::new(start_line_0, 0), Position::new(end_line_0, 0)),
+        )
+    }
+
+    fn test_primary_hit(
+        raw_score: f32,
+        facet_index: usize,
+        name: &str,
+        start_line_0: u32,
+        end_line_0: u32,
+    ) -> PrimaryHit {
+        let symbol = test_symbol(name, start_line_0, end_line_0);
+        PrimaryHit {
+            raw_score,
+            facet_index,
+            reason: symbol_reason(&symbol, None),
+            why: primary_file_why("test query", &symbol, raw_score),
+            exact_range: exact_range_for_symbol(&symbol),
+            padded_range: range_for_symbol(&symbol),
+            symbol,
+        }
+    }
+
+    fn cr(start_line: u32, end_line: u32) -> ContextRange {
+        ContextRange {
+            start_line,
+            end_line,
+        }
+    }
 
     #[test]
     fn empty_query_returns_error_payload() {
@@ -1893,6 +2169,11 @@ mod tests {
             .iter()
             .any(|anchor| anchor.value == "/api/blade/context-pack"));
         assert!(!enrichment.suggested_ranges.is_empty());
+        assert!(enrichment.suggested_ranges.len() <= MAX_CONTEXT_RANGES);
+        assert!(enrichment
+            .suggested_ranges
+            .iter()
+            .all(|range| range.end_line - range.start_line + 1 <= MAX_CONTEXT_RANGE_LINES));
     }
 
     #[test]
@@ -2459,5 +2740,412 @@ mod tests {
             project_context.project_index_min_reason.as_deref(),
             Some("included")
         );
+    }
+
+    #[test]
+    fn symbol_ranges_convert_zero_based_lines_to_one_based() {
+        let symbol = test_symbol("smallFn", 30, 35);
+        let exact = exact_range_for_symbol(&symbol);
+        assert_eq!(exact.start_line, 31);
+        assert_eq!(exact.end_line, 36);
+
+        let padded = range_for_symbol(&symbol);
+        assert_eq!(padded.start_line, 11);
+        assert_eq!(padded.end_line, 96);
+    }
+
+    #[test]
+    fn padded_range_caps_oversized_symbols_and_keeps_symbol_start_inside() {
+        let symbol = test_symbol("bigFn", 100, 500);
+        let exact = exact_range_for_symbol(&symbol);
+        assert_eq!(exact.start_line, 101);
+        assert_eq!(exact.end_line, 501);
+
+        let padded = range_for_symbol(&symbol);
+        assert_eq!(padded.start_line, 81);
+        assert_eq!(padded.end_line, 240);
+        assert_eq!(
+            padded.end_line - padded.start_line + 1,
+            MAX_CONTEXT_RANGE_LINES
+        );
+        // The symbol's first line must survive the cap.
+        assert!(padded.start_line <= exact.start_line && exact.start_line <= padded.end_line);
+    }
+
+    #[test]
+    fn aggregation_applies_diminishing_returns_not_flat_sum() {
+        let hits = vec![
+            test_primary_hit(0.6, 0, "alpha", 10, 12),
+            test_primary_hit(0.4, 0, "beta", 40, 42),
+            test_primary_hit(0.2, 0, "gamma", 80, 82),
+        ];
+        let result =
+            aggregate_primary_hits("src/lib.rs".to_string(), hits, 1, None, None, &[]).unwrap();
+        // best + 0.25*second + 0.10*third = 0.6 + 0.1 + 0.02 = 0.72 -> 72.
+        // A flat sum (1.2) would have clamped to 95.
+        assert_eq!(result.score, 72);
+        assert!(result
+            .why
+            .iter()
+            .any(|line| line.contains("strongest evidence") && line.contains("alpha")));
+        assert!(result
+            .why
+            .iter()
+            .any(|line| line.contains("matched 1 of 1 query facet(s)")));
+
+        // Hits beyond the third are ignored entirely.
+        let hits = vec![
+            test_primary_hit(0.6, 0, "alpha", 10, 12),
+            test_primary_hit(0.4, 0, "beta", 40, 42),
+            test_primary_hit(0.2, 0, "gamma", 80, 82),
+            test_primary_hit(0.2, 0, "delta", 120, 122),
+        ];
+        let result =
+            aggregate_primary_hits("src/lib.rs".to_string(), hits, 1, None, None, &[]).unwrap();
+        assert_eq!(result.score, 72);
+    }
+
+    #[test]
+    fn aggregation_confidence_floor_drops_boost_only_files() {
+        // Every hit below the raw floor: the file must vanish entirely.
+        let hits = vec![
+            test_primary_hit(0.19, 0, "noise", 1, 2),
+            test_primary_hit(0.05, 1, "alsoNoise", 9, 10),
+        ];
+        assert!(
+            aggregate_primary_hits("src/lib.rs".to_string(), hits, 2, None, None, &[]).is_none()
+        );
+
+        // A sub-floor hit contributes nothing next to a real hit.
+        let hits = vec![
+            test_primary_hit(0.25, 0, "signal", 1, 3),
+            test_primary_hit(0.19, 1, "noise", 9, 10),
+        ];
+        let result =
+            aggregate_primary_hits("src/lib.rs".to_string(), hits, 2, None, None, &[]).unwrap();
+        assert_eq!(result.score, 25);
+        assert!(result
+            .why
+            .iter()
+            .any(|line| line.contains("matched 1 of 2 query facet(s)")));
+    }
+
+    #[test]
+    fn aggregation_rewards_distinct_facet_coverage_with_capped_bonus() {
+        // Same raw scores as the diminishing-returns test but across three
+        // DISTINCT facets: 0.72 + 2*0.05 = 0.82 -> 82.
+        let hits = vec![
+            test_primary_hit(0.6, 0, "alpha", 10, 12),
+            test_primary_hit(0.4, 1, "beta", 40, 42),
+            test_primary_hit(0.2, 2, "gamma", 80, 82),
+        ];
+        let result =
+            aggregate_primary_hits("src/lib.rs".to_string(), hits, 3, None, None, &[]).unwrap();
+        assert_eq!(result.score, 82);
+        assert!(result
+            .why
+            .iter()
+            .any(|line| line.contains("matched 3 of 3 query facet(s)")));
+
+        // Bonus caps at +0.15: four distinct facets -> 0.72 + 0.15 = 0.87.
+        let hits = vec![
+            test_primary_hit(0.6, 0, "alpha", 10, 12),
+            test_primary_hit(0.4, 1, "beta", 40, 42),
+            test_primary_hit(0.2, 2, "gamma", 80, 82),
+            test_primary_hit(0.2, 3, "delta", 120, 122),
+        ];
+        let result =
+            aggregate_primary_hits("src/lib.rs".to_string(), hits, 4, None, None, &[]).unwrap();
+        assert_eq!(result.score, 87);
+    }
+
+    #[test]
+    fn aggregation_dedupes_hits_per_symbol_before_diminishing_returns() {
+        // ONE symbol matched by two facets: it must fill only ONE
+        // diminishing-returns slot (0.6, not 0.6 + 0.25*0.6) while still
+        // covering both facets for the facet bonus: 0.6 + 0.05 = 0.65 -> 65.
+        let hits = vec![
+            test_primary_hit(0.6, 0, "alpha", 10, 12),
+            test_primary_hit(0.6, 1, "alpha", 10, 12),
+        ];
+        let single_symbol =
+            aggregate_primary_hits("src/lib.rs".to_string(), hits, 2, None, None, &[]).unwrap();
+        assert_eq!(single_symbol.score, 65);
+        assert!(single_symbol
+            .why
+            .iter()
+            .any(|line| line.contains("matched 2 of 2 query facet(s)")));
+
+        // TWO distinct symbols with the same raw scores across the same two
+        // facets: 0.6 + 0.25*0.6 + 0.05 = 0.80 -> 80. Distinct evidence must
+        // score strictly higher than one symbol counted twice.
+        let hits = vec![
+            test_primary_hit(0.6, 0, "alpha", 10, 12),
+            test_primary_hit(0.6, 1, "beta", 40, 42),
+        ];
+        let distinct_symbols =
+            aggregate_primary_hits("src/lib.rs".to_string(), hits, 2, None, None, &[]).unwrap();
+        assert_eq!(distinct_symbols.score, 80);
+        assert!(single_symbol.score < distinct_symbols.score);
+    }
+
+    #[test]
+    fn aggregation_better_second_hit_replaces_reason_and_ranges() {
+        // Masking-bug regression: the old flat `+4` was applied before the
+        // score comparison, so a stronger later hit could fail to replace the
+        // reason and ranges. Buffered aggregation must pick the best raw hit.
+        let hits = vec![
+            test_primary_hit(0.5, 0, "weakSymbol", 10, 12),
+            test_primary_hit(0.9, 1, "strongSymbol", 200, 204),
+        ];
+        let result =
+            aggregate_primary_hits("src/lib.rs".to_string(), hits, 2, None, None, &[]).unwrap();
+        assert!(result.reason.contains("strongSymbol"));
+        // Exact matched-symbol range first, padded range second.
+        assert_eq!(result.suggested_ranges[0].start_line, 201);
+        assert_eq!(result.suggested_ranges[0].end_line, 205);
+        assert!(result.suggested_ranges[1].start_line <= 201);
+        assert!(result
+            .why
+            .iter()
+            .any(|line| line.contains("strongest evidence") && line.contains("strongSymbol")));
+        // 0.9 + 0.25*0.5 + 0.05 facet bonus = 1.075 -> clamped quantization 95.
+        assert_eq!(result.score, 95);
+    }
+
+    #[test]
+    fn aggregation_applies_editor_boosts_once_per_file() {
+        let hits = vec![
+            test_primary_hit(0.5, 0, "alpha", 10, 12),
+            test_primary_hit(0.5, 0, "beta", 40, 42),
+        ];
+        let result = aggregate_primary_hits(
+            "src/lib.rs".to_string(),
+            hits,
+            1,
+            None,
+            Some("src/lib.rs"),
+            &[],
+        )
+        .unwrap();
+        // 0.5 + 0.125 = 0.625 -> 63, plus ONE active-file boost of 8 -> 71.
+        assert_eq!(result.score, 71);
+        assert_eq!(
+            result
+                .why
+                .iter()
+                .filter(|line| line.as_str() == "active file boost applied")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn primary_lane_retrieval_is_boost_free_so_editor_boosts_apply_exactly_once() {
+        // Regression: the primary lane used contextual retrieval, which bakes
+        // active/open-file boosts into every RAW hit score, and then the
+        // aggregator applied the same boosts once per file — double-counting.
+        // With non-contextual retrieval, two identical symbols in different
+        // directories must differ by EXACTLY the once-per-file +8 active-file
+        // boost.
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service = test_language_service(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("src/alpha")).unwrap();
+        std::fs::create_dir_all(temp_dir.path().join("src/beta")).unwrap();
+        std::fs::write(
+            temp_dir.path().join("src/alpha/engine.rs"),
+            "pub const WARP_FACTOR: u32 = 9;\n",
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.path().join("src/beta/engine.rs"),
+            "pub const WARP_FACTOR: u32 = 9;\n",
+        )
+        .unwrap();
+        service.index_file("src/alpha/engine.rs").unwrap();
+        service.index_file("src/beta/engine.rs").unwrap();
+
+        let queries = vec!["factor warp".to_string()];
+        let items = collect_primary_files_for_queries(
+            &service,
+            &queries,
+            None,
+            5,
+            Some("src/alpha/engine.rs"),
+            &[],
+        );
+        let active = items
+            .iter()
+            .find(|item| item.path == "src/alpha/engine.rs")
+            .expect("active file ranked");
+        let other = items
+            .iter()
+            .find(|item| item.path == "src/beta/engine.rs")
+            .expect("non-active file ranked");
+        // Identical raw evidence: the only difference is the single
+        // aggregation-time active-file boost. Contextual retrieval would have
+        // inflated the active file's raw score too (+0.35/+0.12), widening
+        // the gap well beyond 8.
+        assert_eq!(active.score, other.score + 8);
+        assert!(active.score < 100, "delta must not be masked by the cap");
+    }
+
+    #[test]
+    fn clustering_unions_nearby_ranges_and_respects_the_gap() {
+        let (ranges, clipped) =
+            cluster_context_ranges(vec![cr(10, 20), cr(25, 30)], MAX_CONTEXT_RANGE_LINES);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start_line, 10);
+        assert_eq!(ranges[0].end_line, 30);
+        assert!(!clipped);
+
+        // Gap of exactly RANGE_CLUSTER_GAP_LINES lines still unions...
+        let (ranges, _) =
+            cluster_context_ranges(vec![cr(10, 20), cr(29, 35)], MAX_CONTEXT_RANGE_LINES);
+        assert_eq!(ranges.len(), 1);
+        // ...one more line of gap stays disjoint.
+        let (ranges, clipped) =
+            cluster_context_ranges(vec![cr(10, 20), cr(30, 35)], MAX_CONTEXT_RANGE_LINES);
+        assert_eq!(ranges.len(), 2);
+        assert!(!clipped);
+    }
+
+    #[test]
+    fn clustering_sorts_disjoint_ranges_by_start_line() {
+        let (ranges, clipped) =
+            cluster_context_ranges(vec![cr(100, 110), cr(10, 20)], MAX_CONTEXT_RANGE_LINES);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].start_line, 10);
+        assert_eq!(ranges[1].start_line, 100);
+        assert!(!clipped);
+    }
+
+    #[test]
+    fn clustering_caps_at_three_disjoint_ranges_and_flags_dropping() {
+        let (ranges, clipped) = cluster_context_ranges(
+            vec![cr(1, 5), cr(100, 105), cr(200, 205), cr(300, 305)],
+            MAX_CONTEXT_RANGE_LINES,
+        );
+        assert_eq!(ranges.len(), MAX_CONTEXT_RANGES);
+        // The three highest-priority ranges survive.
+        assert_eq!(ranges[0].start_line, 1);
+        assert_eq!(ranges[1].start_line, 100);
+        assert_eq!(ranges[2].start_line, 200);
+        assert!(clipped);
+    }
+
+    #[test]
+    fn clustering_clips_to_line_caps_and_flags_it() {
+        let (ranges, clipped) = cluster_context_ranges(vec![cr(1, 400)], MAX_CONTEXT_RANGE_LINES);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start_line, 1);
+        assert_eq!(ranges[0].end_line, 160);
+        assert!(clipped);
+
+        // Markdown cap is tighter.
+        let (ranges, clipped) = cluster_context_ranges(vec![cr(1, 400)], MAX_DOC_RANGE_LINES);
+        assert_eq!(ranges[0].end_line, 120);
+        assert!(clipped);
+    }
+
+    #[test]
+    fn clustering_keeps_highest_priority_evidence_inside_clipped_range() {
+        // The exact matched-symbol range comes first (priority order); a huge
+        // padded range would otherwise clip it out from the top.
+        let (ranges, clipped) =
+            cluster_context_ranges(vec![cr(300, 305), cr(1, 400)], MAX_CONTEXT_RANGE_LINES);
+        assert_eq!(ranges.len(), 1);
+        assert!(clipped);
+        assert_eq!(ranges[0].end_line - ranges[0].start_line + 1, 160);
+        // The anchor evidence lines 300..305 survive the clipping.
+        assert!(ranges[0].start_line <= 300);
+        assert!(ranges[0].end_line >= 305);
+    }
+
+    #[test]
+    fn clustering_merges_clusters_bridged_by_a_later_range() {
+        let (ranges, clipped) = cluster_context_ranges(
+            vec![cr(1, 10), cr(30, 40), cr(12, 28)],
+            MAX_CONTEXT_RANGE_LINES,
+        );
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start_line, 1);
+        assert_eq!(ranges[0].end_line, 40);
+        assert!(!clipped);
+    }
+
+    #[test]
+    fn clustering_skips_invalid_ranges_without_flagging() {
+        let (ranges, clipped) =
+            cluster_context_ranges(vec![cr(20, 10), cr(0, 5)], MAX_CONTEXT_RANGE_LINES);
+        assert!(ranges.is_empty());
+        assert!(!clipped);
+    }
+
+    #[test]
+    fn fallback_path_matches_use_capped_default_range() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        std::fs::write(
+            temp_dir.path().join("src/context_helper.rs"),
+            "pub fn context_helper() {}\n",
+        )
+        .unwrap();
+
+        let queries = vec!["context helper".to_string()];
+        let items = collect_fallback_path_matches_for_queries(temp_dir.path(), &queries, 4);
+        let item = items
+            .iter()
+            .find(|item| item.path == "src/context_helper.rs")
+            .expect("fallback path match");
+        assert_eq!(item.suggested_ranges[0].start_line, 1);
+        assert_eq!(item.suggested_ranges[0].end_line, MAX_CONTEXT_RANGE_LINES);
+    }
+
+    #[test]
+    fn doc_section_range_caps_markdown_and_stops_at_peer_or_parent_heading() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let service = test_language_service(temp_dir.path());
+        std::fs::create_dir_all(temp_dir.path().join("docs")).unwrap();
+
+        // Peer heading is 151 lines away, so the Markdown cap wins.
+        let mut content = String::from("## Alpha\n");
+        for index in 0..150 {
+            content.push_str(&format!("alpha body line {}\n", index));
+        }
+        content.push_str("## Beta\nbeta body\n");
+        std::fs::write(temp_dir.path().join("docs/long.md"), content).unwrap();
+        service.index_file("docs/long.md").unwrap();
+
+        let symbols = service.get_file_symbols("docs/long.md").unwrap();
+        let alpha = symbols
+            .iter()
+            .find(|symbol| symbol.symbol_type == SymbolType::Heading && symbol.name == "Alpha")
+            .expect("Alpha heading indexed");
+        let range = doc_section_range(&service, alpha);
+        assert_eq!(range.start_line, 1);
+        // Inclusive span: lines 1..=120 is exactly MAX_DOC_RANGE_LINES lines.
+        assert_eq!(range.end_line, 120);
+        assert_eq!(
+            range.end_line - range.start_line + 1,
+            MAX_DOC_RANGE_LINES,
+            "doc section span must never exceed the doc range cap"
+        );
+
+        // A parent heading stops a subsection before the cap matters.
+        std::fs::write(
+            temp_dir.path().join("docs/short.md"),
+            "### Sub\nsub body\nmore\n## Parent\nparent body\n",
+        )
+        .unwrap();
+        service.index_file("docs/short.md").unwrap();
+        let symbols = service.get_file_symbols("docs/short.md").unwrap();
+        let sub = symbols
+            .iter()
+            .find(|symbol| symbol.symbol_type == SymbolType::Heading && symbol.name == "Sub")
+            .expect("Sub heading indexed");
+        let range = doc_section_range(&service, sub);
+        assert_eq!(range.start_line, 1);
+        assert_eq!(range.end_line, 3);
     }
 }

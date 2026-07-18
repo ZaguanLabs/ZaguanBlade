@@ -224,7 +224,12 @@ fn is_batch_read_only_tool(tool_name: &str) -> bool {
 }
 
 /// RFC: Large Tool Result Handling - Size limits
-const MAX_TOOL_RESULT_BYTES: usize = 50 * 1024; // 50KB
+/// Hard gate: no tool result exceeds 48 KiB (plus the truncation banner).
+const MAX_TOOL_RESULT_BYTES: usize = 48 * 1024; // 48 KiB
+/// Discovery tools (symbol_search, symbol_outline, semantic_anchor_search)
+/// get a tighter 24 KiB budget: their results are shortlists meant to be
+/// followed up with targeted reads, never bulk payloads.
+const MAX_DISCOVERY_RESULT_BYTES: usize = 24 * 1024; // 24 KiB
 const MAX_TOOL_RESULT_LINES: usize = 2000;
 const HEAD_LINES: usize = 100;
 const TAIL_LINES: usize = 50;
@@ -450,7 +455,20 @@ impl ToolResult {
 
     pub fn to_tool_content_truncated_for_tool(&self, tool_name: &str) -> String {
         let content = self.to_tool_content_for_tool(tool_name);
-        truncate_large_content(&content)
+        truncate_large_content_to(&content, tool_result_byte_budget(tool_name))
+    }
+}
+
+/// Per-tool byte budget for model-visible tool results. Discovery tools
+/// (shortlist producers whose output is meant to be followed up with targeted
+/// reads) get the tighter 24 KiB budget; everything else gets the 48 KiB hard
+/// gate.
+fn tool_result_byte_budget(tool_name: &str) -> usize {
+    match tool_name {
+        "symbol_search" | "symbol_outline" | "semantic_anchor_search" => {
+            MAX_DISCOVERY_RESULT_BYTES
+        }
+        _ => MAX_TOOL_RESULT_BYTES,
     }
 }
 
@@ -555,22 +573,27 @@ mod tests {
     use super::{
         apply_multi_patch_to_string, apply_patch_to_string, apply_patch_to_string_with_line_hint,
         apply_semantic_patch_with_service, apply_semantic_patch_writes_with_service,
-        build_incoming_impact_path, build_symbol_query_context, compact_outline_nodes_for_parent,
-        execute_tool, execute_tool_with_editor, fast_context_tool, format_investigation_markdown,
-        grep_search, impact_confidence, impact_risk_level, investigation_confidence,
-        is_batch_read_only_tool, language_support_for_path_json, language_support_meta_json,
-        merge_language_diagnostics, paginate_tool_results, parse_grep_timeout_ms,
-        parse_relationship_types_arg, related_symbol_to_json, related_test_files_for_paths,
-        stage_semantic_patch_writes, symbol_inventory_entries, symbol_inventory_summary,
-        symbol_language_diagnostics, symbol_outline_diagnostics, symbol_reference_resolution_json,
+        build_incoming_impact_path, build_symbol_query_context, classify_reference_signal,
+        compact_outline_nodes_for_parent, empty_result_trust_from_parts, execute_tool,
+        execute_tool_with_editor, fast_context_tool, format_investigation_markdown, grep_search,
+        impact_confidence, impact_risk_level, investigation_confidence, is_batch_read_only_tool,
+        language_support_for_path_json, language_support_meta_json, merge_language_diagnostics,
+        paginate_tool_results, parse_anchor_query_mode_arg, parse_grep_timeout_ms,
+        parse_relationship_types_arg, partition_low_signal_references, related_symbol_to_json,
+        related_test_files_for_paths, require_symbol_by_id, resolve_symbol_from_graph_args,
+        resolve_symbol_path_endpoint, serialize_reference_groups, stage_semantic_patch_writes,
+        symbol_inventory_entries, symbol_inventory_summary, symbol_language_diagnostics,
+        symbol_outline_diagnostics, symbol_reference_resolution_json,
         symbol_search_connection_json, symbol_to_json, symbol_to_json_full,
-        transitive_impact_score, EditorState, PatchHunk, SemanticPatchWrite, ToolResult,
+        tool_result_byte_budget, transitive_impact_score, truncate_large_content,
+        truncate_large_content_to, EditorState, PatchHunk, SemanticPatchWrite, ToolResult,
         GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
+        MAX_DISCOVERY_RESULT_BYTES, MAX_TOOL_RESULT_BYTES,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
     use crate::tree_sitter::{Position, Range, Symbol, SymbolType};
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::fs;
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -1087,6 +1110,472 @@ mod tests {
         assert_eq!(path[0]["from"]["name"], "caller");
         assert_eq!(path[0]["to"]["name"], "middle");
         assert_eq!(path[1]["to"]["name"], "seed");
+    }
+
+    fn test_reference(
+        target_name: &str,
+        relationship_type: crate::tree_sitter::SymbolRelationshipType,
+        target_symbol_id: Option<&str>,
+        confidence: Option<f32>,
+        line: u32,
+    ) -> crate::symbol_index::SymbolReference {
+        crate::symbol_index::SymbolReference {
+            source_symbol: test_symbol("caller", "caller", SymbolType::Function, 1, None),
+            relationship_type,
+            target_name: target_name.to_string(),
+            target_symbol_id: target_symbol_id.map(str::to_string),
+            target_symbol: None,
+            line,
+            observation_kind: crate::symbol_index::RelationshipObservationKind::SyntaxExtracted,
+            resolution_strategy: target_symbol_id.map(|_| "same_file_unique".to_string()),
+            resolution_confidence: confidence,
+            receiver_type: None,
+            receiver_is_self: false,
+        }
+    }
+
+    /// Track E — an unknown ID is an actionable error naming the recovery
+    /// tools, never a bare "symbol not found".
+    #[test]
+    fn require_symbol_by_id_rejects_unknown_ids_with_recovery_guidance() {
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(SymbolStore::in_memory().expect("in-memory symbol store"));
+        let service =
+            crate::language_service::LanguageService::new(temp_dir.path().to_path_buf(), store)
+                .unwrap();
+
+        let err = require_symbol_by_id(&service, "synthetic:not-a-real-id").unwrap_err();
+
+        assert!(err.contains("'synthetic:not-a-real-id'"), "got: {err}");
+        assert!(err.contains("symbol_search"), "got: {err}");
+        assert!(err.contains("symbol_outline"), "got: {err}");
+        assert!(err.contains("do not synthesize"), "got: {err}");
+    }
+
+    /// Track F — the empty-result trust matrix: absence claims must degrade
+    /// honestly with path support, index health, truncation, and low-signal
+    /// suppression. `trustworthy_empty` is a reserved value that is NEVER
+    /// emitted for relationship-kind queries: "kind modelled" is not "kind
+    /// exhaustively covered" (Rust calls inside macro token trees are never
+    /// extracted; callers in unindexed/unsupported files are invisible; Rust
+    /// usage edges are file-local-const only).
+    #[test]
+    fn empty_result_trust_matrix_classifies_absence_honestly() {
+        use crate::language_service::{IndexHealthSnapshot, IndexHealthStatus};
+        use crate::tree_sitter::SymbolRelationshipType;
+
+        let fresh = IndexHealthSnapshot {
+            status: IndexHealthStatus::Fresh,
+            ..IndexHealthSnapshot::default()
+        };
+        let call = [SymbolRelationshipType::Call];
+
+        // Unsupported path wins regardless of health.
+        assert_eq!(
+            empty_result_trust_from_parts(&fresh, Some("assets/logo.png"), &call, 0, false, 0),
+            "unsupported"
+        );
+        // Even the best case — fresh index, fully supported language, modelled
+        // kind, nothing truncated, nothing suppressed — must NOT claim
+        // `trustworthy_empty`: extraction is not exhaustive (macro token
+        // trees, cross-language callers, file-local-only usage).
+        assert_eq!(
+            empty_result_trust_from_parts(&fresh, Some("src/main.rs"), &call, 0, false, 0),
+            "partial_coverage"
+        );
+        // Fresh, but the language models no relationship kinds at all
+        // (C/C++ is definitions-only) -> partial coverage, never "unused".
+        assert_eq!(
+            empty_result_trust_from_parts(&fresh, Some("src/main.cpp"), &call, 0, false, 0),
+            "partial_coverage"
+        );
+        // Fresh, but a kind the language does not model (Rust has no
+        // `handles` extraction).
+        assert_eq!(
+            empty_result_trust_from_parts(
+                &fresh,
+                Some("src/main.rs"),
+                &[SymbolRelationshipType::Handles],
+                0,
+                false,
+                0
+            ),
+            "partial_coverage"
+        );
+        // Kind-agnostic queries can never vouch for exhaustive coverage.
+        assert_eq!(
+            empty_result_trust_from_parts(&fresh, Some("src/main.rs"), &[], 0, false, 0),
+            "partial_coverage"
+        );
+        // A truncated fetch cannot prove absence.
+        assert_eq!(
+            empty_result_trust_from_parts(&fresh, Some("src/main.rs"), &call, 3, true, 0),
+            "partial_coverage"
+        );
+        // Suppressed low-signal edges force partial_coverage: the serialized
+        // (possibly empty) view is not the full known set.
+        assert_eq!(
+            empty_result_trust_from_parts(&fresh, Some("src/main.rs"), &call, 0, false, 2),
+            "partial_coverage"
+        );
+        // Stale-file overlap downgrades even a Fresh status.
+        let stale_overlap = IndexHealthSnapshot {
+            status: IndexHealthStatus::Fresh,
+            stale_files: 2,
+            ..IndexHealthSnapshot::default()
+        };
+        assert_eq!(
+            empty_result_trust_from_parts(&stale_overlap, Some("src/main.rs"), &call, 0, false, 0),
+            "stale"
+        );
+        let indexing = IndexHealthSnapshot {
+            status: IndexHealthStatus::Indexing,
+            ..IndexHealthSnapshot::default()
+        };
+        assert_eq!(
+            empty_result_trust_from_parts(&indexing, Some("src/main.rs"), &call, 0, false, 0),
+            "indexing"
+        );
+        // Default snapshot is Unknown -> cold/unavailable.
+        assert_eq!(
+            empty_result_trust_from_parts(
+                &IndexHealthSnapshot::default(),
+                Some("src/main.rs"),
+                &call,
+                0,
+                false,
+                0
+            ),
+            "unavailable"
+        );
+    }
+
+    /// Track L — only unresolved generic/short call-ish targets are low
+    /// signal; resolved edges and structural relationships never are.
+    #[test]
+    fn classify_reference_signal_flags_only_unresolved_generic_targets() {
+        use crate::tree_sitter::SymbolRelationshipType;
+
+        // Unresolved generic stdlib helpers -> low signal.
+        assert!(classify_reference_signal(&test_reference(
+            "len",
+            SymbolRelationshipType::Call,
+            None,
+            None,
+            2
+        )));
+        assert!(classify_reference_signal(&test_reference(
+            "clone",
+            SymbolRelationshipType::Call,
+            None,
+            None,
+            2
+        )));
+        // Very short unresolved names -> low signal.
+        assert!(classify_reference_signal(&test_reference(
+            "ok",
+            SymbolRelationshipType::Call,
+            None,
+            None,
+            2
+        )));
+        // Resolved edges are never low signal, generic name or not.
+        assert!(!classify_reference_signal(&test_reference(
+            "len",
+            SymbolRelationshipType::Call,
+            Some("target-id"),
+            Some(0.95),
+            2
+        )));
+        // Structural relationships stay even when unresolved.
+        assert!(!classify_reference_signal(&test_reference(
+            "len",
+            SymbolRelationshipType::Import,
+            None,
+            None,
+            2
+        )));
+        // Unresolved but specific project names stay.
+        assert!(!classify_reference_signal(&test_reference(
+            "MyService",
+            SymbolRelationshipType::Call,
+            None,
+            None,
+            2
+        )));
+    }
+
+    /// Track L — suppression counts distinct (post-dedupe) edges, and each
+    /// serialized group ranks resolved edges first, then confidence desc.
+    #[test]
+    fn low_signal_suppression_counts_deduped_edges_and_ranks_resolved_first() {
+        use crate::tree_sitter::SymbolRelationshipType;
+
+        let mut groups = BTreeMap::new();
+        groups.insert(
+            "call".to_string(),
+            vec![
+                test_reference("len", SymbolRelationshipType::Call, None, None, 2),
+                test_reference(
+                    "helper",
+                    SymbolRelationshipType::Call,
+                    Some("t1"),
+                    Some(0.6),
+                    9,
+                ),
+                test_reference("MyService", SymbolRelationshipType::Call, None, None, 5),
+                test_reference(
+                    "helper",
+                    SymbolRelationshipType::Call,
+                    Some("t2"),
+                    Some(0.95),
+                    4,
+                ),
+            ],
+        );
+
+        let mut suppressed = 0usize;
+        let mut direction_total = 0usize;
+        let mut relationship_totals = BTreeMap::new();
+        let serialized = serialize_reference_groups(
+            groups,
+            false,
+            0,
+            usize::MAX,
+            &mut suppressed,
+            &mut direction_total,
+            &mut relationship_totals,
+        );
+
+        assert_eq!(suppressed, 1);
+        assert_eq!(direction_total, 3);
+        assert_eq!(relationship_totals.get("call"), Some(&3));
+        let calls = serialized.get("call").expect("call group kept");
+        assert_eq!(calls.len(), 3);
+        // Resolved first, confidence desc, unresolved last.
+        assert_eq!(calls[0]["target_symbol_id"], "t2");
+        assert_eq!(calls[1]["target_symbol_id"], "t1");
+        assert_eq!(calls[2]["target_name"], "MyService");
+
+        // include_low_signal disables suppression entirely.
+        let (kept, exhaustive_suppressed) = partition_low_signal_references(
+            vec![test_reference(
+                "len",
+                SymbolRelationshipType::Call,
+                None,
+                None,
+                2,
+            )],
+            true,
+        );
+        assert_eq!(exhaustive_suppressed, 0);
+        assert_eq!(kept.len(), 1);
+
+        // A group that suppression empties is dropped, but still counted.
+        let mut all_generic = BTreeMap::new();
+        all_generic.insert(
+            "call".to_string(),
+            vec![test_reference(
+                "len",
+                SymbolRelationshipType::Call,
+                None,
+                None,
+                2,
+            )],
+        );
+        let mut suppressed_all = 0usize;
+        let mut total_all = 0usize;
+        let mut totals_all = BTreeMap::new();
+        let empty_serialized = serialize_reference_groups(
+            all_generic,
+            false,
+            0,
+            usize::MAX,
+            &mut suppressed_all,
+            &mut total_all,
+            &mut totals_all,
+        );
+        assert_eq!(suppressed_all, 1);
+        assert_eq!(total_all, 0);
+        assert!(empty_serialized.is_empty());
+        assert!(totals_all.is_empty());
+    }
+
+    /// Finding O — symbol_references pagination: `offset` indexes the ranked
+    /// post-suppression list per relationship group, ranking is a TOTAL order
+    /// (final tie-breakers: target_name, then source symbol id), so page 0 and
+    /// page 1 are disjoint, their union equals the unpaged set, and no
+    /// reference is ever duplicated across pages.
+    #[test]
+    fn symbol_references_pages_are_disjoint_and_union_to_the_unpaged_set() {
+        use crate::tree_sitter::SymbolRelationshipType;
+
+        // Five resolved references with IDENTICAL confidence, file, and line —
+        // only the target_name / source-symbol-id tie-breakers order them, so
+        // any comparator weaker than a total order would make paging flaky.
+        let make = |source_id: &str, target: &str| {
+            let mut reference = test_reference(
+                target,
+                SymbolRelationshipType::Call,
+                Some("resolved-target"),
+                Some(0.9),
+                7,
+            );
+            reference.source_symbol = test_symbol(source_id, "caller", SymbolType::Function, 1, None);
+            reference
+        };
+        let references = vec![
+            make("s3", "HelperC"),
+            make("s1", "HelperA"),
+            make("s5", "HelperE"),
+            make("s2", "HelperB"),
+            make("s4", "HelperD"),
+        ];
+
+        let page_keys = |input: Vec<crate::symbol_index::SymbolReference>,
+                         offset: usize,
+                         limit: usize|
+         -> Vec<(String, String)> {
+            let mut groups = BTreeMap::new();
+            groups.insert("call".to_string(), input);
+            let mut suppressed = 0usize;
+            let mut total = 0usize;
+            let mut totals = BTreeMap::new();
+            let serialized = serialize_reference_groups(
+                groups,
+                false,
+                offset,
+                limit,
+                &mut suppressed,
+                &mut total,
+                &mut totals,
+            );
+            serialized
+                .get("call")
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .map(|entry| {
+                            (
+                                entry["source_symbol"]["id"].as_str().unwrap().to_string(),
+                                entry["target_name"].as_str().unwrap().to_string(),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let reversed = || references.iter().rev().cloned().collect::<Vec<_>>();
+
+        let unpaged = page_keys(references.clone(), 0, usize::MAX);
+        assert_eq!(unpaged.len(), 5);
+
+        // Deliberately feed DIFFERENT input orders to different pages: only a
+        // total-order comparator keeps the pages consistent (a stable sort
+        // with a partial comparator would leak store order into the pages).
+        let page0 = page_keys(reversed(), 0, 2);
+        let page1 = page_keys(references.clone(), 2, 2);
+        let page2 = page_keys(reversed(), 4, 2);
+        assert_eq!(page0.len(), 2);
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page2.len(), 1);
+
+        // Disjoint: no key appears on more than one page.
+        for key in &page0 {
+            assert!(!page1.contains(key) && !page2.contains(key), "dup: {key:?}");
+        }
+        for key in &page1 {
+            assert!(!page2.contains(key), "dup: {key:?}");
+        }
+
+        // Union in order equals the unpaged ranked list (no dups, no gaps).
+        let mut union = Vec::new();
+        union.extend(page0);
+        union.extend(page1);
+        union.extend(page2);
+        assert_eq!(union, unpaged);
+
+        // Paging past the end yields an empty (dropped) group, not an error.
+        assert!(page_keys(references.clone(), 5, 2).is_empty());
+
+        // Determinism: the same page is identical regardless of input order.
+        assert_eq!(
+            page_keys(references.clone(), 2, 2),
+            page_keys(reversed(), 2, 2)
+        );
+    }
+
+    /// Finding P — endpoint-level invalid-ID boundary: an invented symbol_id
+    /// through the shared graph-args resolver produces the actionable
+    /// recovery error, and the prefixed path-endpoint variant preserves the
+    /// source/target prefix on that same error.
+    #[test]
+    fn graph_args_and_path_endpoints_reject_invented_symbol_ids_actionably() {
+        let temp_dir = tempdir().unwrap();
+        let store = Arc::new(SymbolStore::in_memory().expect("in-memory symbol store"));
+        let service =
+            crate::language_service::LanguageService::new(temp_dir.path().to_path_buf(), store)
+                .unwrap();
+
+        let mut args = HashMap::new();
+        args.insert(
+            "symbol_id".to_string(),
+            serde_json::json!("src/fake.rs::invented#function"),
+        );
+        let err = resolve_symbol_from_graph_args(temp_dir.path(), &service, &args).unwrap_err();
+        assert!(err.contains("'src/fake.rs::invented#function'"), "got: {err}");
+        assert!(err.contains("symbol_search"), "got: {err}");
+        assert!(err.contains("symbol_outline"), "got: {err}");
+        assert!(err.contains("do not synthesize"), "got: {err}");
+
+        // Prefixed path-endpoint variant (symbol_path source/target): the
+        // endpoint context survives on the same actionable error.
+        for prefix in ["source", "target"] {
+            let mut endpoint_args = HashMap::new();
+            endpoint_args.insert(
+                format!("{prefix}_symbol_id"),
+                serde_json::json!("src/fake.rs::invented#function"),
+            );
+            let err =
+                resolve_symbol_path_endpoint(temp_dir.path(), &service, &endpoint_args, prefix)
+                    .unwrap_err();
+            assert!(err.starts_with(&format!("{prefix}: ")), "got: {err}");
+            assert!(err.contains("symbol_search"), "got: {err}");
+            assert!(err.contains("symbol_outline"), "got: {err}");
+            assert!(err.contains("do not synthesize"), "got: {err}");
+        }
+    }
+
+    /// Track H — mode arg: missing defaults to phrase; unknown values are an
+    /// explicit error listing the valid modes.
+    #[test]
+    fn anchor_query_mode_arg_defaults_to_phrase_and_rejects_unknown_modes() {
+        use crate::symbol_index::AnchorQueryMode;
+
+        let empty = HashMap::new();
+        assert_eq!(
+            parse_anchor_query_mode_arg(&empty).unwrap(),
+            AnchorQueryMode::Phrase
+        );
+
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), serde_json::json!("any_terms"));
+        assert_eq!(
+            parse_anchor_query_mode_arg(&args).unwrap(),
+            AnchorQueryMode::AnyTerms
+        );
+        args.insert("mode".to_string(), serde_json::json!("all_terms"));
+        assert_eq!(
+            parse_anchor_query_mode_arg(&args).unwrap(),
+            AnchorQueryMode::AllTerms
+        );
+
+        args.insert("mode".to_string(), serde_json::json!("fuzzy"));
+        let err = parse_anchor_query_mode_arg(&args).unwrap_err();
+        assert!(err.contains("'fuzzy'"), "got: {err}");
+        assert!(err.contains("phrase"), "got: {err}");
+        assert!(err.contains("all_terms"), "got: {err}");
+        assert!(err.contains("any_terms"), "got: {err}");
     }
 
     #[test]
@@ -2080,38 +2569,249 @@ mod tests {
             "const after = 2;\n"
         );
     }
+
+    // ---- Track J: byte-based truncation for large single-line content ----------
+
+    #[test]
+    fn byte_budgets_pin_hard_and_discovery_gates() {
+        // Hard gate: at most 48 KiB for any tool result; discovery tools get
+        // the tighter 24 KiB shortlist budget.
+        assert_eq!(MAX_TOOL_RESULT_BYTES, 48 * 1024);
+        assert_eq!(MAX_DISCOVERY_RESULT_BYTES, 24 * 1024);
+        for tool in ["symbol_search", "symbol_outline", "semantic_anchor_search"] {
+            assert_eq!(tool_result_byte_budget(tool), MAX_DISCOVERY_RESULT_BYTES);
+        }
+        for tool in ["read_file", "grep_search", "symbol_references", "fast_context"] {
+            assert_eq!(tool_result_byte_budget(tool), MAX_TOOL_RESULT_BYTES);
+        }
+    }
+
+    #[test]
+    fn truncate_large_content_to_bounds_output_near_the_given_budget() {
+        let huge: String = "x".repeat(MAX_TOOL_RESULT_BYTES * 2);
+        let result = truncate_large_content_to(&huge, MAX_DISCOVERY_RESULT_BYTES);
+        assert!(
+            result.len() < MAX_DISCOVERY_RESULT_BYTES + 512,
+            "discovery-budget truncation produced {} bytes (budget {})",
+            result.len(),
+            MAX_DISCOVERY_RESULT_BYTES
+        );
+        assert!(result.contains("[TRUNCATED:"));
+        // Content within the budget passes through untouched.
+        let small = "y".repeat(MAX_DISCOVERY_RESULT_BYTES / 2);
+        assert_eq!(truncate_large_content_to(&small, MAX_DISCOVERY_RESULT_BYTES), small);
+    }
+
+    #[test]
+    fn discovery_tools_get_the_24k_budget_via_to_tool_content_truncated_for_tool() {
+        // A payload between the two budgets: kept whole under the hard gate,
+        // truncated under the discovery budget.
+        let payload = "z".repeat((MAX_DISCOVERY_RESULT_BYTES + MAX_TOOL_RESULT_BYTES) / 2);
+        let result = ToolResult::ok(payload.clone());
+
+        let hard = result.to_tool_content_truncated_for_tool("read_file");
+        assert_eq!(hard, payload, "non-discovery tools keep the 48 KiB gate");
+
+        for tool in ["symbol_search", "symbol_outline", "semantic_anchor_search"] {
+            let discovery = result.to_tool_content_truncated_for_tool(tool);
+            assert!(
+                discovery.len() < MAX_DISCOVERY_RESULT_BYTES + 512,
+                "{tool}: {} bytes exceeds the discovery budget",
+                discovery.len()
+            );
+            assert!(discovery.contains("[TRUNCATED:"), "{tool}: banner missing");
+        }
+    }
+
+    #[test]
+    fn truncate_large_content_returns_small_content_unchanged() {
+        let content = "hello world\nshort content\n";
+        assert_eq!(truncate_large_content(content), content);
+    }
+
+    #[test]
+    fn truncate_large_content_truncates_by_lines_when_many_lines() {
+        // Generate 3000 lines, each short.
+        let content: String = (0..3000).map(|i| format!("line {i}\n")).collect();
+        let result = truncate_large_content(&content);
+        assert!(
+            result.contains("[TRUNCATED:"),
+            "should contain truncation marker"
+        );
+        assert!(
+            result.contains("showing first 100 and last 50 lines"),
+            "should report line-based truncation"
+        );
+        // The result should be much smaller than the original.
+        assert!(result.len() < content.len());
+    }
+
+    #[test]
+    fn truncate_large_content_truncates_huge_single_line_by_bytes() {
+        // A single line that exceeds MAX_TOOL_RESULT_BYTES.
+        // This is the regression case: previously returned as-is.
+        let huge: String = "x".repeat(MAX_TOOL_RESULT_BYTES * 2);
+        assert_eq!(huge.lines().count(), 1); // single line
+        let result = truncate_large_content(&huge);
+        assert!(
+            result.contains("[TRUNCATED:"),
+            "single-line oversized content must be truncated, got {} bytes",
+            result.len()
+        );
+        assert!(
+            result.contains("showing first") && result.contains("and last"),
+            "should report head/tail byte truncation"
+        );
+        // The result must be smaller than the original.
+        assert!(
+            result.len() < huge.len(),
+            "truncated result ({}) must be smaller than input ({})",
+            result.len(),
+            huge.len()
+        );
+        // The result should be roughly within the byte budget (plus message overhead).
+        assert!(
+            result.len() < MAX_TOOL_RESULT_BYTES + 512,
+            "truncated result ({}) should be near the byte budget ({})",
+            result.len(),
+            MAX_TOOL_RESULT_BYTES
+        );
+    }
+
+    #[test]
+    fn truncate_large_content_byte_truncation_preserves_head_and_tail() {
+        // Content where head and tail have distinct markers.
+        let head_marker = "HEAD_MARKER_HEAD_MARKER_HEAD_MARKER";
+        let tail_marker = "TAIL_MARKER_TAIL_MARKER_TAIL_MARKER";
+        let padding = "p".repeat(MAX_TOOL_RESULT_BYTES);
+        let huge = format!("{}{}{}", head_marker, padding, tail_marker);
+        let result = truncate_large_content(&huge);
+        assert!(
+            result.contains("HEAD_MARKER"),
+            "head bytes should be preserved in truncation"
+        );
+        assert!(
+            result.contains("TAIL_MARKER"),
+            "tail bytes should be preserved in truncation"
+        );
+    }
+
+    #[test]
+    fn truncate_large_content_many_long_lines_stays_within_byte_budget() {
+        // Enough lines for line-based truncation, but each line is so long
+        // that keeping HEAD_LINES + TAIL_LINES would blow the byte budget.
+        // The result must fall back to byte truncation and stay bounded.
+        let long_line = "z".repeat(1024);
+        let content: String = (0..400).map(|_| format!("{long_line}\n")).collect();
+        assert!(content.len() > MAX_TOOL_RESULT_BYTES * 2);
+        let result = truncate_large_content(&content);
+        assert!(
+            result.contains("[TRUNCATED:"),
+            "oversized content must be truncated"
+        );
+        assert!(
+            result.len() < MAX_TOOL_RESULT_BYTES + 512,
+            "truncated result ({}) must stay near the byte budget ({})",
+            result.len(),
+            MAX_TOOL_RESULT_BYTES
+        );
+    }
+
+    #[test]
+    fn truncate_large_content_few_lines_over_byte_limit_truncates() {
+        // A few very long lines that together exceed the byte limit
+        // but are fewer than HEAD_LINES + TAIL_LINES.
+        let long_line = "y".repeat(MAX_TOOL_RESULT_BYTES / 3 + 100);
+        let content = format!("{}\n{}\n{}\n", long_line, long_line, long_line);
+        // 3 lines, but well over the byte limit.
+        assert!(content.len() > MAX_TOOL_RESULT_BYTES);
+        assert_eq!(content.lines().count(), 3);
+        let result = truncate_large_content(&content);
+        assert!(
+            result.contains("[TRUNCATED:"),
+            "few-line oversized content must be truncated"
+        );
+        assert!(
+            result.len() < content.len(),
+            "truncated result must be smaller than input"
+        );
+    }
 }
 
 /// Truncate large content per RFC-LARGE-TOOL-RESULTS.md
 /// Shows first 100 lines + last 50 lines with truncation message.
+///
+/// Delegates to [`truncate_large_content_to`] with the hard
+/// `MAX_TOOL_RESULT_BYTES` budget.
 pub fn truncate_large_content(content: &str) -> String {
+    truncate_large_content_to(content, MAX_TOOL_RESULT_BYTES)
+}
+
+/// Generalized truncation with a caller-chosen byte budget.
+///
+/// When content exceeds either the byte or line limit, it is truncated.
+/// Line-based truncation (head + tail) is used when there are enough lines
+/// AND the kept lines fit the byte budget. Otherwise (huge single-line JSON,
+/// minified JS, or oversized head/tail lines) the content is truncated by
+/// bytes so the result is always bounded near `max_bytes`.
+pub fn truncate_large_content_to(content: &str, max_bytes: usize) -> String {
     let bytes = content.len();
-    let lines: Vec<&str> = content.lines().collect();
-    let line_count = lines.len();
+    let line_count = content.lines().count();
 
     // Check if truncation is needed (either limit exceeded triggers truncation)
-    if bytes <= MAX_TOOL_RESULT_BYTES && line_count <= MAX_TOOL_RESULT_LINES {
+    if bytes <= max_bytes && line_count <= MAX_TOOL_RESULT_LINES {
         return content.to_string();
     }
 
-    // Handle edge case: if content has fewer lines than HEAD + TAIL, just return as-is
-    // (this shouldn't happen if we exceeded limits, but be defensive)
-    if line_count <= HEAD_LINES + TAIL_LINES {
-        return content.to_string();
+    // When there are enough lines, use line-based head + tail truncation —
+    // but only when the kept lines actually fit the byte budget. Long lines
+    // would otherwise leave the "truncated" result far over the limit.
+    if line_count > HEAD_LINES + TAIL_LINES {
+        let lines: Vec<&str> = content.lines().collect();
+        let head: String = lines[..HEAD_LINES].join("\n");
+        let tail: String = lines[line_count - TAIL_LINES..].join("\n");
+
+        if head.len() + tail.len() <= max_bytes {
+            return format!(
+                "{}\n\n[TRUNCATED: {} bytes, {} lines - showing first {} and last {} lines]\nResult was too large. Use more specific tool parameters to get targeted results.\n\n{}",
+                head, bytes, line_count, HEAD_LINES, TAIL_LINES, tail
+            );
+        }
     }
 
-    // Build truncated output with head + tail
-    let head: String = lines[..HEAD_LINES].join("\n");
-    let tail: String = lines[line_count - TAIL_LINES..].join("\n");
+    // Content exceeds the byte limit and line-based truncation cannot bound it
+    // (single huge line, minified JS, or oversized head/tail lines). Truncate
+    // by bytes. Use roughly half the byte budget for head and half for tail,
+    // reserving space for the truncation message.
+    let half = max_bytes / 2;
+    // Take head bytes, walking forward to a char boundary.
+    let head_end = {
+        let mut end = half;
+        while end < bytes && !content.is_char_boundary(end) {
+            end += 1;
+        }
+        end
+    };
+    let head_bytes = &content[..head_end];
+    // Take tail bytes, walking back to a char boundary from the end.
+    let tail_start = if bytes > half {
+        let mut start = bytes - half;
+        while start < bytes && !content.is_char_boundary(start) {
+            start += 1;
+        }
+        start
+    } else {
+        bytes
+    };
+    let tail_bytes = if tail_start < bytes {
+        &content[tail_start..]
+    } else {
+        ""
+    };
 
     format!(
-        "{}\n\n[TRUNCATED: {} bytes, {} lines - showing first {} and last {} lines]\nResult was too large. Use more specific tool parameters to get targeted results.\n\n{}",
-        head,
-        bytes,
-        line_count,
-        HEAD_LINES,
-        TAIL_LINES,
-        tail
+        "{}\n\n[TRUNCATED: {} bytes, {} lines - showing first {} and last {} bytes]\nResult was too large. Use more specific tool parameters to get targeted results.\n\n{}",
+        head_bytes, bytes, line_count, head_bytes.len(), tail_bytes.len(), tail_bytes
     )
 }
 
@@ -3948,6 +4648,93 @@ fn symbol_language_diagnostics(path: Option<&str>, result_count: usize) -> Vec<S
     diagnostics
 }
 
+/// Track F — classify how much an (empty) graph/reference result can be
+/// trusted. The classification describes how trustworthy ABSENCE is. Non-empty
+/// results carry the field too — it then bounds how much can be read into
+/// whatever was NOT returned.
+///
+/// Values: `partial_coverage` (the best classification any relationship-kind
+/// query can currently earn — see below), `stale` (stale/missing files or
+/// stale-ish health), `indexing` (index still building/checking),
+/// `unsupported` (no extraction capability for the path), `unavailable`
+/// (health unknown/cold).
+///
+/// `trustworthy_empty` remains a reserved value in the vocabulary (and in the
+/// docs/spec) but is NEVER emitted for relationship-kind queries: a kind being
+/// *modelled* by a language extractor is not the same as the kind being
+/// *exhaustively covered*. Concretely:
+/// - Rust calls inside macro token trees are never extracted, so an empty
+///   incoming-call set does not prove "no callers";
+/// - trust was judged only by the TARGET file's language — callers living in
+///   unindexed/unsupported files (e.g. .svelte/.vue/.mdx) are invisible no
+///   matter how good the target language's extractor is;
+/// - Rust `usage` extraction covers file-local constants only.
+/// Until a per-language, per-kind coverage certification exists, the honest
+/// ceiling for a fresh, supported, non-truncated, nothing-suppressed empty is
+/// `partial_coverage` (false negatives over false positives).
+fn empty_result_trust(
+    service: &crate::language_service::LanguageService,
+    path: Option<&str>,
+    queried_kinds: &[crate::tree_sitter::SymbolRelationshipType],
+    returned: usize,
+    truncated: bool,
+    low_signal_suppressed: usize,
+) -> &'static str {
+    empty_result_trust_from_parts(
+        &service.index_health_snapshot(),
+        path,
+        queried_kinds,
+        returned,
+        truncated,
+        low_signal_suppressed,
+    )
+}
+
+/// Track F — pure classification core of [`empty_result_trust`], separated so
+/// the matrix is unit-testable without an `AppHandle` or a live index.
+/// `_returned` and `_queried_kinds` are accepted for call-site uniformity (and
+/// for a future per-kind coverage certification that could re-enable
+/// `trustworthy_empty`); absence-trust is independent of how many rows
+/// happened to be serialized (a truncated listing is already downgraded via
+/// `truncated`).
+fn empty_result_trust_from_parts(
+    health: &crate::language_service::IndexHealthSnapshot,
+    path: Option<&str>,
+    _queried_kinds: &[crate::tree_sitter::SymbolRelationshipType],
+    _returned: usize,
+    truncated: bool,
+    low_signal_suppressed: usize,
+) -> &'static str {
+    use crate::language_service::IndexHealthStatus;
+
+    let capability = path.and_then(crate::tree_sitter::Language::capability_for_path);
+    if path.is_some() && capability.is_none() {
+        return "unsupported";
+    }
+    match health.status {
+        IndexHealthStatus::Indexing | IndexHealthStatus::Checking => return "indexing",
+        IndexHealthStatus::Stale | IndexHealthStatus::Partial => return "stale",
+        IndexHealthStatus::Unknown | IndexHealthStatus::Error => return "unavailable",
+        IndexHealthStatus::Fresh => {}
+    }
+    if health.stale_files > 0 || health.missing_files > 0 {
+        return "stale";
+    }
+    // Suppressed low-signal edges mean the serialized view is not the full
+    // known set; this forces `partial_coverage` even if a stronger claim were
+    // ever re-enabled for the fresh/supported path below.
+    if truncated || low_signal_suppressed > 0 {
+        return "partial_coverage";
+    }
+    // Fresh index, nothing truncated, nothing suppressed, and (when a path is
+    // present) a supported language. Even here the honest ceiling is
+    // `partial_coverage`: relationship extraction is not exhaustive (macro
+    // token trees, cross-language callers in unindexed files, file-local-only
+    // usage edges — see the type-level doc comment). `trustworthy_empty` is
+    // reserved for a future per-kind coverage certification.
+    "partial_coverage"
+}
+
 fn symbol_outline_diagnostics(path: &str, total_symbols: usize) -> Vec<String> {
     let mut diagnostics = symbol_language_diagnostics(Some(path), usize::MAX);
     if total_symbols == 0 && crate::tree_sitter::Language::capability_for_path(path).is_some() {
@@ -4072,12 +4859,19 @@ fn symbol_inventory_entries(
 fn semantic_anchor_result_to_json(
     result: &crate::symbol_index::SemanticAnchorResult,
 ) -> serde_json::Value {
-    semantic_anchor_to_json(&result.anchor, Some(result.score))
+    semantic_anchor_to_json(
+        &result.anchor,
+        Some(result.score),
+        result.matched_terms,
+        result.total_terms,
+    )
 }
 
 fn semantic_anchor_to_json(
     anchor: &crate::symbol_index::SemanticAnchor,
     score: Option<f32>,
+    matched_terms: Option<usize>,
+    total_terms: Option<usize>,
 ) -> serde_json::Value {
     serde_json::json!({
         "id": anchor.id,
@@ -4095,6 +4889,11 @@ fn semantic_anchor_to_json(
         // receiving a stored snippet inline.
         "confidence": anchor.confidence,
         "score": score,
+        // Track H — term coverage for the term-based anchor query modes
+        // (`all_terms`/`any_terms`); `null` in `phrase` mode where term
+        // accounting does not apply.
+        "matched_terms": matched_terms,
+        "total_terms": total_terms,
     })
 }
 
@@ -4166,6 +4965,185 @@ fn relationship_observation_json(
         "source_file": source_file,
         "line": line,
     })
+}
+
+/// Track L — generic target names that make an UNRESOLVED reference edge
+/// low-signal. Curated for reference-graph relevance (ubiquitous stdlib/runtime
+/// helpers across the indexed languages); deliberately independent of the
+/// search-side generic-term list, which serves a different purpose (query
+/// ranking) and stays private to `symbol_index::search`.
+const REFERENCE_GENERIC_TARGETS: &[&str] = &[
+    "len",
+    "clone",
+    "push",
+    "new",
+    "get",
+    "set",
+    "insert",
+    "remove",
+    "map",
+    "unwrap",
+    "expect",
+    "into",
+    "from",
+    "to_string",
+    "format",
+    "print",
+    "println",
+    "write",
+    "read",
+    "next",
+    "iter",
+    "collect",
+    "join",
+    "split",
+    "parse",
+    "clone_from",
+    "default",
+    "as_ref",
+    "as_str",
+    "is_empty",
+    "contains",
+    "send",
+    "recv",
+    "spawn",
+    "lock",
+    "await",
+    "then",
+    "catch",
+    "log",
+    "error",
+    "warn",
+    "info",
+    "debug",
+];
+
+/// Track L — same "resolved" definition the serialized `resolution` block uses
+/// (`symbol_reference_resolution_json`): a stored target id or symbol, or an
+/// `import` edge whose target is a resolved file path.
+fn reference_is_resolved(reference: &crate::symbol_index::SymbolReference) -> bool {
+    reference.target_symbol_id.is_some()
+        || reference.target_symbol.is_some()
+        || reference.relationship_type == crate::tree_sitter::SymbolRelationshipType::Import
+}
+
+/// Track L — returns `true` when a reference edge is LOW signal: unresolved
+/// (no target symbol id AND no target symbol) with a generic or very short
+/// (< 3 chars) target name, unless the relationship is structurally meaningful
+/// on its own (`import`/`implements`/`extends`). Suppression built on this is
+/// presentation-only — the store keeps every observation.
+fn classify_reference_signal(reference: &crate::symbol_index::SymbolReference) -> bool {
+    if reference.target_symbol_id.is_some() || reference.target_symbol.is_some() {
+        return false;
+    }
+    if matches!(
+        reference.relationship_type,
+        crate::tree_sitter::SymbolRelationshipType::Import
+            | crate::tree_sitter::SymbolRelationshipType::Implements
+            | crate::tree_sitter::SymbolRelationshipType::Extends
+    ) {
+        return false;
+    }
+    let normalized = reference.target_name.trim().to_ascii_lowercase();
+    normalized.chars().count() < 3 || REFERENCE_GENERIC_TARGETS.contains(&normalized.as_str())
+}
+
+/// Track L — presentation-only suppression of low-signal edges from an already
+/// DEDUPED reference group. Returns the kept edges and the number suppressed
+/// (both counts are post-dedupe: one per distinct edge, not per raw
+/// observation). With `include_low_signal` the input passes through untouched.
+fn partition_low_signal_references(
+    references: Vec<crate::symbol_index::SymbolReference>,
+    include_low_signal: bool,
+) -> (Vec<crate::symbol_index::SymbolReference>, usize) {
+    if include_low_signal {
+        return (references, 0);
+    }
+    let before = references.len();
+    let kept = references
+        .into_iter()
+        .filter(|reference| !classify_reference_signal(reference))
+        .collect::<Vec<_>>();
+    let suppressed = before - kept.len();
+    (kept, suppressed)
+}
+
+/// Track L — rank a reference group for presentation: resolved edges first,
+/// then descending resolution confidence, then file path and line, then
+/// target name and source symbol id.
+///
+/// The comparator is a TOTAL order over deduped edges (the dedupe key is
+/// (source id, target_name, kind, line), and file path is derived from the
+/// source id), so ranking — and therefore `offset`-based pagination — is
+/// deterministic regardless of store order.
+fn rank_reference_group(references: &mut [crate::symbol_index::SymbolReference]) {
+    references.sort_by(|left, right| {
+        reference_is_resolved(right)
+            .cmp(&reference_is_resolved(left))
+            .then_with(|| {
+                right
+                    .resolution_confidence
+                    .unwrap_or(0.0)
+                    .total_cmp(&left.resolution_confidence.unwrap_or(0.0))
+            })
+            .then_with(|| {
+                left.source_symbol
+                    .file_path
+                    .cmp(&right.source_symbol.file_path)
+            })
+            .then_with(|| left.line.cmp(&right.line))
+            .then_with(|| left.target_name.cmp(&right.target_name))
+            .then_with(|| left.source_symbol.id.cmp(&right.source_symbol.id))
+    });
+}
+
+/// Track L — turn per-relationship-kind reference groups (already deduped)
+/// into their serialized form: suppress low-signal edges (unless
+/// `include_low_signal`), rank each group (resolved first, confidence desc,
+/// then file/line/target/id — a total order), page each group to
+/// `[offset, offset + limit)` of its ranked post-suppression list, and account
+/// every kept edge into the direction total and per-kind totals. Groups fully
+/// emptied by suppression or paging are dropped. Suppression counts are
+/// post-dedupe and pre-paging: one per distinct edge, never per raw
+/// observation.
+///
+/// `offset` indexes the ranked post-suppression list per relationship group;
+/// pages are stable only while the index is unchanged.
+fn serialize_reference_groups(
+    groups: BTreeMap<String, Vec<crate::symbol_index::SymbolReference>>,
+    include_low_signal: bool,
+    offset: usize,
+    limit: usize,
+    suppressed: &mut usize,
+    direction_total: &mut usize,
+    relationship_totals: &mut BTreeMap<String, usize>,
+) -> BTreeMap<String, Vec<serde_json::Value>> {
+    groups
+        .into_iter()
+        .filter_map(|(relationship_type, references)| {
+            let (mut kept, group_suppressed) =
+                partition_low_signal_references(references, include_low_signal);
+            *suppressed += group_suppressed;
+            if kept.is_empty() {
+                return None;
+            }
+            rank_reference_group(&mut kept);
+            let page = kept
+                .iter()
+                .skip(offset)
+                .take(limit)
+                .map(symbol_reference_to_json)
+                .collect::<Vec<_>>();
+            if page.is_empty() {
+                return None;
+            }
+            *direction_total += page.len();
+            *relationship_totals
+                .entry(relationship_type.clone())
+                .or_default() += page.len();
+            Some((relationship_type, page))
+        })
+        .collect()
 }
 
 fn symbol_reference_to_json(reference: &crate::symbol_index::SymbolReference) -> serde_json::Value {
@@ -4341,6 +5319,32 @@ fn parse_relationship_types_arg(
     } else {
         Ok(parsed)
     }
+}
+
+/// Track H — wire name for an anchor query mode (`AnchorQueryMode` lives in
+/// the store layer and has no serializer of its own).
+fn anchor_query_mode_name(mode: crate::symbol_index::AnchorQueryMode) -> &'static str {
+    match mode {
+        crate::symbol_index::AnchorQueryMode::Phrase => "phrase",
+        crate::symbol_index::AnchorQueryMode::AllTerms => "all_terms",
+        crate::symbol_index::AnchorQueryMode::AnyTerms => "any_terms",
+    }
+}
+
+/// Track H — parse the optional `mode` argument for semantic_anchor_search.
+/// Missing means `phrase` (today's behavior); an unknown value is an explicit
+/// error listing the valid modes rather than a silent default.
+fn parse_anchor_query_mode_arg(
+    args: &HashMap<String, serde_json::Value>,
+) -> Result<crate::symbol_index::AnchorQueryMode, String> {
+    let Some(raw) = get_str_arg(args, &["mode"]) else {
+        return Ok(crate::symbol_index::AnchorQueryMode::Phrase);
+    };
+    crate::symbol_index::AnchorQueryMode::parse(&raw).ok_or_else(|| {
+        format!(
+            "unknown semantic_anchor_search mode '{raw}'; expected one of: phrase, all_terms, any_terms"
+        )
+    })
 }
 
 fn parse_symbol_trace_direction_arg(
@@ -4592,15 +5596,30 @@ fn impact_confidence(index_fresh: bool, symbol_count: usize, impacted_file_count
     }
 }
 
+/// Track E — shared unknown-ID rejection for every ID-taking symbol tool. An
+/// unknown ID must never degrade into a "symbol not found" shrug or an empty
+/// graph: the actionable error tells the model how to obtain a real ID and
+/// forbids synthesizing one.
+fn require_symbol_by_id(
+    service: &crate::language_service::LanguageService,
+    symbol_id: &str,
+) -> Result<crate::tree_sitter::Symbol, String> {
+    match service.get_symbol(symbol_id) {
+        Ok(Some(symbol)) => Ok(symbol),
+        Ok(None) => Err(format!(
+            "The symbol ID '{symbol_id}' is not present in the current index. Run symbol_search or symbol_outline and copy an exact returned ID; do not synthesize one from a path or name."
+        )),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
 fn resolve_symbol_from_graph_args(
     workspace_root: &Path,
     service: &crate::language_service::LanguageService,
     args: &HashMap<String, serde_json::Value>,
-) -> Result<Option<crate::tree_sitter::Symbol>, String> {
+) -> Result<crate::tree_sitter::Symbol, String> {
     if let Some(symbol_id) = get_str_arg(args, &["symbol_id", "id"]) {
-        return service
-            .get_symbol(&symbol_id)
-            .map_err(|err| err.to_string());
+        return require_symbol_by_id(service, &symbol_id);
     }
 
     let Some(file_path) = get_str_arg(args, &["path", "file", "file_path"]) else {
@@ -4619,16 +5638,26 @@ fn resolve_symbol_from_graph_args(
     let symbols = service
         .get_file_symbols(&file_path)
         .map_err(|err| err.to_string())?;
-    Ok(symbols.into_iter().find(|symbol| {
-        qualified_name
-            .as_ref()
-            .map(|value| &symbol.qualified_name == value)
-            .unwrap_or(false)
-            || name
+    symbols
+        .into_iter()
+        .find(|symbol| {
+            qualified_name
                 .as_ref()
-                .map(|value| &symbol.name == value)
+                .map(|value| &symbol.qualified_name == value)
                 .unwrap_or(false)
-    }))
+                || name
+                    .as_ref()
+                    .map(|value| &symbol.name == value)
+                    .unwrap_or(false)
+        })
+        // Track E — a path+name miss is a different claim than an unknown ID:
+        // the file is indexed but holds no symbol with that name.
+        .ok_or_else(|| {
+            let selector = qualified_name.or(name).unwrap_or_default();
+            format!(
+                "No symbol named '{selector}' exists in '{file_path}' in the current index. Run symbol_outline on that file to list its indexed symbols, or symbol_search to locate it elsewhere."
+            )
+        })
 }
 
 fn resolve_symbol_path_endpoint(
@@ -4651,8 +5680,10 @@ fn resolve_symbol_path_endpoint(
     }
 
     if !endpoint_args.is_empty() {
-        return resolve_symbol_from_graph_args(workspace_root, service, &endpoint_args)?
-            .ok_or_else(|| format!("{prefix} symbol not found"));
+        // Track E — keep the endpoint context on the shared resolution errors
+        // so a symbol_path failure names which side (source/target) failed.
+        return resolve_symbol_from_graph_args(workspace_root, service, &endpoint_args)
+            .map_err(|err| format!("{prefix}: {err}"));
     }
 
     let query = get_str_arg(args, &[prefix])
@@ -4857,6 +5888,11 @@ fn symbol_search_tool<R: tauri::Runtime>(
     let Some(query) = get_str_arg(args, &["query"]) else {
         return ToolResult::err("symbol_search requires 'query'");
     };
+    if query.trim().is_empty() {
+        return ToolResult::err(
+            "symbol_search requires a non-empty 'query'. Use an exact identifier or a concise concept; use symbol_outline to list symbols in a known file.",
+        );
+    }
     let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
     let offset = parse_bounded_usize_arg(args, "offset", 0, SYMBOL_SEARCH_MAX_OFFSET);
     let fetch_limit = offset.saturating_add(limit).saturating_add(1);
@@ -5039,6 +6075,10 @@ fn semantic_anchor_search_tool<R: tauri::Runtime>(
         return ToolResult::err("semantic_anchor_search requires 'query'");
     };
     let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
+    let mode = match parse_anchor_query_mode_arg(args) {
+        Ok(mode) => mode,
+        Err(err) => return ToolResult::err(err),
+    };
     let file_path = get_str_arg(args, &["path", "file", "file_path"]);
     let file_filter = match file_path {
         Some(path) => match symbol_path_arg(workspace_root, &path) {
@@ -5052,18 +6092,31 @@ fn semantic_anchor_search_tool<R: tauri::Runtime>(
         Err(err) => return ToolResult::err(err),
     };
     let started = Instant::now();
-    let anchors = match service.search_semantic_anchors(&query, file_filter.as_deref(), limit) {
-        Ok(anchors) => anchors,
-        Err(err) => return ToolResult::err(err.to_string()),
+    let outcome =
+        match service.search_semantic_anchors_mode(&query, file_filter.as_deref(), limit, mode) {
+            Ok(outcome) => outcome,
+            Err(err) => return ToolResult::err(err.to_string()),
+        };
+    let count = outcome.results.len();
+    // Track H — an empty-normalizing query must stay distinguishable from a
+    // legitimate no-match; the store reports which one happened.
+    let match_state = if outcome.empty_query {
+        "empty_query"
+    } else if count == 0 {
+        "no_match"
+    } else {
+        "matched"
     };
-    let count = anchors.len();
     let payload = serde_json::json!({
         "query": query,
         "path": file_filter,
-        "anchors": anchors.iter().map(semantic_anchor_result_to_json).collect::<Vec<_>>(),
+        "anchors": outcome.results.iter().map(semantic_anchor_result_to_json).collect::<Vec<_>>(),
         "_meta": {
             "tool": "semantic_anchor_search",
             "count": count,
+            "mode": anchor_query_mode_name(outcome.mode),
+            "total_terms": outcome.total_terms,
+            "match_state": match_state,
             "timing_ms": started.elapsed().as_millis(),
             "source": "language_service",
             "index_health": service.index_health_snapshot(),
@@ -5085,10 +6138,10 @@ fn symbol_resolve_tool<R: tauri::Runtime>(
     };
     let started = Instant::now();
     let resolved = if let Some(symbol_id) = get_str_arg(args, &["symbol_id", "id"]) {
-        match service.get_symbol(&symbol_id) {
-            Ok(Some(symbol)) => symbol,
-            Ok(None) => return ToolResult::err(format!("symbol not found: {}", symbol_id)),
-            Err(err) => return ToolResult::err(err.to_string()),
+        // Track E — shared unknown-ID rejection with recovery guidance.
+        match require_symbol_by_id(&service, &symbol_id) {
+            Ok(symbol) => symbol,
+            Err(err) => return ToolResult::err(err),
         }
     } else {
         let Some(file_path) = get_str_arg(args, &["path", "file", "file_path"]) else {
@@ -5100,6 +6153,12 @@ fn symbol_resolve_tool<R: tauri::Runtime>(
         };
         let qualified_name = get_str_arg(args, &["qualified_name"]);
         let name = get_str_arg(args, &["name"]);
+        if qualified_name.is_none() && name.is_none() {
+            return ToolResult::err(
+                "symbol_resolve requires 'name' or 'qualified_name' when resolving by path"
+                    .to_string(),
+            );
+        }
         let symbols = match service.get_file_symbols(&file_path) {
             Ok(symbols) => symbols,
             Err(err) => return ToolResult::err(err.to_string()),
@@ -5114,7 +6173,12 @@ fn symbol_resolve_tool<R: tauri::Runtime>(
                     .map(|value| &symbol.name == value)
                     .unwrap_or(false)
         }) else {
-            return ToolResult::err("symbol not found".to_string());
+            // Track E — path+name miss: the file is indexed but holds no such
+            // symbol (distinct claim from an unknown ID).
+            let selector = qualified_name.or(name).unwrap_or_default();
+            return ToolResult::err(format!(
+                "No symbol named '{selector}' exists in '{file_path}' in the current index. Run symbol_outline on that file to list its indexed symbols, or symbol_search to locate it elsewhere."
+            ));
         };
         symbol
     };
@@ -5124,6 +6188,7 @@ fn symbol_resolve_tool<R: tauri::Runtime>(
         "tool": "symbol_resolve",
         "timing_ms": started.elapsed().as_millis(),
         "source": "language_service",
+        "index_health": service.index_health_snapshot(),
         "language_support": language_support_meta_json(Some(&resolved.file_path)),
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
@@ -5274,8 +6339,7 @@ fn symbol_related_tool<R: tauri::Runtime>(
         Err(err) => return ToolResult::err(err),
     };
     let symbol = match resolve_symbol_from_graph_args(workspace_root, &service, args) {
-        Ok(Some(symbol)) => symbol,
-        Ok(None) => return ToolResult::err("symbol not found".to_string()),
+        Ok(symbol) => symbol,
         Err(err) => return ToolResult::err(err),
     };
     let limit = parse_bounded_usize_arg(args, "limit", 24, 100);
@@ -5295,6 +6359,28 @@ fn symbol_related_tool<R: tauri::Runtime>(
             "index_health": service.index_health_snapshot(),
             "language_support": language_support_meta_json(Some(&symbol.file_path)),
             "truncated": related.len() >= limit,
+            // Track F — relatedness is kind-agnostic (graph context + lexical
+            // heuristics), so an empty answer can never claim exhaustive
+            // `trustworthy_empty`.
+            "returned": related.len(),
+            // get_related_symbols is a capped heuristic aggregation, never an
+            // exhaustive enumeration — the true total is never known, even
+            // when fewer than `limit` rows came back.
+            "total_known": false,
+            "total_lower_bound": related.len(),
+            "empty_result_trust": empty_result_trust(
+                &service,
+                Some(symbol.file_path.as_str()),
+                &[],
+                related.len(),
+                related.len() >= limit,
+                0,
+            ),
+            "diagnostics": if related.is_empty() {
+                symbol_language_diagnostics(Some(&symbol.file_path), 0)
+            } else {
+                Vec::new()
+            },
         }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
@@ -5311,6 +6397,12 @@ fn symbol_references_tool<R: tauri::Runtime>(
     };
     let started = Instant::now();
     let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
+    // Pagination: `offset` indexes the ranked post-suppression list of each
+    // relationship group (dedupe -> suppression -> ranking, then skip). Pages
+    // are stable only while the index is unchanged. The store fetch is widened
+    // to `limit + offset` so later pages can actually be recovered.
+    let offset = get_bounded_usize_arg(args, &["offset"], 0, SYMBOL_SEARCH_MAX_OFFSET);
+    let fetch_limit = limit.saturating_add(offset);
     let max_symbols = get_bounded_usize_arg(args, &["max_symbols"], 24, 100);
     let relationships = match parse_relationship_types_arg(args) {
         Ok(values) => values,
@@ -5321,8 +6413,7 @@ fn symbol_references_tool<R: tauri::Runtime>(
         || get_str_arg(args, &["name", "qualified_name"]).is_some()
     {
         match resolve_symbol_from_graph_args(workspace_root, &service, args) {
-            Ok(Some(symbol)) => vec![symbol],
-            Ok(None) => return ToolResult::err("symbol not found".to_string()),
+            Ok(symbol) => vec![symbol],
             Err(err) => return ToolResult::err(err),
         }
     } else {
@@ -5350,19 +6441,22 @@ fn symbol_references_tool<R: tauri::Runtime>(
         return ToolResult::err("no expandable symbols found".to_string());
     }
 
+    let include_low_signal = get_bool_arg(args, &["include_low_signal"], false);
     let mut total_incoming = 0usize;
     let mut total_outgoing = 0usize;
+    let mut total_low_signal_suppressed = 0usize;
+    let mut references_truncated = false;
     let mut relationship_totals = BTreeMap::<String, usize>::new();
     let expansions = target_symbols
         .iter()
         .map(|symbol| {
-            let mut incoming = BTreeMap::<String, Vec<serde_json::Value>>::new();
-            let mut outgoing = BTreeMap::<String, Vec<serde_json::Value>>::new();
+            let mut incoming = BTreeMap::<String, Vec<crate::symbol_index::SymbolReference>>::new();
+            let mut outgoing = BTreeMap::<String, Vec<crate::symbol_index::SymbolReference>>::new();
             let mut seen_incoming = HashSet::<(String, String, String, u32)>::new();
             let mut seen_outgoing = HashSet::<(String, String, String, u32)>::new();
 
             for relationship in &relationships {
-                let graph = match service.get_symbol_graph(symbol, *relationship, limit) {
+                let graph = match service.get_symbol_graph(symbol, *relationship, fetch_limit) {
                     Ok(graph) => graph,
                     Err(err) => {
                         return serde_json::json!({
@@ -5371,6 +6465,11 @@ fn symbol_references_tool<R: tauri::Runtime>(
                         })
                     }
                 };
+                // The per-relationship store query caps at `fetch_limit`
+                // (limit + offset); hitting it means the complete edge set is
+                // not known.
+                references_truncated |=
+                    graph.incoming.len() >= fetch_limit || graph.outgoing.len() >= fetch_limit;
 
                 for reference in graph.incoming {
                     let key = (
@@ -5380,13 +6479,10 @@ fn symbol_references_tool<R: tauri::Runtime>(
                         reference.line,
                     );
                     if seen_incoming.insert(key) {
-                        let relationship_type = reference.relationship_type.to_string();
                         incoming
-                            .entry(relationship_type.clone())
+                            .entry(reference.relationship_type.to_string())
                             .or_default()
-                            .push(symbol_reference_to_json(&reference));
-                        *relationship_totals.entry(relationship_type).or_default() += 1;
-                        total_incoming += 1;
+                            .push(reference);
                     }
                 }
 
@@ -5398,19 +6494,41 @@ fn symbol_references_tool<R: tauri::Runtime>(
                         reference.line,
                     );
                     if seen_outgoing.insert(key) {
-                        let relationship_type = reference.relationship_type.to_string();
                         outgoing
-                            .entry(relationship_type.clone())
+                            .entry(reference.relationship_type.to_string())
                             .or_default()
-                            .push(symbol_reference_to_json(&reference));
-                        *relationship_totals.entry(relationship_type).or_default() += 1;
-                        total_outgoing += 1;
+                            .push(reference);
                     }
                 }
             }
 
-            let incoming_count = incoming.values().map(Vec::len).sum::<usize>();
-            let outgoing_count = outgoing.values().map(Vec::len).sum::<usize>();
+            // Track L — presentation-only: suppress low-signal edges by
+            // default and rank each relationship group (resolved first).
+            let mut low_signal_suppressed = 0usize;
+            let mut incoming_count = 0usize;
+            let mut outgoing_count = 0usize;
+            let incoming = serialize_reference_groups(
+                incoming,
+                include_low_signal,
+                offset,
+                limit,
+                &mut low_signal_suppressed,
+                &mut incoming_count,
+                &mut relationship_totals,
+            );
+            let outgoing = serialize_reference_groups(
+                outgoing,
+                include_low_signal,
+                offset,
+                limit,
+                &mut low_signal_suppressed,
+                &mut outgoing_count,
+                &mut relationship_totals,
+            );
+            total_incoming += incoming_count;
+            total_outgoing += outgoing_count;
+            total_low_signal_suppressed += low_signal_suppressed;
+
             serde_json::json!({
                 "symbol": symbol_to_json(symbol),
                 "incoming": incoming,
@@ -5419,11 +6537,28 @@ fn symbol_references_tool<R: tauri::Runtime>(
                     "incoming_count": incoming_count,
                     "outgoing_count": outgoing_count,
                     "relationship_count": incoming_count + outgoing_count,
+                    // Post-dedupe count of distinct low-signal edges hidden
+                    // from this expansion (0 with include_low_signal).
+                    "low_signal_suppressed": low_signal_suppressed,
                 }
             })
         })
         .collect::<Vec<_>>();
 
+    let returned = total_incoming + total_outgoing;
+    // A paged view (offset > 0) is by construction not the complete listing,
+    // so it can never claim `total_known` (the summary counts are page counts).
+    let truncated = references_truncated || target_symbols.len() >= max_symbols || offset > 0;
+    let path_context = target_symbols
+        .first()
+        .map(|symbol| symbol.file_path.as_str());
+    // Track F — empty-result honesty: separate what was serialized from what
+    // is definitely known and how much an empty answer can be trusted.
+    let diagnostics = if returned == 0 {
+        symbol_language_diagnostics(path_context, 0)
+    } else {
+        Vec::new()
+    };
     let payload = serde_json::json!({
         "symbols": expansions,
         "summary": {
@@ -5440,10 +6575,30 @@ fn symbol_references_tool<R: tauri::Runtime>(
             "index_health": service.index_health_snapshot(),
             "relationship_types": relationships.iter().map(ToString::to_string).collect::<Vec<_>>(),
             "limit_per_relationship": limit,
+            // Pagination position: `offset` indexes the ranked
+            // post-suppression list per relationship group; pages are stable
+            // only while the index is unchanged.
+            "offset": offset,
             "max_symbols": max_symbols,
-            "language_support": language_support_meta_json(
-                target_symbols.first().map(|symbol| symbol.file_path.as_str())
+            "include_low_signal": include_low_signal,
+            // Post-dedupe count of distinct edges hidden as low-signal across
+            // every expanded symbol (presentation-only; the store keeps them).
+            "low_signal_suppressed": total_low_signal_suppressed,
+            "returned": returned,
+            "total_known": !truncated,
+            // Serialized edges plus suppressed-but-known edges: facts that
+            // definitely exist regardless of truncation.
+            "total_lower_bound": returned + total_low_signal_suppressed,
+            "empty_result_trust": empty_result_trust(
+                &service,
+                path_context,
+                &relationships,
+                returned,
+                truncated,
+                total_low_signal_suppressed,
             ),
+            "diagnostics": diagnostics,
+            "language_support": language_support_meta_json(path_context),
             "truncated_symbols": target_symbols.len() >= max_symbols,
         }
     });
@@ -5465,6 +6620,7 @@ fn edit_impact_tool<R: tauri::Runtime>(
     let max_depth = get_bounded_usize_arg(args, &["depth", "max_depth"], 2, 4).max(1);
     let trace_edge_limit = get_bounded_usize_arg(args, &["edge_limit"], 160, 400);
     let per_node_limit = get_bounded_usize_arg(args, &["per_node_limit"], 16, 50);
+    let include_low_signal = get_bool_arg(args, &["include_low_signal"], false);
     let relationship_types = relationship_type_values();
     let explicit_symbol = get_str_arg(args, &["symbol_id", "id"]).is_some()
         || get_str_arg(args, &["name", "qualified_name"]).is_some();
@@ -5479,8 +6635,7 @@ fn edit_impact_tool<R: tauri::Runtime>(
 
     let target_symbols = if explicit_symbol {
         match resolve_symbol_from_graph_args(workspace_root, &service, args) {
-            Ok(Some(symbol)) => vec![symbol],
-            Ok(None) => return ToolResult::err("symbol not found".to_string()),
+            Ok(symbol) => vec![symbol],
             Err(err) => return ToolResult::err(err),
         }
     } else if let Some(path) = target_path.as_deref() {
@@ -5504,8 +6659,10 @@ fn edit_impact_tool<R: tauri::Runtime>(
     let mut reference_count = 0usize;
     let mut transitive_reference_count = 0usize;
     let mut traced_edge_count = 0usize;
+    let mut low_signal_suppressed = 0usize;
     let mut trace_truncated = false;
     let mut seen_reference_edges = HashSet::<(String, String, String, u32)>::new();
+    let mut seen_suppressed_edges = HashSet::<(String, String, String, u32)>::new();
     let mut symbol_payloads = Vec::new();
 
     for symbol in &target_symbols {
@@ -5607,6 +6764,24 @@ fn edit_impact_tool<R: tauri::Runtime>(
 
             for reference in graph.outgoing {
                 let relationship_name = reference.relationship_type.to_string();
+                // Track L — classify low-signal OUTGOING dependency edges only
+                // (incoming callers are the product and are never suppressed).
+                // Counted with its own dedupe set (post-dedupe: one per
+                // distinct edge) so suppressed edges never consume keys in
+                // `seen_reference_edges` and cannot shadow later trace edges.
+                // Presentation-only: the store keeps the observation.
+                if !include_low_signal && classify_reference_signal(&reference) {
+                    let suppressed_key = (
+                        reference.source_symbol.id.clone(),
+                        reference.target_name.clone(),
+                        relationship_name.clone(),
+                        reference.line,
+                    );
+                    if seen_suppressed_edges.insert(suppressed_key) {
+                        low_signal_suppressed += 1;
+                    }
+                    continue;
+                }
                 let related_path = reference
                     .target_symbol
                     .as_ref()
@@ -5688,6 +6863,7 @@ fn edit_impact_tool<R: tauri::Runtime>(
             .cmp(&a["score"].as_u64())
             .then_with(|| a["path"].as_str().cmp(&b["path"].as_str()))
     });
+    let impacted_total = impacted_files.len();
     impacted_files.truncate(limit);
 
     let impacted_paths = impacted_files
@@ -5744,6 +6920,28 @@ fn edit_impact_tool<R: tauri::Runtime>(
             "per_node_limit": per_node_limit,
             "relationship_types": relationship_types.iter().map(ToString::to_string).collect::<Vec<_>>(),
             "language_support": language_support_meta_json(language_support_path),
+            "include_low_signal": include_low_signal,
+            // Post-dedupe count of distinct low-signal OUTGOING dependency
+            // edges hidden from the impact aggregation (incoming callers are
+            // never suppressed; presentation-only, the store keeps them).
+            "low_signal_suppressed": low_signal_suppressed,
+            // Track F — impacted files serialized now vs. definitely known.
+            "returned": impacted_files.len(),
+            "total_known": !(trace_truncated || impacted_total > limit),
+            "total_lower_bound": impacted_total,
+            "empty_result_trust": empty_result_trust(
+                &service,
+                language_support_path,
+                &relationship_types,
+                impacted_files.len(),
+                trace_truncated || impacted_total > limit,
+                low_signal_suppressed,
+            ),
+            "diagnostics": if impacted_files.is_empty() {
+                symbol_language_diagnostics(language_support_path, 0)
+            } else {
+                Vec::new()
+            },
             "truncated_files": impacted_paths.len() >= limit,
         }
     });
@@ -5760,8 +6958,7 @@ fn symbol_graph_tool<R: tauri::Runtime>(
         Err(err) => return ToolResult::err(err),
     };
     let symbol = match resolve_symbol_from_graph_args(workspace_root, &service, args) {
-        Ok(Some(symbol)) => symbol,
-        Ok(None) => return ToolResult::err("symbol not found".to_string()),
+        Ok(symbol) => symbol,
         Err(err) => return ToolResult::err(err),
     };
     let relationship = match get_str_arg(args, &["relationship", "relationship_type", "kind"]) {
@@ -5772,15 +6969,32 @@ fn symbol_graph_tool<R: tauri::Runtime>(
         None => crate::tree_sitter::SymbolRelationshipType::Call,
     };
     let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
+    let include_low_signal = get_bool_arg(args, &["include_low_signal"], false);
     let started = Instant::now();
     let graph = match service.get_symbol_graph(&symbol, relationship, limit) {
         Ok(graph) => graph,
         Err(err) => return ToolResult::err(err.to_string()),
     };
+    // Truncation authority is the store fetch, judged BEFORE presentation-only
+    // suppression trims the lists further.
+    let truncated = graph.incoming.len() >= limit || graph.outgoing.len() >= limit;
+    // Track L — presentation-only low-signal suppression (post-dedupe counts;
+    // the store keeps every observation).
+    let (incoming, incoming_suppressed) =
+        partition_low_signal_references(graph.incoming, include_low_signal);
+    let (outgoing, outgoing_suppressed) =
+        partition_low_signal_references(graph.outgoing, include_low_signal);
+    let low_signal_suppressed = incoming_suppressed + outgoing_suppressed;
+    let returned = incoming.len() + outgoing.len();
+    let diagnostics = if returned == 0 {
+        symbol_language_diagnostics(Some(&graph.symbol.file_path), 0)
+    } else {
+        Vec::new()
+    };
     let payload = serde_json::json!({
         "symbol": symbol_to_json(&graph.symbol),
-        "incoming": graph.incoming.iter().map(symbol_reference_to_json).collect::<Vec<_>>(),
-        "outgoing": graph.outgoing.iter().map(symbol_reference_to_json).collect::<Vec<_>>(),
+        "incoming": incoming.iter().map(symbol_reference_to_json).collect::<Vec<_>>(),
+        "outgoing": outgoing.iter().map(symbol_reference_to_json).collect::<Vec<_>>(),
         "relationship_type": relationship.to_string(),
         "_meta": {
             "tool": "symbol_graph",
@@ -5789,7 +7003,23 @@ fn symbol_graph_tool<R: tauri::Runtime>(
             "index_health": service.index_health_snapshot(),
             "language_support": language_support_meta_json(Some(&graph.symbol.file_path)),
             "limit": limit,
-            "truncated": graph.incoming.len() >= limit || graph.outgoing.len() >= limit,
+            "include_low_signal": include_low_signal,
+            // Post-dedupe count of distinct edges hidden as low-signal.
+            "low_signal_suppressed": low_signal_suppressed,
+            "returned": returned,
+            "total_known": !truncated,
+            // Serialized edges plus suppressed-but-known edges.
+            "total_lower_bound": returned + low_signal_suppressed,
+            "empty_result_trust": empty_result_trust(
+                &service,
+                Some(&graph.symbol.file_path),
+                std::slice::from_ref(&relationship),
+                returned,
+                truncated,
+                low_signal_suppressed,
+            ),
+            "diagnostics": diagnostics,
+            "truncated": truncated,
         }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
@@ -5805,8 +7035,7 @@ fn symbol_trace_tool<R: tauri::Runtime>(
         Err(err) => return ToolResult::err(err),
     };
     let symbol = match resolve_symbol_from_graph_args(workspace_root, &service, args) {
-        Ok(Some(symbol)) => symbol,
-        Ok(None) => return ToolResult::err("symbol not found".to_string()),
+        Ok(symbol) => symbol,
         Err(err) => return ToolResult::err(err),
     };
     let relationships = match parse_relationship_types_arg(args) {
@@ -5853,6 +7082,24 @@ fn symbol_trace_tool<R: tauri::Runtime>(
             "relationship_types": relationships.iter().map(ToString::to_string).collect::<Vec<_>>(),
             "edge_limit": edge_limit,
             "per_node_limit": per_node_limit,
+            // Track F — the trace hard-caps inside the service (edge/per-node
+            // budgets); `summary.truncated` is the authority on completeness.
+            "returned": trace.edges.len(),
+            "total_known": !trace.truncated,
+            "total_lower_bound": trace.edges.len(),
+            "empty_result_trust": empty_result_trust(
+                &service,
+                Some(&trace.seed.file_path),
+                &relationships,
+                trace.edges.len(),
+                trace.truncated,
+                0,
+            ),
+            "diagnostics": if trace.edges.is_empty() {
+                symbol_language_diagnostics(Some(&trace.seed.file_path), 0)
+            } else {
+                Vec::new()
+            },
         }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
@@ -6085,7 +7332,7 @@ fn build_symbol_query_context(
         "edges": edge_values,
         "semantic_context": semantic_context
             .iter()
-            .map(|anchor| semantic_anchor_to_json(anchor, None))
+            .map(|anchor| semantic_anchor_to_json(anchor, None, None, None))
             .collect::<Vec<_>>(),
         "summary": {
             "seed_count": seeds.len(),
@@ -6173,6 +7420,24 @@ fn symbol_path_tool<R: tauri::Runtime>(
             "edge_limit": edge_limit,
             "per_node_limit": per_node_limit,
             "min_confidence": min_confidence,
+            // Track F — empty-result honesty for "no path found": a bounded
+            // search that truncated cannot prove absence.
+            "returned": path.edges.len(),
+            "total_known": !path.truncated,
+            "total_lower_bound": path.edges.len(),
+            "empty_result_trust": empty_result_trust(
+                &service,
+                Some(path.source.file_path.as_str()),
+                &relationships,
+                path.edges.len(),
+                path.truncated,
+                0,
+            ),
+            "diagnostics": if path.edges.is_empty() {
+                symbol_language_diagnostics(Some(&path.source.file_path), 0)
+            } else {
+                Vec::new()
+            },
         }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())

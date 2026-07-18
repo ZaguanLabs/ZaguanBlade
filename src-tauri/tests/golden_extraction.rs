@@ -382,3 +382,45 @@ fn golden_express_route() {
 fn golden_nest_controller() {
     check_case("nest-controller", "nest-controller.ts");
 }
+
+// ---- Symbols-Index second pass (Tracks A/B/C) — extraction inputs ----
+//
+// The three cases below have SOURCE fixtures only until the first
+// `UPDATE_GOLDEN=1 cargo test --test golden_extraction` run generates their
+// `.golden.json` snapshots; until then `check_case` fails cleanly with that
+// exact instruction (see the "missing golden" panic above).
+
+// Track A — PascalCase JSX elements are Call observations: `<LanguageSwitcher/>`
+// twice, `<RegionSelector>` twice, `<ModeToggle>` twice, and the member
+// expression `<Dialog.Trigger/>` (terminal name `Trigger`, PascalCase root
+// required). Negatives that must emit NO calls: native `<nav>/<button>/<span>`
+// and the lowercase-rooted `<motion.div/>`. The fixture also carries
+// `// Section:` / `{/* Section: */}` comments; section_label anchors are mined
+// outside extraction, so they never appear in this snapshot — the comments are
+// here so the same source doubles as an anchor fixture.
+#[test]
+fn golden_tsx_components() {
+    check_case("tsx-components", "tsx-components.tsx");
+}
+
+// Track B — file-local Rust constant Usage edges (strategy `file_local_const`):
+// direct use, call-argument uses, and a closure use emit resolved `usage`
+// edges; the param shadow, post-`let` reference, loop-binding body, and
+// match-arm body must NOT (a `let` initializer and the match scrutinee still
+// see the outer constant).
+#[test]
+fn golden_rust_const_usage() {
+    check_case("rust-const-usage", "rust-const-usage.rs");
+}
+
+// Track C — Go interface method specs become child Method symbols nested under
+// the interface, interface embedding (`Cache interface { Base; … }`) emits an
+// Extends edge Cache→Base, and concrete receiver methods (pointer on
+// MemoryCache, value on ReadOnlyCache/NullCache) carry the receiver-kind data
+// the store's implicit-interface miner consumes. The mining itself runs in
+// `reconcile_index`, not extraction, so implements-sets are proven in the lib
+// tests — this golden gates the extraction inputs.
+#[test]
+fn golden_go_interfaces() {
+    check_case("go-interfaces", "go-interfaces.go");
+}

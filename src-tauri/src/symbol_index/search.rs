@@ -159,6 +159,15 @@ pub fn execute_search(
 
         apply_result_filters(&mut results, query);
 
+        // Reject candidates with zero lexical score — they matched in the
+        // broad candidate retrieval (FTS/LIKE) but have no token-level or
+        // prefix-level relevance to the query.  Keeping them would
+        // manufacture false confidence from retrieval noise.  This must run
+        // BEFORE contextual boosts: boosts are additive re-ranking signals
+        // (active file, preferred paths) and must not admit a candidate that
+        // has no lexical relevance at all.
+        results.retain(|r| r.score > 0.0);
+
         apply_contextual_boosts(&mut results, query);
 
         // Sort by score and limit
@@ -452,13 +461,13 @@ fn calculate_relevance(name: &str, query: &str) -> f32 {
         return 1.0;
     }
 
-    // Prefix match
-    if name_lower.starts_with(&query_lower) {
+    // Prefix match — require at least 3 characters to avoid short-fragment noise
+    if query_lower.len() >= 3 && name_lower.starts_with(&query_lower) {
         return 0.9;
     }
 
-    // Contains match
-    if name_lower.contains(&query_lower) {
+    // Contains match — require at least 3 characters to avoid short-fragment noise
+    if query_lower.len() >= 3 && name_lower.contains(&query_lower) {
         // Score based on position (earlier is better)
         let pos = name_lower.find(&query_lower).unwrap_or(0) as f32;
         let len = name_lower.len() as f32;
@@ -470,17 +479,11 @@ fn calculate_relevance(name: &str, query: &str) -> f32 {
         return token_score;
     }
 
-    // Fuzzy match using character overlap
-    let query_chars: std::collections::HashSet<char> = query_lower.chars().collect();
-    let name_chars: std::collections::HashSet<char> = name_lower.chars().collect();
-    let intersection = query_chars.intersection(&name_chars).count() as f32;
-    let union = query_chars.union(&name_chars).count() as f32;
-
-    if union > 0.0 {
-        0.5 * (intersection / union)
-    } else {
-        0.0
-    }
+    // Fuzzy match is intentionally not attempted via character-set overlap.
+    // Short-fragment prefix matching and Jaccard-style char overlap can promote
+    // unrelated results (e.g. token `i` satisfying `icons`) and manufacture
+    // relevance from noise. Require token-level coverage or admit a truthful miss.
+    0.0
 }
 
 fn calculate_token_relevance(name: &str, query: &str) -> f32 {
@@ -490,39 +493,98 @@ fn calculate_token_relevance(name: &str, query: &str) -> f32 {
         return 0.0;
     }
 
+    // Weight query tokens by inverse generic-ness so that generic terms
+    // (get, set, new, data, etc.) contribute less to coverage than
+    // domain-specific terms.  This prevents a file with repeated weak terms
+    // from winning solely through hit frequency.
+    let weights: Vec<f32> = query_tokens.iter().map(|t| query_token_weight(t)).collect();
+    let total_weight: f32 = weights.iter().sum();
+    if total_weight <= 0.0 {
+        return 0.0;
+    }
+
     let mut used_name_tokens = vec![false; name_tokens.len()];
-    let mut score = 0.0f32;
-    for query_token in &query_tokens {
+    let mut earned_weight = 0.0f32;
+    let mut specific_match = false;
+    for (query_token, &w) in query_tokens.iter().zip(&weights) {
+        // Exact token match
         if let Some(index) = name_tokens
             .iter()
             .enumerate()
             .position(|(index, name_token)| !used_name_tokens[index] && name_token == query_token)
         {
             used_name_tokens[index] = true;
-            score += 1.0;
+            earned_weight += w;
+            specific_match |= query_token.len() >= 3;
             continue;
         }
 
+        // Prefix match — require at least 3 chars on both sides
         if let Some(index) = name_tokens
             .iter()
             .enumerate()
             .position(|(index, name_token)| {
                 !used_name_tokens[index]
+                    && name_token.len() >= 3
+                    && query_token.len() >= 3
                     && (name_token.starts_with(query_token) || query_token.starts_with(name_token))
             })
         {
             used_name_tokens[index] = true;
-            score += 0.82;
+            earned_weight += w * 0.82;
+            specific_match = true;
         }
     }
 
-    let coverage = score / query_tokens.len() as f32;
+    let coverage = earned_weight / total_weight;
+
+    // In a multi-token query, short-token (<3 char) matches shrink the
+    // coverage DENOMINATOR as well as the numerator, so one weak exact
+    // match like `to` == `to` alone would reach 50% coverage and admit
+    // the candidate.  Short-token matches therefore only count when at
+    // least one specific (>=3 char) token also matched — unless EVERY
+    // query token matched exactly (coverage >= 1.0), in which case the
+    // match is truthful even when all tokens are short (`io db` vs
+    // `io_db`).  A single-token query is exempt for the same reason: an
+    // exact short identifier (`db`, `io`) is a truthful match.
+    if query_tokens.len() >= 2 && !specific_match && coverage < 1.0 {
+        return 0.0;
+    }
+
     if coverage >= 1.0 {
         0.86
     } else if coverage >= 0.5 {
         0.65 * coverage
     } else {
         0.0
+    }
+}
+
+/// Common low-signal identifiers that appear across many symbols.
+/// They receive reduced weight in query-token coverage so that a file
+/// or symbol with repeated generic terms cannot win solely through
+/// frequency.
+const GENERIC_TERMS: &[&str] = &[
+    "get", "set", "new", "data", "val", "value", "item", "items", "list", "map", "push", "insert",
+    "create", "update", "delete", "remove", "add", "find", "check", "run", "init", "start", "stop",
+    "load", "save", "read", "write", "print", "show", "hide", "open", "close", "make", "build",
+    "parse", "format", "handle", "process", "call", "send", "recv", "clone", "copy", "move",
+    "from", "into", "with", "self", "this", "test", "mock", "stub", "true", "false", "null",
+    "none", "type", "kind", "name", "id", "key", "src", "dst", "msg", "err", "ctx", "req", "res",
+    "len", "num", "cnt", "idx", "buf", "tmp", "obj", "arr", "str", "int", "bool", "result", "ret",
+    "out",
+];
+
+/// Weight a query token by inverse generic-ness.
+/// Generic terms get 0.3 weight; all other tokens get 1.0.
+fn query_token_weight(token: &str) -> f32 {
+    if token.len() < 3 {
+        // Very short tokens are inherently low-signal.
+        0.15
+    } else if GENERIC_TERMS.contains(&token) {
+        0.3
+    } else {
+        1.0
     }
 }
 
@@ -624,6 +686,41 @@ mod tests {
         assert!(calculate_relevance(".button-primary", "button primary") > 0.8);
         assert!(calculate_relevance("XMLParser", "xml parser") > 0.8);
         assert_eq!(text_tokens("XMLParser"), vec!["xml", "parser"]);
+    }
+
+    #[test]
+    fn test_relevance_short_fragment_prefix_does_not_match() {
+        // A single-char or 2-char query must not satisfy a longer token via prefix.
+        // Regression for `i` satisfying `icons`.
+        assert_eq!(calculate_relevance("icons", "i"), 0.0);
+        assert_eq!(calculate_relevance("navigation", "na"), 0.0);
+        // 3-char prefix is still accepted.
+        assert!(calculate_relevance("icons", "ico") > 0.0);
+    }
+
+    #[test]
+    fn test_relevance_short_fragment_contains_does_not_match() {
+        assert_eq!(calculate_relevance("doIcons", "i"), 0.0);
+        assert_eq!(calculate_relevance("doNavigation", "na"), 0.0);
+    }
+
+    #[test]
+    fn test_relevance_char_overlap_does_not_manufacture_match() {
+        // Character-set overlap must not be an admission path.
+        // `icons` and `navigation` share many characters but have no token overlap.
+        assert_eq!(calculate_relevance("navigation", "icons"), 0.0);
+        // `abc` and `cab` share all characters but are not the same token.
+        assert_eq!(calculate_relevance("cab", "abc"), 0.0);
+    }
+
+    #[test]
+    fn test_relevance_token_prefix_requires_min_length() {
+        // Token-level prefix matching must require >= 3 chars on both sides.
+        // `i18n` tokenizes to short fragments; `i` must not satisfy `icons`.
+        assert_eq!(calculate_token_relevance("icons", "i"), 0.0);
+        assert_eq!(calculate_token_relevance("icons", "ic"), 0.0);
+        // 3-char token prefix is accepted.
+        assert!(calculate_token_relevance("icons", "ico") > 0.0);
     }
 
     #[test]
@@ -808,5 +905,162 @@ mod tests {
         )
         .unwrap();
         assert_eq!(git_results[0].symbol.name, "GitCommitMessage");
+    }
+
+    // ---- Track G: weighted coverage, generic-term penalty, score floor --------
+
+    #[test]
+    fn test_generic_term_weight_reduces_coverage_impact() {
+        // A query where the only match is a generic term should score lower
+        // than a query where the only match is a specific term.
+        // `getData` tokens: ["get", "data"] — both generic.
+        // Query "get" (generic): exact match on `get`, weight 0.3, coverage 1.0 → 0.86.
+        // Query "fetch" (specific): no match → 0.0.
+        // Query "data" (generic): exact match on `data`, weight 0.3, coverage 1.0 → 0.86.
+        // Now compare: `getIcon` with `get` (generic) vs `getIcon` with `icon` (specific).
+        // `get` exact match: weight 0.3, coverage = 0.3/0.3 = 1.0 → 0.86.
+        // `icon` prefix match on `icon`: weight 1.0, earned 0.82, coverage = 0.82/1.0 = 0.82 → 0.533.
+        // The generic exact match scores higher than the specific prefix match.
+        // That is expected: exact is exact. The weighting matters when there
+        // are multiple tokens.
+        let score_generic_only = calculate_token_relevance("getIcon", "get");
+        let score_specific_only = calculate_token_relevance("getIcon", "icons");
+        // Both should be non-zero.
+        assert!(score_generic_only > 0.0);
+        assert!(score_specific_only > 0.0);
+
+        // Now verify that in a multi-token query, adding a generic term
+        // that also matches does not dramatically increase the score
+        // compared to a specific-only match.
+        // `getIcon` vs `get icons`: `get` exact (0.3), `icons` prefix on `icon` (0.82).
+        // earned = 0.3 + 0.82 = 1.12, total = 0.3 + 1.0 = 1.3, coverage = 0.862 → 0.56.
+        // `getIcon` vs `icons`: `icons` prefix on `icon` (0.82), coverage = 0.82 → 0.533.
+        // The generic-diluted score (0.56) is only slightly higher than the
+        // specific-only score (0.533) because the generic term's weight is
+        // only 0.3. Without weighting, both would be `get`(1.0) + `icons`(0.82)
+        // = 1.82 / 2.0 = 0.91 → 0.59, which is a bigger boost from the generic term.
+        let score_with_generic = calculate_token_relevance("getIcon", "get icons");
+        let score_without_generic = calculate_token_relevance("getIcon", "icons");
+        // The generic-diluted score should be only modestly higher.
+        assert!(
+            score_with_generic > score_without_generic,
+            "adding a matching generic term should still increase coverage"
+        );
+        // But the increase should be small (less than 0.1) because the generic
+        // term is weighted low.
+        assert!(
+            score_with_generic - score_without_generic < 0.1,
+            "generic term should not dramatically boost score: diff = {}",
+            score_with_generic - score_without_generic
+        );
+    }
+
+    #[test]
+    fn test_execute_search_rejects_zero_score_candidates() {
+        let store = SymbolStore::in_memory().unwrap();
+        let symbols = vec![
+            create_test_symbol("LanguageSwitcher", SymbolType::Function),
+            create_test_symbol("completely_unrelated_symbol", SymbolType::Function),
+        ];
+        store.upsert_symbols(&symbols).unwrap();
+
+        // Search for `language` — should match LanguageSwitcher but not the
+        // unrelated symbol.  The unrelated symbol may appear in broad
+        // candidate retrieval but must be filtered out by the score floor.
+        let results =
+            execute_search(&store, &SearchQuery::text("language").with_limit(10)).unwrap();
+        assert!(
+            results.iter().all(|r| r.score > 0.0),
+            "all returned results must have non-zero score"
+        );
+        assert!(
+            results.iter().any(|r| r.symbol.name == "LanguageSwitcher"),
+            "LanguageSwitcher should be in results"
+        );
+        assert!(
+            !results
+                .iter()
+                .any(|r| r.symbol.name == "completely_unrelated_symbol"),
+            "unrelated symbol must be filtered out by score floor"
+        );
+    }
+
+    #[test]
+    fn test_multi_token_query_requires_a_specific_token_match() {
+        // `to` exactly matches a token of `switchTo`, but in a multi-token
+        // query a short-token match alone must not reach the coverage
+        // threshold (the short weights shrink the denominator too).
+        assert_eq!(calculate_token_relevance("switchTo", "na to"), 0.0);
+        assert_eq!(calculate_token_relevance("switchTo", "to na"), 0.0);
+        // With a specific token matching, the short token counts again.
+        assert!(calculate_token_relevance("switchTo", "switch to") > 0.0);
+        // Single-token short queries stay a truthful exact match.
+        assert!(calculate_token_relevance("db_pool", "db") > 0.0);
+        // Full weighted coverage via exact matches is a truthful match even
+        // when every query token is short: `io db` covers `io_db` entirely.
+        assert_eq!(calculate_token_relevance("io_db", "io db"), 0.86);
+        assert_eq!(calculate_token_relevance("io_db", "db io"), 0.86);
+        // Partial short-only coverage stays rejected (`to` covers only half
+        // of `na to` by weight).
+        assert_eq!(calculate_token_relevance("switchTo", "na to"), 0.0);
+    }
+
+    #[test]
+    fn test_contextual_boosts_cannot_resurrect_zero_score_candidates() {
+        // A candidate with zero lexical relevance must be rejected even when
+        // it lives in the active file: boosts re-rank admitted results, they
+        // are not an admission path.
+        let store = SymbolStore::in_memory().unwrap();
+        let symbols = vec![
+            create_test_symbol_in_file("LanguageSwitcher", SymbolType::Function, "other.ts"),
+            create_test_symbol_in_file(
+                "completely_unrelated_symbol",
+                SymbolType::Function,
+                "active.ts",
+            ),
+        ];
+        store.upsert_symbols(&symbols).unwrap();
+
+        let results = execute_search(
+            &store,
+            &SearchQuery::text("language")
+                .with_limit(10)
+                .with_active_file("active.ts"),
+        )
+        .unwrap();
+        assert!(
+            !results
+                .iter()
+                .any(|r| r.symbol.name == "completely_unrelated_symbol"),
+            "active-file boost must not admit a zero-lexical-score candidate"
+        );
+        assert!(
+            results.iter().any(|r| r.symbol.name == "LanguageSwitcher"),
+            "LanguageSwitcher should still be returned"
+        );
+    }
+
+    #[test]
+    fn test_distractor_top_venues_does_not_match_navigation_query() {
+        // Regression query from the handoff:
+        //   query: "mobile top navigation icons locale location"
+        //   distractor: top_venues in a locales JSON path
+        // Tokenisation may split `i18n` into short fragments, but neither
+        // `i` nor `n` may satisfy `icons` or `navigation`.
+        let name = "top_venues";
+        let query = "mobile top navigation icons locale location";
+        let score = calculate_relevance(name, query);
+        assert_eq!(
+            score, 0.0,
+            "top_venues must not match the navigation/icons query via char overlap or short fragments"
+        );
+        // Also verify token-level: `top` matches but the rest don't.
+        let token_score = calculate_token_relevance(name, query);
+        // `top` is one of 5 query tokens.  Even if it matches, coverage is
+        // 1/5 = 0.2 which is below the 0.5 threshold, so score is 0.0.
+        assert_eq!(
+            token_score, 0.0,
+            "token relevance for top_venues vs the full query should be 0 (coverage < 0.5)"
+        );
     }
 }

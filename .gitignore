@@ -77,3 +77,6 @@ temp_next/
 # IDE
 .vscode/
 .idea/
+
+# Atlas Scout local data
+.atlas/

@@ -18,8 +18,12 @@ fn is_reliable_composite_tool_model(model_id: &str) -> bool {
 
 /// Tool definitions for zblade's internal tool execution.
 ///
-/// NOTE: These are NOT prompts for the AI model - prompting is zcoderd's responsibility.
-/// These schemas define how zblade parses and executes tool calls received from zcoderd.
+/// NOTE: For locally hosted models these schemas ARE model-facing — names, parameters,
+/// and descriptions are sent to the model verbatim, so descriptions must be self-contained
+/// teaching text (when to use the tool, how to chain results). For remote models, zcoderd
+/// owns a mirrored copy of these schemas; contract changes must be handed off via a spec in
+/// docs/internal so the two stay in sync. zblade also uses these schemas to parse and
+/// execute tool calls regardless of model host.
 pub fn get_tool_definitions() -> Vec<Value> {
     vec![
         serde_json::json!({
@@ -67,7 +71,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_search",
             "function": {
                 "name": "symbol_search",
-                "description": "Search indexed symbols by name or qualified name. Supports exact path, file_pattern, name_pattern, qualified_name_pattern, symbol kind, pagination, and compact opt-in connected-symbol previews. Returns search_health, index_health, and language_support metadata. Empty results are trustworthy only when the target file type is supported and the index is fresh; for unsupported files, literal/theme tokens, routes, config keys, translation keys, or arbitrary text use semantic_anchor_search, grep_search, or codebase_search.",
+                "description": "First choice for structural questions when the location is unknown — use before grep, broad text search, or whole-file reads to find definitions, functions, types, and other named symbols. Searches indexed symbols by name or qualified name. Supports exact path, file_pattern, name_pattern, qualified_name_pattern, symbol kind, pagination, and compact opt-in connected-symbol previews. Returns search_health, index_health, and language_support metadata. Copy the returned symbol id exactly for follow-up tools; never construct an id from a path and name. Empty results are trustworthy only when the target file type is supported and the index is fresh; for unsupported files, literal/theme tokens, routes, config keys, translation keys, or arbitrary text use semantic_anchor_search, grep_search, or codebase_search.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -92,14 +96,15 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "semantic_anchor_search",
             "function": {
                 "name": "semantic_anchor_search",
-                "description": "Search indexed semantic anchors such as rationale comments, design-document/code references, Markdown links, protocol tags, command/event names, routes, config keys, translations, and CSS/theme tokens. Contextual anchors expose their nearest owner symbol and deterministic target path/symbol when resolvable; ambiguous targets remain unresolved. Returns language_support metadata for the optional file filter.",
+                "description": "Search indexed semantic anchors such as rationale comments, JSX section labels, design-document/code references, Markdown links, protocol tags, command/event names, routes, config keys, translations, and CSS/theme tokens. Use for non-structural evidence — section labels, rationale comments, translation keys, routes — that symbol_search does not model. Optional mode: \"phrase\" (default) matches the exact contiguous phrase; \"all_terms\" requires every normalized term to match; \"any_terms\" does ranked discovery and reports per-anchor matched_terms/total_terms coverage. Contextual anchors expose their nearest owner symbol and deterministic target path/symbol when resolvable; ambiguous targets remain unresolved. Returns language_support metadata for the optional file filter.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": { "type": "string", "description": "Semantic literal or project concept query" },
                         "path": { "type": "string", "description": "Optional file path filter" },
-                        "limit": { "type": "integer", "description": "Optional max anchors" }
+                        "limit": { "type": "integer", "description": "Optional max anchors" },
+                        "mode": { "type": "string", "enum": ["phrase", "all_terms", "any_terms"], "description": "Anchor matching mode: phrase (default, exact contiguous phrase), all_terms (every normalized term must match), or any_terms (ranked discovery with matched_terms/total_terms coverage)" }
                     },
                     "required": ["query"],
                     "additionalProperties": false
@@ -111,7 +116,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_resolve",
             "function": {
                 "name": "symbol_resolve",
-                "description": "Resolve one symbol to its exact current structural record using a stable symbol ID or file-scoped name. Returns language_support metadata for the resolved symbol file.",
+                "description": "Resolve one symbol to its exact current structural record using a stable symbol ID or file-scoped name. Returns language_support metadata for the resolved symbol file. A symbol_id must be copied exactly from a prior result; invented ids are rejected with an error.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -131,7 +136,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_related",
             "function": {
                 "name": "symbol_related",
-                "description": "Return evidence-backed symbols related to a seed symbol, including direct graph edges, same-module exports, module importers, consumers of sibling exports, and bounded lexical-similarity fallbacks. Lexical matches are labeled as heuristic evidence, not structural graph truth. Returns language_support metadata for the seed file.",
+                "description": "Return evidence-backed symbols related to a seed symbol, including direct graph edges, same-module exports, module importers, consumers of sibling exports, and bounded lexical-similarity fallbacks. Lexical matches are labeled as heuristic evidence, not structural graph truth. Returns language_support metadata for the seed file. A symbol_id must be copied exactly from a prior result; invented ids are rejected with an error.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -152,7 +157,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_outline",
             "function": {
                 "name": "symbol_outline",
-                "description": "Return a compact symbol inventory and optional hierarchical outline for one file using the local code-intelligence index. Returns language_support diagnostics so unsupported or partial file types can be handled with read_file_range, semantic_anchor_search, grep_search, or codebase_search.",
+                "description": "Use when the file is known but the relevant range is not — call this before reading the whole file, then read only the returned ranges. Returns a compact symbol inventory and optional hierarchical outline for one file using the local code-intelligence index. Returns language_support diagnostics so unsupported or partial file types can be handled with read_file_range, semantic_anchor_search, grep_search, or codebase_search.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -175,7 +180,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_references",
             "function": {
                 "name": "symbol_references",
-                "description": "Expand inbound and outbound relationships for one symbol or important symbols in a file, including resolved-symbol confidence, name-fallback metadata, and language_support metadata.",
+                "description": "Answer where-used questions with indexed graph edges. Callers of a function: incoming call edges. Implementers of an interface/trait: incoming implements edges. Subclasses: incoming extends edges. Consumers of a constant or value: incoming usage edges. Pass a symbol_id copied exactly from a prior symbol_search/symbol_outline result; never construct an id from a path and name — invented ids are rejected with an error. Expands inbound and outbound relationships for one symbol or important symbols in a file, including resolved-symbol confidence, name-fallback metadata, and language_support metadata. Low-signal generic unresolved edges (len, clone, push, new, get, insert, map, ...) are suppressed by default and counted in low_signal_suppressed; set include_low_signal=true for the exhaustive view.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -187,7 +192,9 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "relationship": { "type": "string", "description": "Optional single relationship type: call, import, export, extends, implements, contains, usage, uses_type, reads_env, or handles" },
                         "relationships": { "type": "array", "items": { "type": "string" }, "description": "Optional relationship type list" },
                         "limit": { "type": "integer", "description": "Optional max references per relationship type" },
-                        "max_symbols": { "type": "integer", "description": "For file-wide expansion, maximum important symbols to expand" }
+                        "max_symbols": { "type": "integer", "description": "For file-wide expansion, maximum important symbols to expand" },
+                        "include_low_signal": { "type": "boolean", "description": "Include low-signal generic unresolved edges that are suppressed by default and reported via low_signal_suppressed. Defaults to false." },
+                        "offset": { "type": "integer", "description": "Skip this many ranked edges per relationship group before returning results. Use only after a truncated result; pages index the ranked post-suppression list and are stable only while the index is unchanged." }
                     },
                     "required": [],
                     "additionalProperties": false
@@ -199,7 +206,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "edit_impact",
             "function": {
                 "name": "edit_impact",
-                "description": "Analyze likely edit impact before changing a file or symbol. Performs bounded transitive incoming traversal plus direct outgoing dependency analysis, returning evidence paths, impacted files, related tests, risk, confidence, suggested read ranges, and language_support metadata.",
+                "description": "Analyze likely edit impact before changing a file or symbol. Performs bounded transitive incoming traversal plus direct outgoing dependency analysis, returning evidence paths, impacted files, related tests, risk, confidence, suggested read ranges, and language_support metadata. A symbol_id must be copied exactly from a prior result; invented ids are rejected with an error. Low-signal generic unresolved edges are suppressed by default and reported via low_signal_suppressed; set include_low_signal=true for the exhaustive view.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -212,7 +219,8 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "max_symbols": { "type": "integer", "description": "For file-wide impact, maximum important symbols to analyze" },
                         "depth": { "type": "integer", "description": "Incoming impact traversal depth; defaults to 2 and is capped at 4" },
                         "edge_limit": { "type": "integer", "description": "Total incoming traversal edge budget across target symbols; defaults to 160 and is capped at 400" },
-                        "per_node_limit": { "type": "integer", "description": "Per-node per-relationship expansion cap; defaults to 16 and is capped at 50" }
+                        "per_node_limit": { "type": "integer", "description": "Per-node per-relationship expansion cap; defaults to 16 and is capped at 50" },
+                        "include_low_signal": { "type": "boolean", "description": "Include low-signal generic unresolved edges that are suppressed by default and reported via low_signal_suppressed. Defaults to false." }
                     },
                     "required": [],
                     "additionalProperties": false
@@ -224,7 +232,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_graph",
             "function": {
                 "name": "symbol_graph",
-                "description": "Return incoming and outgoing graph edges for one symbol using the local code-intelligence index, including call, import, export, extends, implements, contains, usage, type-use, environment-read, and route-handler relationships. Returns language_support metadata for the seed file.",
+                "description": "Return incoming and outgoing graph edges for one symbol using the local code-intelligence index, including call, import, export, extends, implements, contains, usage, type-use, environment-read, and route-handler relationships. Returns language_support metadata for the seed file. A symbol_id must be copied exactly from a prior result; invented ids are rejected with an error. Low-signal generic unresolved edges are suppressed by default and reported via low_signal_suppressed; set include_low_signal=true for the exhaustive view.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -234,7 +242,8 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "qualified_name": { "type": "string", "description": "Optional exact qualified name" },
                         "name": { "type": "string", "description": "Optional simple symbol name" },
                         "relationship_type": { "type": "string", "description": "Optional edge kind: call, import, export, extends, implements, contains, usage, uses_type, reads_env, or handles" },
-                        "limit": { "type": "integer", "description": "Optional max incoming/outgoing edges" }
+                        "limit": { "type": "integer", "description": "Optional max incoming/outgoing edges" },
+                        "include_low_signal": { "type": "boolean", "description": "Include low-signal generic unresolved edges that are suppressed by default and reported via low_signal_suppressed. Defaults to false." }
                     },
                     "required": [],
                     "additionalProperties": false
@@ -437,7 +446,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_trace",
             "function": {
                 "name": "symbol_trace",
-                "description": "Trace bounded multi-hop incoming/outgoing symbol relationships from one seed symbol. Returns visited symbols, edges, hop depth, truncation status, and unresolved edge counts without claiming type-aware call graph precision.",
+                "description": "Trace bounded multi-hop incoming/outgoing symbol relationships from one seed symbol. Returns visited symbols, edges, hop depth, truncation status, and unresolved edge counts without claiming type-aware call graph precision. A symbol_id must be copied exactly from a prior result; invented ids are rejected with an error.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -463,7 +472,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "symbol_path",
             "function": {
                 "name": "symbol_path",
-                "description": "Find the lowest-cost bounded path between two symbols. Path cost favors strong relationship types, syntax evidence, and high-confidence target resolution. Ambiguous endpoints are rejected instead of guessed.",
+                "description": "Find the lowest-cost bounded path between two symbols. Path cost favors strong relationship types, syntax evidence, and high-confidence target resolution. Ambiguous endpoints are rejected instead of guessed. Symbol-id selectors must be copied exactly from a prior result; invented ids are rejected with an error.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
@@ -801,6 +810,84 @@ mod tests {
 
         assert!(properties.get("path").is_some());
         assert!(properties.get("scope").is_some());
+    }
+
+    #[test]
+    fn low_signal_toggle_present_on_reference_shaped_tools() {
+        let defs = get_tool_definitions();
+        for tool in ["symbol_references", "symbol_graph", "edit_impact"] {
+            let def = defs
+                .iter()
+                .find(|value| value.get("name").and_then(|v| v.as_str()) == Some(tool))
+                .unwrap_or_else(|| panic!("{tool} tool definition"));
+            let properties = &def["function"]["parameters"]["properties"];
+
+            assert!(
+                properties.get("include_low_signal").is_some(),
+                "{tool} is missing include_low_signal"
+            );
+        }
+    }
+
+    #[test]
+    fn semantic_anchor_search_definition_includes_mode_enum() {
+        let defs = get_tool_definitions();
+        let anchor_search = defs
+            .iter()
+            .find(|value| {
+                value.get("name").and_then(|v| v.as_str()) == Some("semantic_anchor_search")
+            })
+            .expect("semantic_anchor_search tool definition");
+        let mode = &anchor_search["function"]["parameters"]["properties"]["mode"];
+
+        assert_eq!(mode["type"].as_str(), Some("string"));
+        let values = mode["enum"]
+            .as_array()
+            .expect("mode enum values")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<&str>>();
+        assert_eq!(values, vec!["phrase", "all_terms", "any_terms"]);
+    }
+
+    #[test]
+    fn symbol_tool_descriptions_teach_routing_and_id_handoff() {
+        let defs = get_tool_definitions();
+        let description = |tool: &str| -> String {
+            defs.iter()
+                .find(|value| value.get("name").and_then(|v| v.as_str()) == Some(tool))
+                .unwrap_or_else(|| panic!("{tool} tool definition"))["function"]["description"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{tool} description"))
+                .to_string()
+        };
+
+        let search = description("symbol_search");
+        assert!(search.contains("use before grep"));
+        assert!(search.contains("never construct an id"));
+
+        let outline = description("symbol_outline");
+        assert!(outline.contains("file is known but the relevant range is not"));
+
+        let references = description("symbol_references");
+        assert!(references.contains("incoming call"));
+        assert!(references.contains("incoming implements"));
+        assert!(references.contains("never construct an id"));
+        assert!(references.contains("include_low_signal"));
+        assert!(references.contains("low_signal_suppressed"));
+
+        for tool in [
+            "symbol_resolve",
+            "symbol_related",
+            "symbol_graph",
+            "symbol_trace",
+            "symbol_path",
+        ] {
+            assert!(
+                description(tool).contains("invented ids are rejected"),
+                "{tool} description is missing the invented-id rejection sentence"
+            );
+        }
     }
 
     #[test]
