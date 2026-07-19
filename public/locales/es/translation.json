@@ -808,6 +808,8 @@
     "hideDetails": "Ocultar detalles",
     "undoChanges": "Deshacer cambios",
     "undo": "Deshacer",
+    "resultCount_one": "{{count}} resultado",
+    "resultCount_other": "{{count}} resultados",
     "status": {
       "pending": "Pendiente",
       "executing": "Ejecutando",
@@ -830,7 +832,7 @@
       "fastContext": "Preparando contexto",
       "editImpact": "Analizando el impacto de la edición",
       "symbolSearch": "Buscando símbolos",
-      "semanticAnchorSearch": "Buscando referencias semánticas",
+      "semanticAnchorSearch": "Buscando anclas semánticas",
       "symbolResolve": "Resolviendo símbolo",
       "symbolRelated": "Buscando símbolos relacionados",
       "symbolOutline": "Leyendo esquema de símbolos",
@@ -870,8 +872,7 @@
       "replaceFileContent": "Sustituyendo contenido",
       "writeToFile": "Escribiendo en archivo",
       "listResources": "Listando recursos",
-      "readResource": "Leyendo recurso",
-      "semanticAnchorSearch": "Buscando anclas semánticas"
+      "readResource": "Leyendo recurso"
     },
     "fastContext": {
       "title": "Contexto rápido",

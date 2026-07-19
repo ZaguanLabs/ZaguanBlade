@@ -46,6 +46,20 @@ const parseJsonRecord = (value?: string): JsonRecord | null => {
     }
 };
 
+// Symbols-family tools whose results carry a count in `_meta`. The count field
+// varies per tool: graph tools emit `returned` (Track F), search/anchor/related
+// emit `count`, and symbol_outline emits `returned_symbols`.
+const isSymbolResultTool = (name: string): boolean =>
+    name.startsWith('symbol_') || name === 'semantic_anchor_search';
+
+const symbolResultCount = (jsonResult: JsonRecord | null): number | null => {
+    const meta = asRecord(jsonResult?.['_meta']);
+    if (!meta) {
+        return null;
+    }
+    return asNumber(meta.returned) ?? asNumber(meta.count) ?? asNumber(meta.returned_symbols);
+};
+
 const toWorkspaceRelativePath = (path: string, workspaceRoot?: string | null): string => {
     if (!path || !workspaceRoot) {
         return path;
@@ -532,6 +546,9 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         result ? { label: status === 'error' ? t('toolCall.details.error') : t('toolCall.details.result'), value: result } : null,
     ].filter((item): item is { label: string; value: string } => !!item);
     const jsonResult = parseJsonRecord(result);
+    const resultCount = isComplete && isSymbolResultTool(toolCall.function.name)
+        ? symbolResultCount(jsonResult)
+        : null;
 
     if (toolCall.function.name === 'fast_context' && jsonResult) {
         return (
@@ -638,6 +655,11 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
                                     title={searchQuery}
                                 >
                                     {searchQuery}
+                                </span>
+                            )}
+                            {resultCount !== null && (
+                                <span className="shrink-0 text-[10px] text-(--fg-tertiary)">
+                                    {t('toolCall.resultCount', { count: resultCount })}
                                 </span>
                             )}
                             {onUndo && status === 'complete' && (
