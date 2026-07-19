@@ -494,6 +494,7 @@ const ActivityGroupDisplay: React.FC<{
                     return (
                         <div
                             key={item.id}
+                            className="chat-offscreen-tool"
                             ref={(element) => registerActivityTarget?.(getToolActivityTargetKey(toolCall.id), element)}
                         >
                             <ToolCallDisplay
@@ -518,14 +519,15 @@ const ActivityGroupDisplay: React.FC<{
                 }
 
                 return (
-                    <CommandOutputDisplay
-                        key={item.id}
-                        command={item.commandExecution.command}
-                        cwd={item.commandExecution.cwd}
-                        output={item.commandExecution.output}
-                        exitCode={item.commandExecution.exitCode}
-                        duration={item.commandExecution.duration}
-                    />
+                    <div key={item.id} className="chat-offscreen-tool">
+                        <CommandOutputDisplay
+                            command={item.commandExecution.command}
+                            cwd={item.commandExecution.cwd}
+                            output={item.commandExecution.output}
+                            exitCode={item.commandExecution.exitCode}
+                            duration={item.commandExecution.duration}
+                        />
+                    </div>
                 );
             })}
             </div>

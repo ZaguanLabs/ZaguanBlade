@@ -287,3 +287,24 @@ pre::selection,
 .terminal-host .xterm .xterm-viewport::-webkit-scrollbar:horizontal {
     height: 0 !important;
 }
+
+/*
+ * Chat long-conversation containment (WebKit CPU/RAM guard).
+ *
+ * content-visibility lets the engine skip layout and paint for off-screen
+ * chat rows and completed tool-call entries entirely — the difference between
+ * a bounded working set and gigabytes of live render tree on long agentic
+ * runs. contain-intrinsic-size `auto <estimate>` keeps scroll geometry sane:
+ * the estimate is used until a row has rendered once, after which the engine
+ * remembers its real size. Engines without content-visibility ignore both
+ * declarations harmlessly.
+ */
+.chat-offscreen-tool {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 44px;
+}
+
+.chat-offscreen-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 160px;
+}

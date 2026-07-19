@@ -547,7 +547,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                     )}
 
                     {visibleVirtualRows.map((row) => (
-                        <div key={row.key}>
+                        <div key={row.key} className="chat-offscreen-row">
                             {renderMessageRow(row)}
                         </div>
                     ))}
@@ -557,7 +557,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                     )}
 
                     {liveMessageRows.map((row) => (
-                        <div key={row.key}>
+                        <div key={row.key} className={row.isActive ? undefined : 'chat-offscreen-row'}>
                             {renderMessageRow(row)}
                         </div>
                     ))}

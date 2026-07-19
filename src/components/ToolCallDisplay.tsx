@@ -303,7 +303,7 @@ const EditImpactResultCard: React.FC<{
     );
 };
 
-export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
+const ToolCallDisplayComponent: React.FC<ToolCallDisplayProps> = ({
     toolCall,
     status = 'pending',
     result,
@@ -471,13 +471,16 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         return t(mapped.key, { defaultValue: mapped.fallback });
     };
 
-    // Parse arguments to display them nicely
-    let parsedArgs: Record<string, unknown> = {};
-    try {
-        parsedArgs = JSON.parse(toolCall.function.arguments);
-    } catch {
-        parsedArgs = { raw: toolCall.function.arguments };
-    }
+    // Parse arguments to display them nicely. Memoized: on long agentic runs
+    // a message can hold hundreds of tool calls, and re-parsing every call's
+    // arguments on every streaming re-render is a real CPU cost in WebKit.
+    const parsedArgs = React.useMemo<Record<string, unknown>>(() => {
+        try {
+            return JSON.parse(toolCall.function.arguments);
+        } catch {
+            return { raw: toolCall.function.arguments };
+        }
+    }, [toolCall.function.arguments]);
 
     // For run_command, extract the command for display and copy
     const commandText = isRunCommand ? (parsedArgs.command as string || parsedArgs.CommandLine as string || '') : '';
@@ -545,7 +548,9 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         searchQuery ? { label: t('toolCall.details.query'), value: searchQuery } : null,
         result ? { label: status === 'error' ? t('toolCall.details.error') : t('toolCall.details.result'), value: result } : null,
     ].filter((item): item is { label: string; value: string } => !!item);
-    const jsonResult = parseJsonRecord(result);
+    // Result payloads are up to 48 KiB of JSON; parse once per result change,
+    // not on every render.
+    const jsonResult = React.useMemo(() => parseJsonRecord(result), [result]);
     const resultCount = isComplete && isSymbolResultTool(toolCall.function.name)
         ? symbolResultCount(jsonResult)
         : null;
@@ -774,3 +779,28 @@ export const ToolCallDisplay: React.FC<ToolCallDisplayProps> = ({
         </div>
     );
 };
+
+// Memoized: during long agentic runs the active assistant message accumulates
+// hundreds of tool calls, and every streaming chunk re-renders the whole
+// message. Unchanged ToolCall objects keep referential identity through
+// useChatV2 updates, so this bail-out makes a chunk update O(changed tools)
+// instead of O(all tools). Callbacks are compared by presence, not identity —
+// the closures are recreated per parent render but their behavior is stable.
+export const ToolCallDisplay = React.memo(ToolCallDisplayComponent, (prevProps, nextProps) => {
+    if (prevProps.status !== nextProps.status) return false;
+    if (prevProps.result !== nextProps.result) return false;
+    if (prevProps.workspaceRoot !== nextProps.workspaceRoot) return false;
+    const prevTool = prevProps.toolCall;
+    const nextTool = nextProps.toolCall;
+    if (prevTool !== nextTool) {
+        if (prevTool.id !== nextTool.id) return false;
+        if (prevTool.function.name !== nextTool.function.name) return false;
+        if (prevTool.function.arguments !== nextTool.function.arguments) return false;
+        if (prevTool.status !== nextTool.status) return false;
+        if (prevTool.result !== nextTool.result) return false;
+    }
+    if (!!prevProps.onStopCommand !== !!nextProps.onStopCommand) return false;
+    if (!!prevProps.onUndo !== !!nextProps.onUndo) return false;
+    if (!!prevProps.onOpenFile !== !!nextProps.onOpenFile) return false;
+    return true;
+});
