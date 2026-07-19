@@ -3264,7 +3264,13 @@ impl LanguageService {
             healing.health_after = Some(health_after);
         }
 
-        healing.semantic_anchor_matches = self.search_semantic_anchors(query, None, 12)?;
+        // AnyTerms, not the legacy contiguous-phrase match: healing queries are
+        // natural language ("navigation toolbar"), and requiring the whole
+        // phrase to appear verbatim manufactures false-empty fallbacks — the
+        // exact failure mode the anchor query modes were added to eliminate.
+        healing.semantic_anchor_matches = self
+            .search_semantic_anchors_mode(query, None, 12, AnchorQueryMode::AnyTerms)?
+            .results;
         healing.literal_matches = self.literal_symbol_search_fallback(query, 12)?;
         if initial_results.is_empty()
             && healing.semantic_anchor_matches.is_empty()

@@ -1904,6 +1904,36 @@ mod tests {
     }
 
     #[test]
+    fn apply_patch_miss_diagnoses_em_dash_confusable() {
+        // The file uses an em dash; the model retyped it as a hyphen. The
+        // error must name the exact characters instead of a generic miss.
+        let content = "intro\nranking — strict and explainable\noutro\n";
+        let err = apply_patch_to_string(content, "ranking - strict and explainable", "x")
+            .unwrap_err();
+        assert!(err.contains("U+2014"), "should name the em dash: {err}");
+        assert!(err.contains("U+002D"), "should name the hyphen: {err}");
+        assert!(err.contains("line 2"), "should locate the region: {err}");
+    }
+
+    #[test]
+    fn apply_patch_miss_diagnoses_curly_quote_confusable() {
+        let content = "say \u{201C}hello\u{201D} now\n";
+        let err = apply_patch_to_string(content, "say \"hello\" now", "x").unwrap_err();
+        assert!(err.contains("U+201C"), "should name the curly quote: {err}");
+    }
+
+    #[test]
+    fn apply_patch_miss_without_confusable_keeps_generic_error() {
+        let content = "alpha\nbeta\ngamma\n";
+        let err = apply_patch_to_string(content, "delta", "x").unwrap_err();
+        assert!(
+            !err.contains("Unicode punctuation"),
+            "no confusable hint expected: {err}"
+        );
+        assert!(err.contains("old_text not found"), "generic error kept: {err}");
+    }
+
+    #[test]
     fn execute_tool_supports_apply_patch_validated() {
         let workspace = tempdir().expect("tempdir");
         let file_path = workspace.path().join("example.txt");
@@ -7810,12 +7840,94 @@ fn apply_patch_whitespace_recovery(
     None
 }
 
+/// Fold Unicode punctuation confusables to ASCII for DIAGNOSIS only — never
+/// for applying a patch (we cannot know whether a punctuation difference in
+/// new_text is intended, so auto-recovery could silently downgrade the file's
+/// typography). Returns the folded string plus a byte map from folded offsets
+/// back to original offsets (with an end sentinel).
+fn fold_punctuation_confusables(text: &str) -> (String, Vec<usize>) {
+    let mut folded = String::with_capacity(text.len());
+    let mut map = Vec::with_capacity(text.len() + 1);
+    for (offset, ch) in text.char_indices() {
+        let replacement: &str = match ch {
+            '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
+            | '\u{2212}' => "-",
+            '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => "'",
+            '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => "\"",
+            '\u{00A0}' | '\u{2007}' | '\u{202F}' => " ",
+            '\u{2026}' => "...",
+            _ => {
+                let before = folded.len();
+                folded.push(ch);
+                for _ in before..folded.len() {
+                    map.push(offset);
+                }
+                continue;
+            }
+        };
+        for _ in 0..replacement.len() {
+            map.push(offset);
+        }
+        folded.push_str(replacement);
+    }
+    map.push(text.len());
+    (folded, map)
+}
+
+/// When exact and whitespace-normalized matching both fail, check whether the
+/// ONLY difference is Unicode punctuation (em/en dashes vs '-', curly vs
+/// straight quotes, NBSP vs space, ellipsis). Models routinely ASCII-fold
+/// these when retyping text, then burn turns on inscrutable "not found"
+/// errors. Returns a precise description of the first differing characters.
+fn punctuation_confusable_hint(content: &str, old_text: &str) -> Option<String> {
+    let (folded_content, content_map) = fold_punctuation_confusables(content);
+    let (folded_old, _) = fold_punctuation_confusables(old_text);
+    if folded_old.is_empty() {
+        return None;
+    }
+    let mut matches = folded_content.match_indices(&folded_old);
+    let (pos, _) = matches.next()?;
+    if matches.next().is_some() {
+        return Some(
+            "Multiple regions match old_text when Unicode punctuation (dashes, curly quotes, non-breaking spaces, ellipses) is normalized — the file uses punctuation variants old_text does not. Copy the text exactly from read_file_range.".to_string(),
+        );
+    }
+    let start = content_map[pos];
+    let end = content_map[pos + folded_old.len()];
+    let region = content.get(start..end)?;
+    let line = content[..start].bytes().filter(|byte| *byte == b'\n').count() + 1;
+    // Char-wise zip drifts after a fold that changes char counts ('…' vs
+    // "..."), but the FIRST difference — the actionable one — is exact.
+    let mut differences = Vec::new();
+    for (file_char, old_char) in region.chars().zip(old_text.chars()) {
+        if file_char != old_char {
+            differences.push(format!(
+                "file has '{file_char}' (U+{:04X}) where old_text has '{old_char}' (U+{:04X})",
+                file_char as u32, old_char as u32
+            ));
+            if differences.len() >= 3 {
+                break;
+            }
+        }
+    }
+    if differences.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "A near-identical region exists at line {line} differing only in Unicode punctuation: {}.",
+        differences.join("; ")
+    ))
+}
+
 fn old_text_not_found_error(content: &str, old_text: &str) -> String {
     let mut message = format!(
         "old_text not found in file (searched {} chars) after exact and whitespace-normalized matching.",
         old_text.len()
     );
-    if let Some(anchor) = old_text
+    if let Some(hint) = punctuation_confusable_hint(content, old_text) {
+        message.push_str(" ");
+        message.push_str(&hint);
+    } else if let Some(anchor) = old_text
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
