@@ -149,7 +149,7 @@ export const GraphInspector: React.FC<GraphInspectorProps> = ({
     };
 
     const goBack = () => {
-        const prior = history.at(-1);
+        const prior = history[history.length - 1];
         if (!prior) return;
         setFocus(prior);
         setHistory(previous => previous.slice(0, -1));
