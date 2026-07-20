@@ -131,6 +131,24 @@ export function createDiffStateFromUnifiedDiff(source?: string): DiffState | nul
     return cachedUnifiedDiffState;
 }
 
+/**
+ * Resolve an optional diff update for an imperative document replacement.
+ *
+ * An omitted diff means the caller is only refreshing the document content and
+ * must not erase an already-visible review diff. `null` is the explicit signal
+ * used by clean/accepted/rejected transitions to clear it.
+ */
+export function resolveDiffStateUpdate(
+    current: DiffState | null | undefined,
+    source: string | null | undefined,
+): DiffState | null {
+    if (source === undefined) {
+        return current ?? null;
+    }
+
+    return createDiffStateFromUnifiedDiff(source ?? undefined);
+}
+
 // ─── Character-Level Diff ────────────────────────────────────────────────────
 
 interface CharDiff {

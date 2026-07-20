@@ -398,7 +398,7 @@ export const EditorPanel: React.FC<EditorPanelProps> = ({
                     content: reviewTransition.contentState.savedContent ?? '',
                     resetHistory: false,
                     reason: 'external-clean-update',
-                    unifiedDiff: undefined,
+                    unifiedDiff: null,
                     preserveScroll: true,
                     forceEffects: true,
                 });

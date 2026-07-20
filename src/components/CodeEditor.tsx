@@ -23,6 +23,7 @@ import {
     diffStateField,
     setDiffState,
     createDiffStateFromUnifiedDiff,
+    resolveDiffStateUpdate,
     aiGlowDecorations,
     triggerAiGlow,
     zlpHoverTooltip,
@@ -77,8 +78,11 @@ const getClampedMainSelection = (view: EditorView, contentLength: number): Edito
     };
 };
 
-const replaceEditorDocument = (view: EditorView, content: string, unifiedDiff?: string, preserveScroll = false) => {
-    const diffState = createDiffStateFromUnifiedDiff(unifiedDiff);
+const replaceEditorDocument = (view: EditorView, content: string, unifiedDiff?: string | null, preserveScroll = false) => {
+    const diffState = resolveDiffStateUpdate(
+        view.state.field(diffStateField, false),
+        unifiedDiff,
+    );
     const selection = getClampedMainSelection(view, content.length);
 
     const spec = {
@@ -142,7 +146,8 @@ export type CodeEditorReplaceDocumentInput = {
     content: string;
     resetHistory: boolean;
     reason: CodeEditorReplaceDocumentReason;
-    unifiedDiff?: string;
+    /** Omit to preserve the current review diff; pass null to clear it. */
+    unifiedDiff?: string | null;
     preserveScroll?: boolean;
     forceEffects?: boolean;
 };
@@ -389,7 +394,10 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
             const effectsSpec = {
                 effects: [
                     setBaseContent.of(input.content),
-                    setDiffState.of(createDiffStateFromUnifiedDiff(input.unifiedDiff)),
+                    setDiffState.of(resolveDiffStateUpdate(
+                        view.state.field(diffStateField, false),
+                        input.unifiedDiff,
+                    )),
                 ],
             };
             if (input.preserveScroll) {
@@ -411,7 +419,10 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
                 view.dispatch({
                     effects: [
                         setBaseContent.of(input.content),
-                        setDiffState.of(createDiffStateFromUnifiedDiff(input.unifiedDiff)),
+                        setDiffState.of(resolveDiffStateUpdate(
+                            view.state.field(diffStateField, false),
+                            input.unifiedDiff,
+                        )),
                     ],
                 });
             };

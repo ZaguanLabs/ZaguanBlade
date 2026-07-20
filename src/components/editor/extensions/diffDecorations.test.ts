@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseUnifiedDiff } from './diffDecorations';
+import { EditorState } from '@codemirror/state';
+import {
+    diffStateField,
+    parseUnifiedDiff,
+    resolveDiffStateUpdate,
+    setDiffState,
+} from './diffDecorations';
 
 test('parseUnifiedDiff maps consecutive changelog insertions to both added lines', () => {
     const diff = `diff --git a/src/pages/changelog.astro b/src/pages/changelog.astro
@@ -26,4 +32,40 @@ index 08f9f61..107c2ed 100644
     );
     assert.equal(addedLines[0]?.content.includes('PHP Support'), true);
     assert.equal(addedLines[1]?.content.includes('Node Modules'), true);
+});
+
+test('an omitted diff update preserves the visible review diff during a document reload', () => {
+    const initialDiff = `--- a/file
++++ b/file
+@@ -1 +1 @@
+-before
++after
+`;
+    let state = EditorState.create({
+        doc: 'after',
+        extensions: [diffStateField],
+    });
+    const initialDiffState = resolveDiffStateUpdate(null, initialDiff);
+
+    state = state.update({ effects: setDiffState.of(initialDiffState) }).state;
+    const visibleDiffState = state.field(diffStateField);
+
+    state = state.update({
+        changes: { from: 0, to: state.doc.length, insert: 'after again' },
+        effects: setDiffState.of(resolveDiffStateUpdate(visibleDiffState, undefined)),
+    }).state;
+
+    assert.strictEqual(state.field(diffStateField), visibleDiffState);
+    assert.equal(state.field(diffStateField)?.lines.some(line => line.type === 'added'), true);
+});
+
+test('an explicit null diff update clears the visible review diff', () => {
+    const current = resolveDiffStateUpdate(null, `--- a/file
++++ b/file
+@@ -1 +1 @@
+-before
++after
+`);
+
+    assert.equal(resolveDiffStateUpdate(current, null), null);
 });
