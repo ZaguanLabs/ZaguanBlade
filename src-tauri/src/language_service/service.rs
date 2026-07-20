@@ -46,6 +46,7 @@ pub struct LanguageService {
     /// Shared in-memory worktree snapshot/index
     worktree_store: RwLock<Option<Arc<WorktreeStore>>>,
     buffer_snapshots: BufferSnapshotStore,
+    overlays: RwLock<HashMap<String, OverlayDocument>>,
 
     /// In-memory cache of recently parsed files
     file_cache: RwLock<HashMap<String, CachedFile>>,
@@ -299,12 +300,21 @@ pub struct SymbolSearchOutcome {
 
 /// Cached file data
 #[derive(Clone)]
+#[allow(dead_code)] // Retained for indexed-file cache accounting; overlays use separate authority.
 struct CachedFile {
     /// Content hash for change detection
     hash: String,
     _snapshot: Arc<BufferSnapshot>,
     /// Extracted symbols
     symbols: Vec<Symbol>,
+}
+
+#[derive(Clone)]
+struct OverlayDocument {
+    _version: Option<i32>,
+    symbols: Vec<Symbol>,
+    relationships: Vec<SymbolRelationship>,
+    anchors: Vec<SemanticAnchor>,
 }
 
 struct SymbolExtraction<'a> {
@@ -1031,6 +1041,7 @@ impl LanguageService {
             symbol_store,
             worktree_store: RwLock::new(None),
             buffer_snapshots: BufferSnapshotStore::new(),
+            overlays: RwLock::new(HashMap::new()),
 
             file_cache: RwLock::new(HashMap::new()),
             index_health: RwLock::new(IndexHealthSnapshot::default()),
@@ -3075,7 +3086,9 @@ impl LanguageService {
         let search_query = SearchQuery::text(query).with_limit(limit);
         let results =
             crate::symbol_index::search::execute_search(&self.symbol_store, &search_query)?;
-        Ok(self.filter_visible_search_results(results))
+        Ok(self.filter_visible_search_results(
+            self.merge_overlay_search_results(results, &search_query),
+        ))
     }
 
     pub fn search_symbols_contextual(
@@ -3105,7 +3118,7 @@ impl LanguageService {
 
         let results =
             crate::symbol_index::search::execute_search(&self.symbol_store, &search_query)?;
-        Ok(results)
+        Ok(self.merge_overlay_search_results(results, &search_query))
     }
 
     /// Search symbols with filters
@@ -3168,7 +3181,55 @@ impl LanguageService {
 
         let results =
             crate::symbol_index::search::execute_search(&self.symbol_store, &search_query)?;
-        Ok(results)
+        Ok(self.merge_overlay_search_results(results, &search_query))
+    }
+
+    fn merge_overlay_search_results(
+        &self,
+        mut results: Vec<SearchResult>,
+        query: &SearchQuery,
+    ) -> Vec<SearchResult> {
+        let overlays = self.overlays.read().unwrap();
+        if overlays.is_empty() {
+            return results;
+        }
+
+        let overlay_paths = overlays.keys().map(String::as_str).collect::<HashSet<_>>();
+        results.retain(|result| !overlay_paths.contains(result.symbol.file_path.as_str()));
+        let text = query.text.as_deref().unwrap_or_default();
+        for document in overlays.values() {
+            for symbol in &document.symbols {
+                if Self::is_synthetic_file_root_symbol(symbol)
+                    || !crate::symbol_index::search::symbol_matches_query_filters(symbol, query)
+                {
+                    continue;
+                }
+                let Some((score, breakdown)) =
+                    crate::symbol_index::search::score_symbol_query(symbol, text)
+                else {
+                    continue;
+                };
+                let mut result = SearchResult::with_score(symbol.clone(), score);
+                if query.explain {
+                    result.score_breakdown = Some(breakdown);
+                }
+                results.push(result);
+            }
+        }
+        results.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| {
+                    left.symbol
+                        .qualified_name
+                        .cmp(&right.symbol.qualified_name)
+                })
+                .then_with(|| left.symbol.file_path.cmp(&right.symbol.file_path))
+                .then_with(|| left.symbol.id.cmp(&right.symbol.id))
+        });
+        results.truncate(query.limit.unwrap_or(50).clamp(1, 100));
+        results
     }
 
     pub fn search_symbols_filtered_self_healing(
@@ -3301,12 +3362,9 @@ impl LanguageService {
         file_path: Option<&str>,
         limit: usize,
     ) -> Result<Vec<SemanticAnchorResult>, LanguageError> {
-        if let Some(path) = file_path {
-            self.ensure_file_fresh(path)?;
-        }
         Ok(self
-            .symbol_store
-            .search_semantic_anchors(query, file_path, limit)?)
+            .search_semantic_anchors_mode(query, file_path, limit, AnchorQueryMode::Phrase)?
+            .results)
     }
 
     /// Track H — mode-aware anchor search (`phrase` / `all_terms` / `any_terms`)
@@ -3322,9 +3380,73 @@ impl LanguageService {
         if let Some(path) = file_path {
             self.ensure_file_fresh(path)?;
         }
-        Ok(self
+        let persisted = self
             .symbol_store
-            .search_semantic_anchors_mode(query, file_path, limit, mode)?)
+            .search_semantic_anchors_mode(query, file_path, limit, mode)?;
+        Ok(self.merge_overlay_anchor_results(persisted, query, file_path, limit, mode))
+    }
+
+    fn merge_overlay_anchor_results(
+        &self,
+        mut outcome: SemanticAnchorSearchOutcome,
+        query: &str,
+        file_path: Option<&str>,
+        limit: usize,
+        mode: AnchorQueryMode,
+    ) -> SemanticAnchorSearchOutcome {
+        let overlays = self.overlays.read().unwrap();
+        if overlays.is_empty() {
+            return outcome;
+        }
+        outcome.results.retain(|result| {
+            !overlays.contains_key(&result.anchor.file_path)
+                && file_path.is_none_or(|path| result.anchor.file_path == path)
+        });
+        let phrase = query.trim().to_ascii_lowercase();
+        let terms = phrase
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        for (path, document) in &*overlays {
+            if file_path.is_some_and(|scope| scope != path) {
+                continue;
+            }
+            for anchor in &document.anchors {
+                let haystack = format!("{} {}", anchor.value, anchor.preview).to_ascii_lowercase();
+                let matched = terms
+                    .iter()
+                    .filter(|term| haystack.contains(term.as_str()))
+                    .count();
+                let accepted = match mode {
+                    AnchorQueryMode::Phrase => !phrase.is_empty() && haystack.contains(&phrase),
+                    AnchorQueryMode::AllTerms => !terms.is_empty() && matched == terms.len(),
+                    AnchorQueryMode::AnyTerms => matched > 0,
+                };
+                if !accepted {
+                    continue;
+                }
+                let coverage = if terms.is_empty() {
+                    0.0
+                } else {
+                    matched as f32 / terms.len() as f32
+                };
+                outcome.results.push(SemanticAnchorResult {
+                    anchor: anchor.clone(),
+                    score: anchor.confidence * coverage.max(0.5),
+                    matched_terms: (mode != AnchorQueryMode::Phrase).then_some(matched),
+                    total_terms: (mode != AnchorQueryMode::Phrase).then_some(terms.len()),
+                });
+            }
+        }
+        outcome.results.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| left.anchor.file_path.cmp(&right.anchor.file_path))
+                .then_with(|| left.anchor.line.cmp(&right.anchor.line))
+        });
+        outcome.results.truncate(limit.clamp(1, 100));
+        outcome
     }
 
     pub fn get_file_semantic_anchors(
@@ -3332,6 +3454,9 @@ impl LanguageService {
         file_path: &str,
         limit: usize,
     ) -> Result<Vec<SemanticAnchor>, LanguageError> {
+        if let Some(document) = self.overlays.read().unwrap().get(file_path) {
+            return Ok(document.anchors.iter().take(limit).cloned().collect());
+        }
         self.ensure_file_fresh(file_path)?;
         Ok(self
             .symbol_store
@@ -3354,6 +3479,22 @@ impl LanguageService {
         line: u32,
         character: u32,
     ) -> Result<Option<Symbol>, LanguageError> {
+        if let Some(document) = self.overlays.read().unwrap().get(file_path) {
+            let mut matches = document
+                .symbols
+                .iter()
+                .filter(|symbol| {
+                    let starts_before = (symbol.range.start.line, symbol.range.start.character)
+                        <= (line, character);
+                    let ends_after =
+                        (symbol.range.end.line, symbol.range.end.character) >= (line, character);
+                    starts_before && ends_after
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            matches.sort_by_key(|symbol| symbol.byte_length);
+            return Ok(matches.into_iter().next());
+        }
         self.ensure_file_fresh(file_path)?;
         let symbol = self
             .symbol_store
@@ -3363,14 +3504,109 @@ impl LanguageService {
     }
 
     pub fn get_symbol(&self, id: &str) -> Result<Option<Symbol>, LanguageError> {
-        Ok(self.symbol_store.get_symbol(id)?)
+        let overlays = self.overlays.read().unwrap();
+        if let Some(symbol) = overlays
+            .values()
+            .flat_map(|document| &document.symbols)
+            .find(|symbol| symbol.id == id)
+        {
+            return Ok(Some(symbol.clone()));
+        }
+        let persisted = self.symbol_store.get_symbol(id)?;
+        Ok(persisted.filter(|symbol| !overlays.contains_key(&symbol.file_path)))
     }
 
     pub fn get_file_module_symbol(&self, file_path: &str) -> Result<Option<Symbol>, LanguageError> {
+        if let Some(document) = self.overlays.read().unwrap().get(file_path) {
+            return Ok(document
+                .symbols
+                .iter()
+                .find(|symbol| Self::is_synthetic_file_root_symbol(symbol))
+                .cloned());
+        }
         self.ensure_file_fresh(file_path)?;
         Ok(self
             .symbol_store
             .get_symbol(&Self::synthetic_file_root_id(file_path))?)
+    }
+
+    fn overlay_references(
+        &self,
+        symbol: &Symbol,
+        relationship_type: SymbolRelationshipType,
+        incoming: bool,
+    ) -> Vec<SymbolReference> {
+        let overlays = self.overlays.read().unwrap();
+        let find_symbol = |id: &str| {
+            overlays
+                .values()
+                .flat_map(|document| &document.symbols)
+                .find(|candidate| candidate.id == id)
+                .cloned()
+                .or_else(|| {
+                    self.symbol_store
+                        .get_symbol(id)
+                        .ok()
+                        .flatten()
+                        .filter(|candidate| !overlays.contains_key(&candidate.file_path))
+                })
+        };
+        let mut references = Vec::new();
+        for document in overlays.values() {
+            for relationship in &document.relationships {
+                if relationship.relationship_type != relationship_type {
+                    continue;
+                }
+                let matches = if incoming {
+                    relationship.target_symbol_id.as_deref() == Some(symbol.id.as_str())
+                        || (relationship.target_symbol_id.is_none()
+                            && relationship.target_name == symbol.name)
+                        || (relationship_type == SymbolRelationshipType::Import
+                            && relationship.target_name == symbol.file_path)
+                } else {
+                    relationship.source_symbol_id == symbol.id
+                };
+                if !matches {
+                    continue;
+                }
+                let Some(source_symbol) = find_symbol(&relationship.source_symbol_id) else {
+                    continue;
+                };
+                let target_symbol = relationship
+                    .target_symbol_id
+                    .as_deref()
+                    .and_then(&find_symbol)
+                    .or_else(|| incoming.then(|| symbol.clone()));
+                let target_symbol_id = target_symbol
+                    .as_ref()
+                    .map(|target| target.id.clone())
+                    .or_else(|| relationship.target_symbol_id.clone());
+                references.push(SymbolReference {
+                    source_symbol,
+                    relationship_type,
+                    target_name: relationship.target_name.clone(),
+                    target_symbol_id,
+                    target_symbol,
+                    line: relationship.line,
+                    observation_kind: RelationshipObservationKind::SyntaxExtracted,
+                    resolution_strategy: relationship
+                        .resolution_strategy
+                        .clone()
+                        .or_else(|| Some("overlay".to_string())),
+                    resolution_confidence: relationship.confidence.or(Some(0.9)),
+                    receiver_type: relationship.recv_type.clone(),
+                    receiver_is_self: relationship.recv_self,
+                    import_path: relationship.import_path.clone(),
+                    imported_name: relationship.imported_name.clone(),
+                });
+            }
+        }
+        references
+    }
+
+    fn remove_shadowed_persisted_references(&self, references: &mut Vec<SymbolReference>) {
+        let overlays = self.overlays.read().unwrap();
+        references.retain(|reference| !overlays.contains_key(&reference.source_symbol.file_path));
     }
 
     pub fn get_relationship_targets(
@@ -3610,6 +3846,9 @@ impl LanguageService {
 
     /// Get all symbols in a file
     pub fn get_file_symbols(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
+        if let Some(document) = self.overlays.read().unwrap().get(file_path) {
+            return Ok(self.filter_visible_symbols(file_path, document.symbols.clone()));
+        }
         self.ensure_file_fresh(file_path)?;
         let symbols = self.get_file_symbols_raw(file_path)?;
         Ok(self.filter_visible_symbols(file_path, symbols))
@@ -3625,6 +3864,44 @@ impl LanguageService {
     // =========================================================================
     // Document Synchronization
     // =========================================================================
+
+    fn update_overlay(
+        &self,
+        file_path: &str,
+        version: Option<i32>,
+        content: &str,
+    ) -> Result<(), LanguageError> {
+        let language = Language::from_path(file_path).ok_or_else(|| {
+            LanguageError::NotSupported(format!("Unknown language for: {file_path}"))
+        })?;
+        let SymbolExtraction {
+            symbols: extracted_symbols,
+            mut relationships,
+            content: extraction_content,
+            language: extraction_language,
+        } = self.extract_file_symbols_and_relationships(file_path, content, language)?;
+        let symbols = self.with_file_root_symbol(file_path, content, extracted_symbols);
+        self.enrich_symbol_relationships(
+            file_path,
+            extraction_content.as_ref(),
+            extraction_language,
+            language,
+            &symbols,
+            &mut relationships,
+        )?;
+        let anchors = extract_semantic_anchors(file_path, content);
+
+        self.overlays.write().unwrap().insert(
+            file_path.to_string(),
+            OverlayDocument {
+                _version: version,
+                symbols,
+                relationships,
+                anchors,
+            },
+        );
+        Ok(())
+    }
 
     /// Notify that a document was opened
     pub fn did_open(&self, file_path: &str, content: &str) -> Result<(), LanguageError> {
@@ -3645,10 +3922,7 @@ impl LanguageService {
             return Ok(());
         }
 
-        // Index the file
-        let _ = self.index_file_content(file_path, None, content)?;
-
-        Ok(())
+        self.update_overlay(file_path, None, content)
     }
 
     /// Notify that a document changed
@@ -3686,10 +3960,7 @@ impl LanguageService {
             return Ok(());
         }
 
-        // Re-index the file
-        let _ = self.index_file_content(file_path, Some(version), content)?;
-
-        Ok(())
+        self.update_overlay(file_path, Some(version), content)
     }
 
     /// Notify that a document was closed
@@ -3700,7 +3971,22 @@ impl LanguageService {
             cache.remove(file_path);
         }
         self.buffer_snapshots.remove(&self.snapshot_key(file_path));
+        self.overlays.write().unwrap().remove(file_path);
 
+        Ok(())
+    }
+
+    /// Persist a saved document into the index and retire any unsaved overlay.
+    pub fn did_save(&self, file_path: &str, content: &str) -> Result<(), LanguageError> {
+        if should_allow_non_indexed_live_sync(file_path) {
+            self.overlays.write().unwrap().remove(file_path);
+            self.buffer_snapshots.remove(&self.snapshot_key(file_path));
+            return Ok(());
+        }
+
+        self.index_file_content(file_path, None, content)?;
+        self.overlays.write().unwrap().remove(file_path);
+        self.buffer_snapshots.remove(&self.snapshot_key(file_path));
         Ok(())
     }
 
@@ -4260,8 +4546,21 @@ impl LanguageService {
         relationship_type: SymbolRelationshipType,
         limit: usize,
     ) -> Result<Vec<SymbolReference>, LanguageError> {
-        let mut references = Vec::new();
-        let mut seen = HashSet::new();
+        let mut references = self.overlay_references(symbol, relationship_type, true);
+        references.truncate(limit);
+        let mut seen = references
+            .iter()
+            .map(|reference| {
+                (
+                    reference.source_symbol.id.clone(),
+                    reference.relationship_type,
+                    reference.line,
+                )
+            })
+            .collect::<HashSet<_>>();
+        if references.len() >= limit {
+            return Ok(references);
+        }
         let expanded_limit = limit.saturating_mul(8).max(limit);
 
         for reference in self.symbol_store.find_references_to_symbol_id(
@@ -4269,6 +4568,14 @@ impl LanguageService {
             relationship_type,
             expanded_limit,
         )? {
+            if self
+                .overlays
+                .read()
+                .unwrap()
+                .contains_key(&reference.source_symbol.file_path)
+            {
+                continue;
+            }
             let key = (
                 reference.source_symbol.id.clone(),
                 reference.relationship_type,
@@ -4288,6 +4595,14 @@ impl LanguageService {
             relationship_type,
             expanded_limit,
         )? {
+            if self
+                .overlays
+                .read()
+                .unwrap()
+                .contains_key(&reference.source_symbol.file_path)
+            {
+                continue;
+            }
             if !self.reference_matches_symbol(&reference, symbol)? {
                 continue;
             }
@@ -4332,6 +4647,41 @@ impl LanguageService {
             }
 
             if relationship.target_symbol_id.is_some() {
+                continue;
+            }
+
+            // Named JS/TS imports carry the original module specifier and
+            // exported name. Resolve only inside that module; if it is not yet
+            // indexed, leave the edge NULL for the post-batch provenance
+            // resolver instead of searching unrelated imported files.
+            if let (Some(import_path), Some(imported_name)) = (
+                relationship.import_path.as_deref(),
+                relationship.imported_name.as_deref(),
+            ) {
+                if let Some(imported_file) =
+                    self.resolve_import_target(&relationship.source_file_path, import_path)
+                {
+                    if !imported_symbol_cache.contains_key(&imported_file) {
+                        let imported_symbols = self.get_file_symbols(&imported_file)?;
+                        imported_symbol_cache.insert(imported_file.clone(), imported_symbols);
+                    }
+                    if let Some(imported_symbols) = imported_symbol_cache.get(&imported_file) {
+                        let mut matches = Vec::new();
+                        let mut seen = HashSet::new();
+                        self.collect_matching_symbols(
+                            imported_symbols,
+                            imported_name,
+                            &mut matches,
+                            &mut seen,
+                        );
+                        matches.retain(|symbol| symbol.parent_id.is_none());
+                        if let [resolved] = matches.as_slice() {
+                            relationship.target_symbol_id = Some(resolved.id.clone());
+                            relationship.resolution_strategy = Some("import_binding".to_string());
+                            relationship.confidence = Some(0.9);
+                        }
+                    }
+                }
                 continue;
             }
 
@@ -5484,11 +5834,18 @@ impl LanguageService {
     ) -> Result<SymbolGraph, LanguageError> {
         let incoming = match relationship_type {
             SymbolRelationshipType::Call => self.find_references_to_symbol(symbol, limit)?,
-            SymbolRelationshipType::Import => self.symbol_store.find_references_to_target(
-                &symbol.file_path,
-                SymbolRelationshipType::Import,
-                limit,
-            )?,
+            SymbolRelationshipType::Import => {
+                let mut references = self.overlay_references(symbol, relationship_type, true);
+                let mut persisted = self.symbol_store.find_references_to_target(
+                    &symbol.file_path,
+                    SymbolRelationshipType::Import,
+                    limit,
+                )?;
+                self.remove_shadowed_persisted_references(&mut persisted);
+                references.extend(persisted);
+                references.truncate(limit);
+                references
+            }
             SymbolRelationshipType::Export
             | SymbolRelationshipType::Extends
             | SymbolRelationshipType::Implements
@@ -5502,11 +5859,18 @@ impl LanguageService {
         };
         let outgoing = match relationship_type {
             SymbolRelationshipType::Contains => self.get_containment_outgoing(symbol, limit)?,
-            _ => self.symbol_store.get_relationship_edges_from_source(
-                &symbol.id,
-                relationship_type,
-                limit,
-            )?,
+            _ => {
+                let mut references = self.overlay_references(symbol, relationship_type, false);
+                let mut persisted = self.symbol_store.get_relationship_edges_from_source(
+                    &symbol.id,
+                    relationship_type,
+                    limit,
+                )?;
+                self.remove_shadowed_persisted_references(&mut persisted);
+                references.extend(persisted);
+                references.truncate(limit);
+                references
+            }
         };
 
         Ok(SymbolGraph {
@@ -5918,6 +6282,8 @@ impl LanguageService {
             resolution_confidence: Some(1.0),
             receiver_type: None,
             receiver_is_self: false,
+            import_path: None,
+            imported_name: None,
         }])
     }
 
@@ -5947,6 +6313,8 @@ impl LanguageService {
                 resolution_confidence: Some(1.0),
                 receiver_type: None,
                 receiver_is_self: false,
+                import_path: None,
+                imported_name: None,
             })
             .collect())
     }
@@ -19785,6 +20153,58 @@ func helper() {}
             service.get_file_content("open.md").unwrap(),
             "unsaved editor content\n"
         );
+    }
+
+    #[test]
+    fn unsaved_overlay_overrides_queries_without_mutating_the_persisted_index() {
+        let (service, temp_dir) = create_test_service();
+        let path = "src/overlay.ts";
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        fs::write(
+            temp_dir.path().join(path),
+            "export function savedHandler() { return 'disk'; }\n",
+        )
+        .unwrap();
+        service.index_file(path).unwrap();
+
+        service
+            .did_open(
+                path,
+                "export function unsavedTarget() { return 'overlay'; }\nexport function unsavedHandler() { return unsavedTarget(); }\n",
+            )
+            .unwrap();
+
+        let visible = service.get_file_symbols(path).unwrap();
+        assert!(visible.iter().any(|symbol| symbol.name == "unsavedHandler"));
+        let target = visible
+            .iter()
+            .find(|symbol| symbol.name == "unsavedTarget")
+            .expect("overlay target");
+        let graph = service
+            .get_symbol_graph(target, SymbolRelationshipType::Call, 10)
+            .unwrap();
+        assert!(graph
+            .incoming
+            .iter()
+            .any(|reference| reference.source_symbol.name == "unsavedHandler"));
+        assert!(!visible.iter().any(|symbol| symbol.name == "savedHandler"));
+        let search = service.search_symbols("unsavedHandler", 10).unwrap();
+        assert!(search
+            .iter()
+            .any(|result| result.symbol.name == "unsavedHandler"));
+
+        let persisted = service.get_file_symbols_raw(path).unwrap();
+        assert!(persisted.iter().any(|symbol| symbol.name == "savedHandler"));
+        assert!(!persisted
+            .iter()
+            .any(|symbol| symbol.name == "unsavedHandler"));
+
+        service.did_close(path).unwrap();
+        let restored = service.get_file_symbols(path).unwrap();
+        assert!(restored.iter().any(|symbol| symbol.name == "savedHandler"));
+        assert!(!restored
+            .iter()
+            .any(|symbol| symbol.name == "unsavedHandler"));
     }
 
     #[test]

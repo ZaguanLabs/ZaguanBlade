@@ -54,6 +54,7 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "query": { "type": "string", "description": "User task or investigation query" },
                         "queries": { "type": "array", "items": { "type": "string" }, "description": "Optional additional search queries" },
                         "intent": { "type": "string", "description": "Optional task intent such as bug_fix, feature, refactor, or docs" },
+                        "detail": { "type": "string", "enum": ["compact", "expanded"], "description": "Response projection. Defaults to compact." },
                         "max_results": { "type": "integer", "description": "Optional max primary files" },
                         "include_tests": { "type": "boolean", "description": "Whether to include likely tests" },
                         "include_docs": { "type": "boolean", "description": "Whether to include related docs" },
@@ -84,7 +85,8 @@ pub fn get_tool_definitions() -> Vec<Value> {
                         "kind": { "type": "string", "description": "Optional symbol kind filter" },
                         "limit": { "type": "integer", "description": "Optional max results" },
                         "offset": { "type": "integer", "description": "Optional zero-based result offset for pagination. Use only after checking has_more in a prior response." },
-                        "include_connected": { "type": "boolean", "description": "Optional compact one-hop connected-symbol preview for returned results; use symbol_references for one-hop expansion or symbol_trace for bounded multi-hop traversal." }
+                        "include_connected": { "type": "boolean", "description": "Optional compact one-hop connected-symbol preview for returned results; use symbol_references for one-hop expansion or symbol_trace for bounded multi-hop traversal." },
+                        "explain": { "type": "boolean", "description": "Include deterministic matched-token, field, coverage, phrase, and confidence score components." }
                     },
                     "required": ["query"],
                     "additionalProperties": false
@@ -163,9 +165,12 @@ pub fn get_tool_definitions() -> Vec<Value> {
                     "type": "object",
                     "properties": {
                         "path": { "type": "string", "description": "File path whose symbol inventory should be returned" },
-                        "max_symbols": { "type": "integer", "description": "Maximum flat inventory symbols to return, capped by the backend" },
+                        "max_symbols": { "type": "integer", "description": "Maximum declarations to return; defaults to 20" },
                         "limit": { "type": "integer", "description": "Alias for max_symbols" },
-                        "include_outline": { "type": "boolean", "description": "Whether to include a compact, bounded nested hierarchy in addition to the flat inventory. Defaults to false." },
+                        "nested": { "type": "boolean", "description": "Include nested members up to max_outline_depth. Defaults to false." },
+                        "include_outline": { "type": "boolean", "description": "Compatibility alias for nested." },
+                        "include_imports": { "type": "boolean", "description": "Include import declarations. Defaults to false." },
+                        "include_locals": { "type": "boolean", "description": "Include declarations inside functions or methods. Defaults to false." },
                         "max_outline_nodes": { "type": "integer", "description": "Maximum compact outline nodes to return when include_outline is true, capped by the backend" },
                         "max_outline_depth": { "type": "integer", "description": "Maximum compact outline nesting depth when include_outline is true, capped by the backend" },
                         "include_docstrings": { "type": "boolean", "description": "Whether to include truncated docstring previews in inventory entries. Defaults to false." }
@@ -187,14 +192,18 @@ pub fn get_tool_definitions() -> Vec<Value> {
                     "properties": {
                         "symbol_id": { "type": "string", "description": "Stable symbol ID for single-symbol expansion" },
                         "path": { "type": "string", "description": "File path for resolving by name, or file-wide expansion when no name is provided" },
+                        "query": { "type": "string", "description": "Exact name or qualified name; use with path when no symbol_id is available" },
                         "qualified_name": { "type": "string", "description": "Optional exact qualified name" },
                         "name": { "type": "string", "description": "Optional simple symbol name" },
                         "relationship": { "type": "string", "description": "Optional single relationship type: call, import, export, extends, implements, contains, usage, uses_type, reads_env, or handles" },
                         "relationships": { "type": "array", "items": { "type": "string" }, "description": "Optional relationship type list" },
+                        "relationship_kinds": { "type": "array", "items": { "type": "string" }, "description": "Alias for relationships" },
+                        "direction": { "type": "string", "enum": ["incoming", "outgoing", "both"], "description": "Edge direction; defaults to both" },
                         "limit": { "type": "integer", "description": "Optional max references per relationship type" },
                         "max_symbols": { "type": "integer", "description": "For file-wide expansion, maximum important symbols to expand" },
                         "include_low_signal": { "type": "boolean", "description": "Include low-signal generic unresolved edges that are suppressed by default and reported via low_signal_suppressed. Defaults to false." },
-                        "offset": { "type": "integer", "description": "Skip this many ranked edges per relationship group before returning results. Use only after a truncated result; pages index the ranked post-suppression list and are stable only while the index is unchanged." }
+                        "offset": { "type": "integer", "description": "Skip this many ranked edges per relationship group before returning results. Use only after a truncated result; pages index the ranked post-suppression list and are stable only while the index is unchanged." },
+                        "cursor": { "type": "string", "description": "Continuation cursor returned by a previous symbol_references response" }
                     },
                     "required": [],
                     "additionalProperties": false
@@ -848,6 +857,42 @@ mod tests {
             .filter_map(|value| value.as_str())
             .collect::<Vec<&str>>();
         assert_eq!(values, vec!["phrase", "all_terms", "any_terms"]);
+    }
+
+    #[test]
+    fn compact_navigation_options_and_reference_selectors_are_exposed() {
+        let defs = get_tool_definitions();
+        let properties = |tool: &str| {
+            &defs
+                .iter()
+                .find(|value| value.get("name").and_then(|value| value.as_str()) == Some(tool))
+                .unwrap_or_else(|| panic!("{tool} tool definition"))["function"]["parameters"]
+                ["properties"]
+        };
+
+        for key in ["detail"] {
+            assert!(properties("fast_context").get(key).is_some());
+        }
+        for key in ["nested", "include_imports", "include_locals"] {
+            assert!(properties("symbol_outline").get(key).is_some());
+        }
+        for key in ["query", "direction", "relationship_kinds", "cursor"] {
+            assert!(properties("symbol_references").get(key).is_some());
+        }
+    }
+
+    #[test]
+    fn tool_descriptions_stay_within_a_bounded_prompt_budget() {
+        const DESCRIPTION_BUDGET_BYTES: usize = 24 * 1024;
+        let total = get_tool_definitions()
+            .iter()
+            .filter_map(|definition| definition["function"]["description"].as_str())
+            .map(str::len)
+            .sum::<usize>();
+        assert!(
+            total <= DESCRIPTION_BUDGET_BYTES,
+            "tool descriptions use {total} bytes; budget is {DESCRIPTION_BUDGET_BYTES}"
+        );
     }
 
     #[test]

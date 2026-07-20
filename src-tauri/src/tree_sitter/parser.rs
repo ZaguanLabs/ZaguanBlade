@@ -153,8 +153,8 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["ts"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::TypeScript),
         support: SupportLevel::Full,
-        // v3: Track A JSX component-call extraction (TS family shares the spec).
-        extractor_version: 3,
+        // v4: preserve named-import provenance on JS/TS call edges.
+        extractor_version: 4,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -163,8 +163,8 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["tsx"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::Tsx),
         support: SupportLevel::Full,
-        // v3: Track A JSX component-call extraction.
-        extractor_version: 3,
+        // v4: preserve named-import provenance on JS/TS call edges.
+        extractor_version: 4,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -175,8 +175,8 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
             target: Language::Tsx,
         },
         support: SupportLevel::Partial,
-        // v3: Track A JSX component-call extraction (projects through Tsx).
-        extractor_version: 3,
+        // v4: preserve named-import provenance on JS/TS call edges.
+        extractor_version: 4,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -185,8 +185,8 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["js", "mjs", "cjs"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::JavaScript),
         support: SupportLevel::Full,
-        // v3: Track A JSX component-call extraction.
-        extractor_version: 3,
+        // v4: preserve named-import provenance on JS/TS call edges.
+        extractor_version: 4,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
@@ -195,8 +195,8 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["jsx"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::JavaScript),
         support: SupportLevel::Full,
-        // v3: Track A JSX component-call extraction.
-        extractor_version: 3,
+        // v4: preserve named-import provenance on JS/TS call edges.
+        extractor_version: 4,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {

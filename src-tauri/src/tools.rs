@@ -249,9 +249,9 @@ const GREP_SEARCH_MAX_RESULTS_CAP: usize = 20;
 const DEPENDENCY_DIRS: &[&str] = &["node_modules", "vendor"];
 
 const TOOL_METRICS_SAMPLE_CAP: usize = 512;
-const SYMBOL_OUTLINE_DEFAULT_MAX_SYMBOLS: usize = 120;
+const SYMBOL_OUTLINE_DEFAULT_MAX_SYMBOLS: usize = 20;
 const SYMBOL_OUTLINE_MAX_SYMBOLS_CAP: usize = 300;
-const SYMBOL_OUTLINE_DEFAULT_MAX_NODES: usize = 120;
+const SYMBOL_OUTLINE_DEFAULT_MAX_NODES: usize = 20;
 const SYMBOL_OUTLINE_MAX_NODES_CAP: usize = 500;
 const SYMBOL_OUTLINE_DEFAULT_MAX_DEPTH: usize = 4;
 const SYMBOL_OUTLINE_MAX_DEPTH_CAP: usize = 12;
@@ -577,13 +577,16 @@ mod tests {
         compact_outline_nodes_for_parent, empty_result_trust_from_parts, execute_tool,
         execute_tool_with_editor, fast_context_tool, format_investigation_markdown, grep_search,
         impact_confidence, impact_risk_level, investigation_confidence, is_batch_read_only_tool,
-        language_support_for_path_json, language_support_meta_json, merge_language_diagnostics,
+        language_support_for_path_json, language_support_meta_json,
+        language_support_schema_meta_json, merge_language_diagnostics,
         paginate_tool_results, parse_anchor_query_mode_arg, parse_grep_timeout_ms,
         parse_relationship_types_arg, partition_low_signal_references, related_symbol_to_json,
+        relationship_observation_json,
         related_test_files_for_paths, require_symbol_by_id, resolve_symbol_from_graph_args,
         resolve_symbol_path_endpoint, serialize_reference_groups, stage_semantic_patch_writes,
+        select_outline_symbols,
         symbol_inventory_entries, symbol_inventory_summary, symbol_language_diagnostics,
-        symbol_outline_diagnostics, symbol_reference_resolution_json,
+        symbol_outline_diagnostics, symbol_reference_resolution_json, symbol_reference_to_json,
         symbol_search_connection_json, symbol_to_json, symbol_to_json_full,
         tool_result_byte_budget, transitive_impact_score, truncate_large_content,
         truncate_large_content_to, EditorState, PatchHunk, SemanticPatchWrite, ToolResult,
@@ -826,10 +829,12 @@ mod tests {
     }
 
     #[test]
-    fn language_support_meta_includes_file_and_supported_languages() {
+    fn language_support_meta_is_scoped_and_schema_meta_lists_all_languages() {
         let metadata = language_support_meta_json(Some("src/styles/app.css"));
         assert_eq!(metadata["file"]["display_name"], "CSS");
         assert_eq!(metadata["file"]["support_level"], "partial");
+        assert!(metadata.get("supported_languages").is_none());
+        let metadata = language_support_schema_meta_json(Some("src/styles/app.css"));
         let supported_languages = metadata["supported_languages"]
             .as_array()
             .expect("expected supported language list");
@@ -843,7 +848,7 @@ mod tests {
             );
         }
 
-        let metadata = language_support_meta_json(None);
+        let metadata = language_support_schema_meta_json(None);
         assert!(metadata["file"].is_null());
         assert!(metadata["supported_languages"]
             .as_array()
@@ -984,7 +989,7 @@ mod tests {
             serde_json::json!(false),
         );
 
-        let result = fast_context_tool(temp_dir.path(), &args, None);
+        let result = fast_context_tool(temp_dir.path(), &args, None, None);
         let payload: serde_json::Value = serde_json::from_str(&result.content).unwrap();
 
         assert!(result.success);
@@ -994,9 +999,8 @@ mod tests {
         let language_support = &payload["_meta"]["language_support"];
         assert_eq!(language_support["file"]["display_name"], "CSS");
         assert_eq!(language_support["file"]["support_level"], "partial");
-        assert!(language_support["supported_languages"]
-            .as_array()
-            .is_some_and(|languages| !languages.is_empty()));
+        assert!(language_support.get("supported_languages").is_none());
+        assert_eq!(payload["_meta"]["detail"], "compact");
         let metadata_len = serde_json::to_string(language_support).unwrap().len();
         assert!(
             metadata_len < 8_000,
@@ -1039,6 +1043,16 @@ mod tests {
             "test('service', () => {})",
         )
         .unwrap();
+        fs::write(
+            temp_dir.path().join("tests/check-build.test.ts"),
+            "test('generic build', () => {})",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("tests/calendar.test.ts"),
+            "test('unrelated', () => {})",
+        )
+        .unwrap();
 
         let tests =
             related_test_files_for_paths(temp_dir.path(), &["src/service.ts".to_string()], 5);
@@ -1046,6 +1060,7 @@ mod tests {
         assert!(tests
             .iter()
             .any(|test| test["path"] == "tests/service.test.ts"));
+        assert_eq!(tests.len(), 1, "unrelated test paths must stay out");
     }
 
     #[test]
@@ -1131,6 +1146,8 @@ mod tests {
             resolution_confidence: confidence,
             receiver_type: None,
             receiver_is_self: false,
+            import_path: None,
+            imported_name: None,
         }
     }
 
@@ -1337,11 +1354,13 @@ mod tests {
         let mut suppressed = 0usize;
         let mut direction_total = 0usize;
         let mut relationship_totals = BTreeMap::new();
+        let mut symbol_registry = BTreeMap::new();
         let serialized = serialize_reference_groups(
             groups,
             false,
             0,
             usize::MAX,
+            &mut symbol_registry,
             &mut suppressed,
             &mut direction_total,
             &mut relationship_totals,
@@ -1386,11 +1405,13 @@ mod tests {
         let mut suppressed_all = 0usize;
         let mut total_all = 0usize;
         let mut totals_all = BTreeMap::new();
+        let mut empty_registry = BTreeMap::new();
         let empty_serialized = serialize_reference_groups(
             all_generic,
             false,
             0,
             usize::MAX,
+            &mut empty_registry,
             &mut suppressed_all,
             &mut total_all,
             &mut totals_all,
@@ -1441,11 +1462,13 @@ mod tests {
             let mut suppressed = 0usize;
             let mut total = 0usize;
             let mut totals = BTreeMap::new();
+            let mut symbol_registry = BTreeMap::new();
             let serialized = serialize_reference_groups(
                 groups,
                 false,
                 offset,
                 limit,
+                &mut symbol_registry,
                 &mut suppressed,
                 &mut total,
                 &mut totals,
@@ -1457,7 +1480,7 @@ mod tests {
                         .iter()
                         .map(|entry| {
                             (
-                                entry["source_symbol"]["id"].as_str().unwrap().to_string(),
+                                entry["source_symbol_id"].as_str().unwrap().to_string(),
                                 entry["target_name"].as_str().unwrap().to_string(),
                             )
                         })
@@ -1650,6 +1673,8 @@ mod tests {
             resolution_confidence: Some(1.0),
             receiver_type: None,
             receiver_is_self: false,
+            import_path: None,
+            imported_name: None,
         };
         let fallback = crate::symbol_index::SymbolReference {
             source_symbol: source,
@@ -1663,6 +1688,8 @@ mod tests {
             resolution_confidence: None,
             receiver_type: None,
             receiver_is_self: false,
+            import_path: None,
+            imported_name: None,
         };
 
         assert_eq!(
@@ -1681,6 +1708,12 @@ mod tests {
             symbol_reference_resolution_json(&fallback)["confidence"],
             "none"
         );
+
+        let edge = symbol_reference_to_json(&resolved);
+        assert_eq!(edge["source_symbol_id"], "caller");
+        assert_eq!(edge["target_symbol_id"], "helper");
+        assert!(edge.get("source_symbol").is_none());
+        assert!(edge.get("target_symbol").is_none());
     }
 
     #[test]
@@ -1699,6 +1732,8 @@ mod tests {
             resolution_confidence: Some(0.95),
             receiver_type: Some("Helper".to_string()),
             receiver_is_self: false,
+            import_path: Some("./helper".to_string()),
+            imported_name: Some("helper".to_string()),
         };
 
         let connection = symbol_search_connection_json(&reference, "outgoing");
@@ -1707,6 +1742,8 @@ mod tests {
         assert_eq!(connection["resolution"]["confidence"], "high");
         assert_eq!(connection["resolution"]["confidence_score"], 0.95);
         assert_eq!(connection["resolution"]["receiver_type"], "Helper");
+        assert_eq!(connection["resolution"]["import_path"], "./helper");
+        assert_eq!(connection["resolution"]["imported_name"], "helper");
         assert_eq!(connection["resolution"]["resolved"], true);
         assert_eq!(connection["observation"]["kind"], "syntax_extracted");
     }
@@ -1809,6 +1846,24 @@ mod tests {
     }
 
     #[test]
+    fn model_facing_source_coordinates_use_one_based_lines() {
+        let symbol = test_symbol("f", "f", SymbolType::Function, 0, None);
+        let payload = symbol_to_json(&symbol);
+
+        assert_eq!(payload["range"]["start"]["line"], 1);
+        assert_eq!(payload["range"]["start"]["character"], 0);
+        assert_eq!(payload["range"]["end"]["line"], 1);
+        assert_eq!(payload["range"]["end"]["character"], 10);
+
+        let observation = relationship_observation_json(
+            crate::symbol_index::RelationshipObservationKind::SyntaxExtracted,
+            "src/example.ts",
+            0,
+        );
+        assert_eq!(observation["line"], 1);
+    }
+
+    #[test]
     fn parse_relationship_types_supports_single_and_multiple_filters() {
         let mut single = HashMap::new();
         single.insert(
@@ -1865,9 +1920,31 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0]["name"], "UserService");
         assert_eq!(entries[0]["child_count"], 1);
-        assert_eq!(entries[0]["line_range"]["start_line"], 10);
+        assert_eq!(entries[0]["line_range"]["start_line"], 11);
         assert_eq!(entries[1]["name"], "getUser");
         assert!(entries[0]["docstring"].is_null());
+    }
+
+    #[test]
+    fn compact_outline_defaults_to_top_level_non_import_symbols() {
+        let symbols = vec![
+            test_symbol("import", "use::Thing", SymbolType::Import, 0, None),
+            test_symbol("class", "UserService", SymbolType::Class, 1, None),
+            test_symbol("method", "getUser", SymbolType::Method, 2, Some("class")),
+            test_symbol("local", "temporary", SymbolType::Variable, 3, Some("method")),
+        ];
+
+        let compact = select_outline_symbols(&symbols, false, false, false, 4);
+        assert_eq!(compact.iter().map(|symbol| symbol.name.as_str()).collect::<Vec<_>>(), ["UserService"]);
+
+        let nested = select_outline_symbols(&symbols, true, true, false, 4);
+        assert_eq!(
+            nested.iter().map(|symbol| symbol.name.as_str()).collect::<Vec<_>>(),
+            ["use::Thing", "UserService", "getUser"]
+        );
+
+        let with_locals = select_outline_symbols(&symbols, true, true, true, 4);
+        assert_eq!(with_locals.len(), 4);
     }
 
     #[test]
@@ -2633,6 +2710,32 @@ mod tests {
     }
 
     #[test]
+    fn json_truncation_preserves_contract_fields_and_valid_syntax() {
+        let payload = serde_json::json!({
+            "schema_version": 2,
+            "id": "stable-symbol-id",
+            "next_cursor": "opaque-page-token",
+            "results": (0..2_000)
+                .map(|index| serde_json::json!({
+                    "id": format!("symbol-{index}"),
+                    "content": "x".repeat(256),
+                }))
+                .collect::<Vec<_>>(),
+        });
+        let raw = serde_json::to_string(&payload).expect("serialize oversized payload");
+        let truncated = truncate_large_content_to(&raw, MAX_DISCOVERY_RESULT_BYTES);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&truncated).expect("truncated response stays valid JSON");
+
+        assert!(truncated.len() <= MAX_DISCOVERY_RESULT_BYTES);
+        assert_eq!(parsed["schema_version"], 2);
+        assert_eq!(parsed["id"], "stable-symbol-id");
+        assert_eq!(parsed["next_cursor"], "opaque-page-token");
+        assert_eq!(parsed["_meta"]["truncation"]["truncated"], true);
+        assert!(!parsed["results"].as_array().expect("results array").is_empty());
+    }
+
+    #[test]
     fn discovery_tools_get_the_24k_budget_via_to_tool_content_truncated_for_tool() {
         // A payload between the two budgets: kept whole under the hard gate,
         // truncated under the discovery budget.
@@ -2780,10 +2883,9 @@ pub fn truncate_large_content(content: &str) -> String {
 /// Generalized truncation with a caller-chosen byte budget.
 ///
 /// When content exceeds either the byte or line limit, it is truncated.
-/// Line-based truncation (head + tail) is used when there are enough lines
-/// AND the kept lines fit the byte budget. Otherwise (huge single-line JSON,
-/// minified JS, or oversized head/tail lines) the content is truncated by
-/// bytes so the result is always bounded near `max_bytes`.
+/// JSON payloads are reduced structurally first so tool consumers always get
+/// valid JSON with stable scalar identifiers and explicit truncation metadata.
+/// Non-JSON content keeps the human-readable head/tail behavior.
 pub fn truncate_large_content_to(content: &str, max_bytes: usize) -> String {
     let bytes = content.len();
     let line_count = content.lines().count();
@@ -2791,6 +2893,10 @@ pub fn truncate_large_content_to(content: &str, max_bytes: usize) -> String {
     // Check if truncation is needed (either limit exceeded triggers truncation)
     if bytes <= max_bytes && line_count <= MAX_TOOL_RESULT_LINES {
         return content.to_string();
+    }
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
+        return truncate_json_value(value, bytes, line_count, max_bytes);
     }
 
     // When there are enough lines, use line-based head + tail truncation —
@@ -2843,6 +2949,179 @@ pub fn truncate_large_content_to(content: &str, max_bytes: usize) -> String {
         "{}\n\n[TRUNCATED: {} bytes, {} lines - showing first {} and last {} bytes]\nResult was too large. Use more specific tool parameters to get targeted results.\n\n{}",
         head_bytes, bytes, line_count, head_bytes.len(), tail_bytes.len(), tail_bytes
     )
+}
+
+fn truncate_json_value(
+    mut value: serde_json::Value,
+    original_bytes: usize,
+    original_lines: usize,
+    max_bytes: usize,
+) -> String {
+    let truncation = serde_json::json!({
+        "truncated": true,
+        "original_bytes": original_bytes,
+        "original_lines": original_lines,
+        "guidance": "Highest-ranked items and stable identifiers were preserved. Narrow the request or continue with its cursor when available."
+    });
+
+    match &mut value {
+        serde_json::Value::Object(root) => {
+            let meta = root
+                .entry("_meta")
+                .or_insert_with(|| serde_json::json!({}));
+            if !meta.is_object() {
+                *meta = serde_json::json!({ "original_meta": meta.take() });
+            }
+            if let Some(meta) = meta.as_object_mut() {
+                meta.insert("truncation".to_string(), truncation);
+            }
+        }
+        _ => {
+            value = serde_json::json!({
+                "data": value,
+                "_meta": { "truncation": truncation }
+            });
+        }
+    }
+
+    let mut rendered = serde_json::to_string(&value).expect("JSON value must serialize");
+    while rendered.len() > max_bytes && shrink_largest_json_value(&mut value, None) {
+        rendered = serde_json::to_string(&value).expect("JSON value must serialize");
+    }
+
+    if rendered.len() <= max_bytes {
+        return rendered;
+    }
+
+    // Pathological objects can contain thousands of scalar keys without a
+    // reducible collection. Keep the contract valid and retain the scalar
+    // fields clients use to identify and continue a response.
+    let mut compact = serde_json::Map::new();
+    if let Some(root) = value.as_object() {
+        for key in [
+            "schema_version",
+            "status",
+            "id",
+            "next_cursor",
+            "cursor",
+            "path",
+            "range",
+            "_meta",
+        ] {
+            if let Some(item) = root.get(key) {
+                compact.insert(key.to_string(), item.clone());
+            }
+        }
+    }
+    serde_json::to_string(&serde_json::Value::Object(compact))
+        .expect("compact JSON value must serialize")
+}
+
+fn shrink_largest_json_value(value: &mut serde_json::Value, key: Option<&str>) -> bool {
+    match value {
+        serde_json::Value::Array(items) => {
+            let nested_weight = items
+                .iter()
+                .map(|item| json_reducible_weight(item, None))
+                .max()
+                .unwrap_or(0);
+            let own_weight = if items.len() > 1 {
+                serde_json::to_vec(items).map_or(0, |bytes| bytes.len())
+            } else {
+                0
+            };
+            if own_weight >= nested_weight && own_weight > 0 {
+                items.truncate(items.len().div_ceil(2));
+                return true;
+            }
+            shrink_heaviest_child(items.iter_mut().map(|item| (item, None)))
+        }
+        serde_json::Value::Object(map) => shrink_heaviest_child(
+            map.iter_mut()
+                .map(|(child_key, child)| (child, Some(child_key.as_str()))),
+        ),
+        serde_json::Value::String(text) if !is_stable_json_key(key) && text.len() > 256 => {
+            *text = truncate_json_string(text, text.len().div_ceil(2));
+            true
+        }
+        _ => false,
+    }
+}
+
+fn shrink_heaviest_child<'a>(
+    children: impl Iterator<Item = (&'a mut serde_json::Value, Option<&'a str>)>,
+) -> bool {
+    let mut children = children.collect::<Vec<_>>();
+    let Some((index, _)) = children
+        .iter()
+        .enumerate()
+        .map(|(index, (child, key))| (index, json_reducible_weight(child, *key)))
+        .filter(|(_, weight)| *weight > 0)
+        .max_by_key(|(_, weight)| *weight)
+    else {
+        return false;
+    };
+    let (child, key) = &mut children[index];
+    shrink_largest_json_value(child, *key)
+}
+
+fn json_reducible_weight(value: &serde_json::Value, key: Option<&str>) -> usize {
+    match value {
+        serde_json::Value::Array(items) => {
+            let own = if items.len() > 1 {
+                serde_json::to_vec(items).map_or(0, |bytes| bytes.len())
+            } else {
+                0
+            };
+            own.max(
+                items
+                    .iter()
+                    .map(|item| json_reducible_weight(item, None))
+                    .max()
+                    .unwrap_or(0),
+            )
+        }
+        serde_json::Value::Object(map) => map
+            .iter()
+            .map(|(child_key, child)| json_reducible_weight(child, Some(child_key)))
+            .max()
+            .unwrap_or(0),
+        serde_json::Value::String(text) if !is_stable_json_key(key) && text.len() > 256 => {
+            text.len()
+        }
+        _ => 0,
+    }
+}
+
+fn is_stable_json_key(key: Option<&str>) -> bool {
+    matches!(
+        key,
+        Some(
+            "id" | "symbol_id"
+                | "source_symbol_id"
+                | "target_symbol_id"
+                | "cursor"
+                | "next_cursor"
+                | "path"
+                | "file_path"
+                | "name"
+                | "qualified_name"
+        )
+    )
+}
+
+fn truncate_json_string(text: &str, target_bytes: usize) -> String {
+    const MARKER: &str = "...[truncated]...";
+    let side_budget = target_bytes.saturating_sub(MARKER.len()) / 2;
+    let mut head_end = side_budget.min(text.len());
+    while head_end > 0 && !text.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = text.len().saturating_sub(side_budget);
+    while tail_start < text.len() && !text.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    format!("{}{}{}", &text[..head_end], MARKER, &text[tail_start..])
 }
 
 #[derive(Debug, Deserialize)]
@@ -3063,7 +3342,12 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
 
         // Phase 1 IDE-specific tools
         "get_editor_state" => get_editor_state(editor_state),
-        "fast_context" => fast_context_tool(workspace_root, &args, editor_state),
+        "fast_context" => fast_context_tool(
+            workspace_root,
+            &args,
+            editor_state,
+            language_service_from_app_handle(app_handle).ok(),
+        ),
         "symbol_search" => symbol_search_tool(workspace_root, &args, app_handle),
         "semantic_anchor_search" => semantic_anchor_search_tool(workspace_root, &args, app_handle),
         "symbol_resolve" => symbol_resolve_tool(workspace_root, &args, app_handle),
@@ -3721,7 +4005,7 @@ fn codebase_investigator<R: tauri::Runtime>(
                             // Reference-only, and scrub any secret value (M2 guard).
                             "value": crate::secrets::redact_secret_tokens(&anchor.value),
                             "file_path": anchor.file_path,
-                            "line": anchor.line.saturating_add(1),
+                            "line": model_line(anchor.line),
                             "character": anchor.character,
                             "score": result.score,
                             "matched_keyword": keyword,
@@ -3945,6 +4229,7 @@ fn fast_context_tool(
     workspace_root: &Path,
     args: &HashMap<String, serde_json::Value>,
     editor_state: Option<&EditorState>,
+    shared_service: Option<std::sync::Arc<crate::language_service::LanguageService>>,
 ) -> ToolResult {
     let Some(query) = get_str_arg(args, &["query", "task", "request"]) else {
         return ToolResult::err("fast_context requires 'query'");
@@ -3954,6 +4239,13 @@ fn fast_context_tool(
     let open_files = get_string_array_arg(args, &["open_files", "openFiles"])
         .or_else(|| editor_state.map(|state| state.open_files.clone()))
         .unwrap_or_default();
+    let detail = get_str_arg(args, &["detail"])
+        .unwrap_or_else(|| "compact".to_string())
+        .to_ascii_lowercase();
+    if !matches!(detail.as_str(), "compact" | "expanded") {
+        return ToolResult::err("fast_context detail must be 'compact' or 'expanded'");
+    }
+    let compact = detail == "compact";
     let request = crate::context_pack::ContextPackRequest {
         id: get_str_arg(args, &["id"]).unwrap_or_else(|| "tool-fast-context".to_string()),
         query,
@@ -3963,36 +4255,59 @@ fn fast_context_tool(
             .get("max_results")
             .or_else(|| args.get("limit"))
             .and_then(|value| value.as_u64())
-            .map(|value| value as usize),
+            .map(|value| value as usize)
+            .or_else(|| compact.then_some(5)),
         include_tests: args.get("include_tests").and_then(|value| value.as_bool()),
         include_docs: args.get("include_docs").and_then(|value| value.as_bool()),
-        include_memory: args.get("include_memory").and_then(|value| value.as_bool()),
+        include_memory: args
+            .get("include_memory")
+            .and_then(|value| value.as_bool())
+            .or_else(|| compact.then_some(false)),
         include_project_index_min: args
             .get("include_project_index_min")
             .and_then(|value| value.as_bool()),
     };
-    let payload = crate::context_pack::build_context_pack(
-        workspace_root,
-        active_file.as_deref(),
-        &open_files,
-        &request,
-    );
+    let payload = match shared_service.as_deref() {
+        Some(service) => crate::context_pack::build_context_pack_with_service(
+            workspace_root,
+            active_file.as_deref(),
+            &open_files,
+            &request,
+            service,
+        ),
+        None => crate::context_pack::build_context_pack(
+            workspace_root,
+            active_file.as_deref(),
+            &open_files,
+            &request,
+        ),
+    };
     let mut payload = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
     if get_bool_arg(args, &["include_graph_context"], true) {
+        let (max_depth, edge_limit, node_limit, per_node_limit, seed_limit) = if compact {
+            (1, 24, 16, 6, 1)
+        } else {
+            (2, 60, 48, 12, 2)
+        };
         payload["graph_context"] =
-            crate::context_pack::language_service_for_workspace(workspace_root)
-                .ok()
+            shared_service
+                .clone()
+                .or_else(|| {
+                    crate::context_pack::language_service_for_workspace(workspace_root)
+                        .ok()
+                        .map(std::sync::Arc::new)
+                })
                 .and_then(|service| {
                     build_symbol_query_context(
                         &service,
                         &request.query,
                         &relationship_type_values(),
                         crate::language_service::SymbolTraceDirection::Both,
-                        2,
-                        60,
-                        48,
-                        12,
-                        2,
+                        max_depth,
+                        edge_limit,
+                        node_limit,
+                        per_node_limit,
+                        seed_limit,
                         0.5,
                         1_000,
                     )
@@ -4002,15 +4317,29 @@ fn fast_context_tool(
     }
     payload["_meta"] = serde_json::json!({
         "tool": "fast_context",
+        "detail": detail,
         "language_support": language_support_meta_json(active_file.as_deref()),
-        "index_schema_summary": compact_index_schema_summary_for_workspace(workspace_root),
+        "index_schema_summary": compact_index_schema_summary_for_workspace(
+            workspace_root,
+            shared_service.as_deref(),
+        ),
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
 }
 
-fn compact_index_schema_summary_for_workspace(workspace_root: &Path) -> serde_json::Value {
-    let Ok(service) = crate::context_pack::language_service_for_workspace(workspace_root) else {
-        return serde_json::Value::Null;
+fn compact_index_schema_summary_for_workspace(
+    workspace_root: &Path,
+    shared_service: Option<&crate::language_service::LanguageService>,
+) -> serde_json::Value {
+    let owned_service;
+    let service = if let Some(service) = shared_service {
+        service
+    } else {
+        let Ok(service) = crate::context_pack::language_service_for_workspace(workspace_root) else {
+            return serde_json::Value::Null;
+        };
+        owned_service = service;
+        &owned_service
     };
     let Ok(schema) = service.index_schema_snapshot() else {
         return serde_json::Value::Null;
@@ -4517,6 +4846,12 @@ fn symbol_path_arg(workspace_root: &Path, path: &str) -> Result<String, String> 
     Ok(normalize_rel_path(relative))
 }
 
+/// Convert an internal zero-based source line to the model-facing one-based
+/// coordinate contract. Character offsets remain zero-based.
+fn model_line(line_zero_based: u32) -> u32 {
+    crate::symbol_wire::model_line(line_zero_based)
+}
+
 /// Serialize a symbol as a REFERENCE (M5.14 Step 2 — "references, not text").
 ///
 /// Bulk/list tools (search, related, references, graph, trace, edit-impact) use
@@ -4528,29 +4863,8 @@ fn symbol_path_arg(workspace_root: &Path, path: &str) -> Result<String, String> 
 /// tells the caller one exists; it reads the byte range to get it. The targeted
 /// single-symbol `symbol_resolve` uses `symbol_to_json_full` to include it.
 fn symbol_to_json(symbol: &crate::tree_sitter::Symbol) -> serde_json::Value {
-    serde_json::json!({
-        "id": symbol.id,
-        "name": symbol.name,
-        "qualified_name": symbol.qualified_name,
-        "symbol_type": symbol.symbol_type.to_string(),
-        "file_path": symbol.file_path,
-        "range": {
-            "start": {
-                "line": symbol.range.start.line,
-                "character": symbol.range.start.character,
-            },
-            "end": {
-                "line": symbol.range.end.line,
-                "character": symbol.range.end.character,
-            }
-        },
-        "byte_offset": symbol.byte_offset,
-        "byte_length": symbol.byte_length,
-        "parent_id": symbol.parent_id,
-        "signature": symbol.signature,
-        "has_docstring": symbol.docstring.as_deref().is_some_and(|doc| !doc.is_empty()),
-        "content_hash": symbol.content_hash,
-    })
+    serde_json::to_value(crate::symbol_wire::WireSymbol::from(symbol))
+        .expect("wire symbol must serialize")
 }
 
 /// Like `symbol_to_json` but embeds the full `docstring`. For TARGETED single-symbol
@@ -4639,6 +4953,14 @@ fn language_support_for_path_json(path: &str) -> serde_json::Value {
 }
 
 fn language_support_meta_json(path: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "file": path
+            .map(language_support_for_path_json)
+            .unwrap_or(serde_json::Value::Null),
+    })
+}
+
+fn language_support_schema_meta_json(path: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "file": path
             .map(language_support_for_path_json)
@@ -4805,16 +5127,16 @@ fn symbol_inventory_entry_to_json(
             .as_ref()
             .map(|signature| truncate_chars(signature, SYMBOL_TEXT_PREVIEW_CHARS)),
         "line_range": {
-            "start_line": symbol.range.start.line,
-            "end_line": symbol.range.end.line,
+            "start_line": model_line(symbol.range.start.line),
+            "end_line": model_line(symbol.range.end.line),
         },
         "range": {
             "start": {
-                "line": symbol.range.start.line,
+                "line": model_line(symbol.range.start.line),
                 "character": symbol.range.start.character,
             },
             "end": {
-                "line": symbol.range.end.line,
+                "line": model_line(symbol.range.end.line),
                 "character": symbol.range.end.character,
             }
         },
@@ -4886,6 +5208,49 @@ fn symbol_inventory_entries(
         .collect()
 }
 
+fn select_outline_symbols(
+    symbols: &[crate::tree_sitter::Symbol],
+    nested: bool,
+    include_imports: bool,
+    include_locals: bool,
+    max_depth: usize,
+) -> Vec<crate::tree_sitter::Symbol> {
+    use crate::tree_sitter::SymbolType;
+
+    let by_id = symbols
+        .iter()
+        .map(|symbol| (symbol.id.as_str(), symbol))
+        .collect::<HashMap<_, _>>();
+
+    symbols
+        .iter()
+        .filter(|symbol| include_imports || symbol.symbol_type != SymbolType::Import)
+        .filter(|symbol| {
+            let mut depth = 0usize;
+            let mut parent_id = symbol.parent_id.as_deref();
+            let mut inside_local_scope = false;
+            let mut seen = HashSet::new();
+            while let Some(id) = parent_id {
+                if !seen.insert(id) {
+                    break;
+                }
+                let Some(parent) = by_id.get(id) else {
+                    break;
+                };
+                depth = depth.saturating_add(1);
+                inside_local_scope |=
+                    matches!(parent.symbol_type, SymbolType::Function | SymbolType::Method);
+                parent_id = parent.parent_id.as_deref();
+            }
+
+            (nested || depth == 0)
+                && (!nested || depth <= max_depth)
+                && (include_locals || !inside_local_scope)
+        })
+        .cloned()
+        .collect()
+}
+
 fn semantic_anchor_result_to_json(
     result: &crate::symbol_index::SemanticAnchorResult,
 ) -> serde_json::Value {
@@ -4908,7 +5273,7 @@ fn semantic_anchor_to_json(
         "file_path": anchor.file_path,
         "kind": anchor.kind,
         "value": anchor.value,
-        "line": anchor.line,
+        "line": model_line(anchor.line),
         "character": anchor.character,
         "owner_symbol_id": anchor.owner_symbol_id,
         "target_file_path": anchor.target_file_path,
@@ -4933,14 +5298,17 @@ fn symbol_reference_resolution_json(
     let resolved = reference.target_symbol_id.is_some()
         || reference.target_symbol.is_some()
         || reference.relationship_type == crate::tree_sitter::SymbolRelationshipType::Import;
-    relationship_resolution_json(
+    let mut value = relationship_resolution_json(
         reference.resolution_strategy.as_deref(),
         reference.resolution_confidence,
         resolved,
         reference.relationship_type,
         reference.receiver_type.as_deref(),
         reference.receiver_is_self,
-    )
+    );
+    value["import_path"] = serde_json::json!(reference.import_path.as_deref());
+    value["imported_name"] = serde_json::json!(reference.imported_name.as_deref());
+    value
 }
 
 fn relationship_resolution_json(
@@ -4993,7 +5361,7 @@ fn relationship_observation_json(
         "confidence": "high",
         "confidence_score": 1.0,
         "source_file": source_file,
-        "line": line,
+        "line": model_line(line),
     })
 }
 
@@ -5144,6 +5512,7 @@ fn serialize_reference_groups(
     include_low_signal: bool,
     offset: usize,
     limit: usize,
+    symbol_registry: &mut BTreeMap<String, serde_json::Value>,
     suppressed: &mut usize,
     direction_total: &mut usize,
     relationship_totals: &mut BTreeMap<String, usize>,
@@ -5158,10 +5527,16 @@ fn serialize_reference_groups(
                 return None;
             }
             rank_reference_group(&mut kept);
-            let page = kept
+            let page_references = kept
                 .iter()
                 .skip(offset)
                 .take(limit)
+                .collect::<Vec<_>>();
+            for reference in &page_references {
+                register_reference_symbols(symbol_registry, reference);
+            }
+            let page = page_references
+                .into_iter()
                 .map(symbol_reference_to_json)
                 .collect::<Vec<_>>();
             if page.is_empty() {
@@ -5176,28 +5551,41 @@ fn serialize_reference_groups(
         .collect()
 }
 
+fn register_reference_symbols(
+    registry: &mut BTreeMap<String, serde_json::Value>,
+    reference: &crate::symbol_index::SymbolReference,
+) {
+    registry
+        .entry(reference.source_symbol.id.clone())
+        .or_insert_with(|| symbol_to_json(&reference.source_symbol));
+    if let Some(target) = &reference.target_symbol {
+        registry
+            .entry(target.id.clone())
+            .or_insert_with(|| symbol_to_json(target));
+    }
+}
+
 fn symbol_reference_to_json(reference: &crate::symbol_index::SymbolReference) -> serde_json::Value {
-    serde_json::json!({
-        "source_symbol": symbol_to_json(&reference.source_symbol),
-        "relationship_type": reference.relationship_type.to_string(),
-        "target_name": reference.target_name,
-        "target_symbol_id": reference.target_symbol_id,
-        "target_symbol": reference.target_symbol.as_ref().map(symbol_to_json),
-        "line": reference.line,
-        "observation": relationship_observation_json(
+    serde_json::to_value(crate::symbol_wire::WireRelationshipEdge {
+        source_symbol_id: reference.source_symbol.id.clone(),
+        target_symbol_id: reference.target_symbol_id.clone(),
+        target_name: reference.target_name.clone(),
+        relationship_type: reference.relationship_type.to_string(),
+        direction: None,
+        traversal_direction: None,
+        depth: None,
+        line: model_line(reference.line),
+        resolved: Some(reference.target_symbol_id.is_some()),
+        cost: None,
+        effective_confidence: None,
+        observation: relationship_observation_json(
             reference.observation_kind,
             &reference.source_symbol.file_path,
             reference.line,
         ),
-        "resolution": symbol_reference_resolution_json(reference),
+        resolution: symbol_reference_resolution_json(reference),
     })
-}
-
-fn symbol_trace_node_to_json(node: &crate::language_service::SymbolTraceNode) -> serde_json::Value {
-    serde_json::json!({
-        "symbol": symbol_to_json(&node.symbol),
-        "depth": node.depth,
-    })
+    .expect("wire relationship edge must serialize")
 }
 
 fn symbol_trace_edge_to_json(edge: &crate::language_service::SymbolTraceEdge) -> serde_json::Value {
@@ -5209,40 +5597,47 @@ fn symbol_trace_edge_to_json(edge: &crate::language_service::SymbolTraceEdge) ->
         edge.receiver_type.as_deref(),
         edge.receiver_is_self,
     );
-    serde_json::json!({
-        "source_symbol": symbol_to_json(&edge.source_symbol),
-        "target_symbol": edge.target_symbol.as_ref().map(symbol_to_json),
-        "target_name": edge.target_name,
-        "relationship_type": edge.relationship_type.to_string(),
-        "direction": edge.direction.as_str(),
-        "depth": edge.depth,
-        "line": edge.line,
-        "resolved": edge.resolved,
-        "observation": relationship_observation_json(
+    serde_json::to_value(crate::symbol_wire::WireRelationshipEdge {
+        source_symbol_id: edge.source_symbol.id.clone(),
+        target_symbol_id: edge.target_symbol.as_ref().map(|symbol| symbol.id.clone()),
+        target_name: edge.target_name.clone(),
+        relationship_type: edge.relationship_type.to_string(),
+        direction: Some(edge.direction.as_str().to_string()),
+        traversal_direction: None,
+        depth: Some(edge.depth),
+        line: model_line(edge.line),
+        resolved: Some(edge.resolved),
+        cost: None,
+        effective_confidence: None,
+        observation: relationship_observation_json(
             edge.observation_kind,
             &edge.source_symbol.file_path,
             edge.line,
         ),
-        "resolution": resolution,
+        resolution,
     })
+    .expect("wire trace edge must serialize")
 }
 
 fn symbol_path_edge_to_json(edge: &crate::language_service::SymbolPathEdge) -> serde_json::Value {
-    serde_json::json!({
-        "source_symbol": symbol_to_json(&edge.source_symbol),
-        "target_symbol": edge.target_symbol.as_ref().map(symbol_to_json),
-        "target_name": edge.target_name,
-        "relationship_type": edge.relationship_type.to_string(),
-        "traversal_direction": edge.traversal_direction.as_str(),
-        "line": edge.line,
-        "cost": edge.cost,
-        "effective_confidence": edge.effective_confidence,
-        "observation": relationship_observation_json(
+    serde_json::to_value(crate::symbol_wire::WireRelationshipEdge {
+        source_symbol_id: edge.source_symbol.id.clone(),
+        target_symbol_id: edge.target_symbol.as_ref().map(|symbol| symbol.id.clone()),
+        target_name: edge.target_name.clone(),
+        relationship_type: edge.relationship_type.to_string(),
+        direction: None,
+        traversal_direction: Some(edge.traversal_direction.as_str().to_string()),
+        depth: None,
+        line: model_line(edge.line),
+        resolved: Some(edge.target_symbol.is_some()),
+        cost: Some(edge.cost),
+        effective_confidence: Some(edge.effective_confidence),
+        observation: relationship_observation_json(
             edge.observation_kind,
             &edge.source_symbol.file_path,
             edge.line,
         ),
-        "resolution": relationship_resolution_json(
+        resolution: relationship_resolution_json(
             edge.resolution_strategy.as_deref(),
             edge.resolution_confidence,
             edge.target_symbol.is_some(),
@@ -5251,6 +5646,7 @@ fn symbol_path_edge_to_json(edge: &crate::language_service::SymbolPathEdge) -> s
             edge.receiver_is_self,
         ),
     })
+    .expect("wire path edge must serialize")
 }
 
 fn symbol_query_edge_to_json(
@@ -5265,7 +5661,7 @@ fn symbol_query_edge_to_json(
         "relationship_type": edge.relationship_type.to_string(),
         "traversal_direction": edge.direction.as_str(),
         "depth": edge.depth,
-        "line": edge.line,
+        "line": model_line(edge.line),
         "observation": relationship_observation_json(
             edge.observation_kind,
             &edge.source_symbol.file_path,
@@ -5335,7 +5731,15 @@ fn parse_relationship_types_arg(
         return Ok(vec![kind.parse()?]);
     }
 
-    let values = get_string_array_arg(args, &["relationships", "relationship_types", "kinds"]);
+    let values = get_string_array_arg(
+        args,
+        &[
+            "relationships",
+            "relationship_types",
+            "relationship_kinds",
+            "kinds",
+        ],
+    );
     let Some(values) = values else {
         return Ok(relationship_type_values());
     };
@@ -5483,7 +5887,7 @@ fn compact_impact_hop_json(edge: &crate::language_service::SymbolTraceEdge) -> s
             "file_path": symbol.file_path,
         })),
         "relationship_type": edge.relationship_type.to_string(),
-        "line": edge.line,
+        "line": model_line(edge.line),
         "observation": relationship_observation_json(
             edge.observation_kind,
             &edge.source_symbol.file_path,
@@ -5555,7 +5959,6 @@ fn related_test_files_for_paths(
     paths: &[String],
     limit: usize,
 ) -> Vec<serde_json::Value> {
-    let mut tests = Vec::new();
     let mut seen = HashSet::new();
     let stems = paths
         .iter()
@@ -5566,6 +5969,11 @@ fn related_test_files_for_paths(
                 .map(|stem| stem.to_ascii_lowercase())
         })
         .collect::<Vec<_>>();
+    let evidence_tokens = stems
+        .iter()
+        .flat_map(|stem| test_discovery_tokens(stem))
+        .collect::<HashSet<_>>();
+    let mut ranked = Vec::new();
 
     for entry in WalkDir::new(workspace_root)
         .follow_links(false)
@@ -5585,21 +5993,66 @@ fn related_test_files_for_paths(
         if is_impact_skip_path(&rel) || !is_probable_test_path(&rel) || !seen.insert(rel.clone()) {
             continue;
         }
-        let lower = rel.to_ascii_lowercase();
-        let matched_stem = stems.iter().find(|stem| lower.contains(stem.as_str()));
-        if let Some(stem) = matched_stem {
-            tests.push(serde_json::json!({
-                "path": rel,
-                "reason": format!("Test path matches impacted source stem `{}`", stem),
-                "score": 82
-            }));
-            if tests.len() >= limit {
-                break;
-            }
+        let normalized_stem = normalized_test_stem(&rel);
+        let exact_stem = stems.iter().find(|stem| **stem == normalized_stem);
+        let overlap = test_discovery_tokens(&rel)
+            .intersection(&evidence_tokens)
+            .count();
+        let score = if exact_stem.is_some() {
+            100usize
+        } else {
+            overlap.saturating_mul(12)
+        };
+        if score < 12 {
+            continue;
         }
+        let reason = exact_stem.map_or_else(
+            || format!("Test path shares {overlap} distinctive token(s) with impacted files"),
+            |stem| format!("Test filename matches impacted source stem `{stem}`"),
+        );
+        ranked.push((score, rel, reason));
     }
 
-    tests
+    ranked.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    ranked
+        .into_iter()
+        .take(limit)
+        .map(|(score, path, reason)| serde_json::json!({
+            "path": path,
+            "reason": reason,
+            "score": score,
+        }))
+        .collect()
+}
+
+fn normalized_test_stem(path: &str) -> String {
+    let file = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path)
+        .to_ascii_lowercase();
+    let without_extension = file.rsplit_once('.').map_or(file.as_str(), |(stem, _)| stem);
+    let without_test_suffix = without_extension
+        .strip_suffix(".test")
+        .or_else(|| without_extension.strip_suffix(".spec"))
+        .or_else(|| without_extension.strip_suffix(".e2e"))
+        .or_else(|| without_extension.strip_suffix("_test"))
+        .unwrap_or(without_extension);
+    without_test_suffix
+        .strip_prefix("test_")
+        .unwrap_or(without_test_suffix)
+        .to_string()
+}
+
+fn test_discovery_tokens(value: &str) -> HashSet<String> {
+    const NOISE: &[&str] = &[
+        "src", "lib", "test", "tests", "spec", "e2e", "build", "index", "main", "mod",
+    ];
+    value
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .map(str::to_ascii_lowercase)
+        .filter(|token| token.len() >= 3 && !NOISE.contains(&token.as_str()))
+        .collect()
 }
 
 fn impact_risk_level(
@@ -5657,7 +6110,7 @@ fn resolve_symbol_from_graph_args(
     };
     let file_path = symbol_path_arg(workspace_root, &file_path)?;
     let qualified_name = get_str_arg(args, &["qualified_name"]);
-    let name = get_str_arg(args, &["name"]);
+    let name = get_str_arg(args, &["name", "query"]);
     if qualified_name.is_none() && name.is_none() {
         return Err(
             "symbol relationship tools require 'name' or 'qualified_name' when resolving by path"
@@ -5807,8 +6260,8 @@ fn compact_outline_nodes_for_parent(
             "qualified_name": symbol.qualified_name,
             "symbol_type": symbol.symbol_type.to_string(),
             "line_range": {
-                "start_line": symbol.range.start.line,
-                "end_line": symbol.range.end.line,
+                "start_line": model_line(symbol.range.start.line),
+                "end_line": model_line(symbol.range.end.line),
             },
             "child_count": child_count,
             "children": children,
@@ -5892,7 +6345,7 @@ fn symbol_search_connection_json(
         "relationship_type": reference.relationship_type.to_string(),
         "target_name": &reference.target_name,
         "target_symbol_id": &reference.target_symbol_id,
-        "line": reference.line,
+        "line": model_line(reference.line),
         "observation": relationship_observation_json(
             reference.observation_kind,
             &reference.source_symbol.file_path,
@@ -5905,7 +6358,7 @@ fn symbol_search_connection_json(
             "qualified_name": &symbol.qualified_name,
             "symbol_type": symbol.symbol_type.to_string(),
             "file_path": &symbol.file_path,
-            "line": symbol.range.start.line,
+            "line": model_line(symbol.range.start.line),
         })),
     })
 }
@@ -5923,7 +6376,7 @@ fn symbol_search_tool<R: tauri::Runtime>(
             "symbol_search requires a non-empty 'query'. Use an exact identifier or a concise concept; use symbol_outline to list symbols in a known file.",
         );
     }
-    let limit = parse_bounded_usize_arg(args, "limit", 20, 100);
+    let limit = parse_bounded_usize_arg(args, "limit", 5, 100);
     let offset = parse_bounded_usize_arg(args, "offset", 0, SYMBOL_SEARCH_MAX_OFFSET);
     let fetch_limit = offset.saturating_add(limit).saturating_add(1);
     let file_path = get_str_arg(args, &["path", "file", "file_path"]);
@@ -5932,6 +6385,7 @@ fn symbol_search_tool<R: tauri::Runtime>(
     let qualified_name_pattern =
         get_str_arg(args, &["qualified_name_pattern", "qualified_pattern"]);
     let include_connected = get_bool_arg(args, &["include_connected"], false);
+    let explain = get_bool_arg(args, &["explain"], false);
     let symbol_types = match get_str_arg(args, &["kind", "symbol_type"]) {
         Some(kind) => match kind.parse::<crate::tree_sitter::SymbolType>() {
             Ok(symbol_type) => Some(vec![symbol_type]),
@@ -6024,6 +6478,11 @@ fn symbol_search_tool<R: tauri::Runtime>(
         "results": results.iter().enumerate().map(|(index, result)| {
             let mut value = symbol_to_json(&result.symbol);
             value["score"] = serde_json::json!(result.score);
+            if explain {
+                value["score_breakdown"] = serde_json::json!(
+                    crate::symbol_index::search::explain_symbol_score(&result.symbol, &query)
+                );
+            }
             if include_connected && index < SYMBOL_SEARCH_CONNECTED_RESULT_CAP {
                 value["connected"] = symbol_search_connected_preview(&service, &result.symbol);
             } else if include_connected {
@@ -6046,6 +6505,7 @@ fn symbol_search_tool<R: tauri::Runtime>(
                 "file_pattern": file_pattern.clone(),
                 "name_pattern": name_pattern.clone(),
                 "qualified_name_pattern": qualified_name_pattern.clone(),
+                "explain": explain,
                 "include_connected": include_connected,
                 "connected_result_cap": if include_connected { Some(SYMBOL_SEARCH_CONNECTED_RESULT_CAP) } else { None::<usize> },
                 "connected_direction_cap": if include_connected { Some(SYMBOL_SEARCH_CONNECTED_DIRECTION_CAP) } else { None::<usize> },
@@ -6271,7 +6731,9 @@ fn symbol_outline_tool<R: tauri::Runtime>(
         });
         return ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default());
     }
-    let include_outline = get_bool_arg(args, &["include_outline"], false);
+    let nested = get_bool_arg(args, &["nested", "include_outline"], false);
+    let include_imports = get_bool_arg(args, &["include_imports"], false);
+    let include_locals = get_bool_arg(args, &["include_locals"], false);
     let include_docstrings = get_bool_arg(args, &["include_docstrings", "include_docs"], false);
     let max_symbols = get_bounded_usize_arg(
         args,
@@ -6301,17 +6763,26 @@ fn symbol_outline_tool<R: tauri::Runtime>(
     };
     let total_symbols = symbols.len();
     let summary = symbol_inventory_summary(&symbols);
-    let inventory_symbols = symbol_inventory_entries(&symbols, max_symbols, include_docstrings);
+    let selected_symbols = select_outline_symbols(
+        &symbols,
+        nested,
+        include_imports,
+        include_locals,
+        max_outline_depth,
+    );
+    let matching_symbols = selected_symbols.len();
+    let inventory_symbols =
+        symbol_inventory_entries(&selected_symbols, max_symbols, include_docstrings);
 
     let mut by_parent: HashMap<Option<String>, Vec<crate::tree_sitter::Symbol>> = HashMap::new();
-    for symbol in symbols.iter().cloned() {
+    for symbol in selected_symbols.iter().cloned() {
         by_parent
             .entry(symbol.parent_id.clone())
             .or_default()
             .push(symbol);
     }
     let mut outline_nodes_returned = 0usize;
-    let outline = if include_outline {
+    let outline = if nested {
         serde_json::Value::Array(compact_outline_nodes_for_parent(
             &by_parent,
             None,
@@ -6323,7 +6794,7 @@ fn symbol_outline_tool<R: tauri::Runtime>(
     } else {
         serde_json::Value::Null
     };
-    let outline_truncated = include_outline && outline_nodes_returned < total_symbols;
+    let outline_truncated = nested && outline_nodes_returned < matching_symbols;
     let diagnostics = symbol_outline_diagnostics(&path, total_symbols);
     let payload = serde_json::json!({
         "path": path,
@@ -6339,17 +6810,21 @@ fn symbol_outline_tool<R: tauri::Runtime>(
             "diagnostics": diagnostics,
             "line_count": indexed_file.as_ref().and_then(|record| record.line_count),
             "total_symbols": total_symbols,
-            "returned_symbols": total_symbols.min(max_symbols),
-            "truncated": total_symbols > max_symbols || outline_truncated,
-            "symbols_truncated": total_symbols > max_symbols,
+            "matching_symbols": matching_symbols,
+            "returned_symbols": matching_symbols.min(max_symbols),
+            "truncated": matching_symbols > max_symbols || outline_truncated,
+            "symbols_truncated": matching_symbols > max_symbols,
             "outline_nodes_returned": outline_nodes_returned,
             "outline_truncated": outline_truncated,
-            "include_outline": include_outline,
+            "nested": nested,
+            "include_outline": nested,
+            "include_imports": include_imports,
+            "include_locals": include_locals,
             "include_docstrings": include_docstrings,
             "max_symbols": max_symbols,
             "max_outline_nodes": max_outline_nodes,
             "max_outline_depth": max_outline_depth,
-            "guidance": if total_symbols > max_symbols || outline_truncated {
+            "guidance": if matching_symbols > max_symbols || outline_truncated {
                 "Use symbol_search to narrow candidates and symbol_resolve for full details on a specific symbol."
             } else {
                 "Use symbol_resolve for full details on a specific symbol."
@@ -6431,7 +6906,23 @@ fn symbol_references_tool<R: tauri::Runtime>(
     // relationship group (dedupe -> suppression -> ranking, then skip). Pages
     // are stable only while the index is unchanged. The store fetch is widened
     // to `limit + offset` so later pages can actually be recovered.
-    let offset = get_bounded_usize_arg(args, &["offset"], 0, SYMBOL_SEARCH_MAX_OFFSET);
+    let cursor_offset = get_str_arg(args, &["cursor"]).and_then(|cursor| {
+        cursor
+            .strip_prefix("references:")
+            .and_then(|value| value.parse::<usize>().ok())
+    });
+    if args.contains_key("cursor") && cursor_offset.is_none() {
+        return ToolResult::err("invalid symbol_references cursor");
+    }
+    let offset = cursor_offset.unwrap_or_else(|| {
+        get_bounded_usize_arg(args, &["offset"], 0, SYMBOL_SEARCH_MAX_OFFSET)
+    });
+    let direction = get_str_arg(args, &["direction"])
+        .unwrap_or_else(|| "both".to_string())
+        .to_ascii_lowercase();
+    if !matches!(direction.as_str(), "incoming" | "outgoing" | "both") {
+        return ToolResult::err("symbol_references direction must be incoming, outgoing, or both");
+    }
     let fetch_limit = limit.saturating_add(offset);
     let max_symbols = get_bounded_usize_arg(args, &["max_symbols"], 24, 100);
     let relationships = match parse_relationship_types_arg(args) {
@@ -6477,6 +6968,10 @@ fn symbol_references_tool<R: tauri::Runtime>(
     let mut total_low_signal_suppressed = 0usize;
     let mut references_truncated = false;
     let mut relationship_totals = BTreeMap::<String, usize>::new();
+    let mut symbol_registry = target_symbols
+        .iter()
+        .map(|symbol| (symbol.id.clone(), symbol_to_json(symbol)))
+        .collect::<BTreeMap<_, _>>();
     let expansions = target_symbols
         .iter()
         .map(|symbol| {
@@ -6502,6 +6997,9 @@ fn symbol_references_tool<R: tauri::Runtime>(
                     graph.incoming.len() >= fetch_limit || graph.outgoing.len() >= fetch_limit;
 
                 for reference in graph.incoming {
+                    if direction == "outgoing" {
+                        continue;
+                    }
                     let key = (
                         reference.source_symbol.id.clone(),
                         reference.target_name.clone(),
@@ -6517,6 +7015,9 @@ fn symbol_references_tool<R: tauri::Runtime>(
                 }
 
                 for reference in graph.outgoing {
+                    if direction == "incoming" {
+                        continue;
+                    }
                     let key = (
                         reference.source_symbol.id.clone(),
                         reference.target_name.clone(),
@@ -6542,6 +7043,7 @@ fn symbol_references_tool<R: tauri::Runtime>(
                 include_low_signal,
                 offset,
                 limit,
+                &mut symbol_registry,
                 &mut low_signal_suppressed,
                 &mut incoming_count,
                 &mut relationship_totals,
@@ -6551,6 +7053,7 @@ fn symbol_references_tool<R: tauri::Runtime>(
                 include_low_signal,
                 offset,
                 limit,
+                &mut symbol_registry,
                 &mut low_signal_suppressed,
                 &mut outgoing_count,
                 &mut relationship_totals,
@@ -6560,7 +7063,7 @@ fn symbol_references_tool<R: tauri::Runtime>(
             total_low_signal_suppressed += low_signal_suppressed;
 
             serde_json::json!({
-                "symbol": symbol_to_json(symbol),
+                "symbol_id": symbol.id,
                 "incoming": incoming,
                 "outgoing": outgoing,
                 "summary": {
@@ -6579,6 +7082,8 @@ fn symbol_references_tool<R: tauri::Runtime>(
     // A paged view (offset > 0) is by construction not the complete listing,
     // so it can never claim `total_known` (the summary counts are page counts).
     let truncated = references_truncated || target_symbols.len() >= max_symbols || offset > 0;
+    let next_cursor = references_truncated
+        .then(|| format!("references:{}", offset.saturating_add(limit)));
     let path_context = target_symbols
         .first()
         .map(|symbol| symbol.file_path.as_str());
@@ -6590,7 +7095,9 @@ fn symbol_references_tool<R: tauri::Runtime>(
         Vec::new()
     };
     let payload = serde_json::json!({
-        "symbols": expansions,
+        "symbols": symbol_registry.into_values().collect::<Vec<_>>(),
+        "expansions": expansions,
+        "next_cursor": next_cursor,
         "summary": {
             "symbols_expanded": target_symbols.len(),
             "incoming_count": total_incoming,
@@ -6609,6 +7116,7 @@ fn symbol_references_tool<R: tauri::Runtime>(
             // post-suppression list per relationship group; pages are stable
             // only while the index is unchanged.
             "offset": offset,
+            "direction": direction,
             "max_symbols": max_symbols,
             "include_low_signal": include_low_signal,
             // Post-dedupe count of distinct edges hidden as low-signal across
@@ -6700,8 +7208,8 @@ fn edit_impact_tool<R: tauri::Runtime>(
         direct_target.score = direct_target.score.max(100);
         direct_target.add_reason("Direct edit target".to_string());
         direct_target.add_range(serde_json::json!({
-            "start_line": symbol.range.start.line.saturating_add(1),
-            "end_line": symbol.range.end.line.saturating_add(1),
+            "start_line": model_line(symbol.range.start.line),
+            "end_line": model_line(symbol.range.end.line),
             "reason": format!("Target symbol `{}`", symbol.name),
         }));
 
@@ -6770,8 +7278,8 @@ fn edit_impact_tool<R: tauri::Runtime>(
                         edge.depth, relationship_name, symbol.name
                     ));
                     entry.add_range(serde_json::json!({
-                        "start_line": edge.line.saturating_add(1).saturating_sub(8).max(1),
-                        "end_line": edge.line.saturating_add(1).saturating_add(24),
+                        "start_line": model_line(edge.line).saturating_sub(8).max(1),
+                        "end_line": model_line(edge.line).saturating_add(24),
                         "reason": format!("Depth {} {} impact path", edge.depth, relationship_name),
                     }));
                     entry.add_path(build_incoming_impact_path(
@@ -7014,6 +7522,13 @@ fn symbol_graph_tool<R: tauri::Runtime>(
         partition_low_signal_references(graph.incoming, include_low_signal);
     let (outgoing, outgoing_suppressed) =
         partition_low_signal_references(graph.outgoing, include_low_signal);
+    let mut symbol_registry = BTreeMap::from([(
+        graph.symbol.id.clone(),
+        symbol_to_json(&graph.symbol),
+    )]);
+    for reference in incoming.iter().chain(&outgoing) {
+        register_reference_symbols(&mut symbol_registry, reference);
+    }
     let low_signal_suppressed = incoming_suppressed + outgoing_suppressed;
     let returned = incoming.len() + outgoing.len();
     let diagnostics = if returned == 0 {
@@ -7022,7 +7537,8 @@ fn symbol_graph_tool<R: tauri::Runtime>(
         Vec::new()
     };
     let payload = serde_json::json!({
-        "symbol": symbol_to_json(&graph.symbol),
+        "seed_symbol_id": graph.symbol.id,
+        "symbols": symbol_registry.into_values().collect::<Vec<_>>(),
         "incoming": incoming.iter().map(symbol_reference_to_json).collect::<Vec<_>>(),
         "outgoing": outgoing.iter().map(symbol_reference_to_json).collect::<Vec<_>>(),
         "relationship_type": relationship.to_string(),
@@ -7091,9 +7607,32 @@ fn symbol_trace_tool<R: tauri::Runtime>(
         Ok(trace) => trace,
         Err(err) => return ToolResult::err(err.to_string()),
     };
+    let mut symbol_registry = BTreeMap::from([(
+        trace.seed.id.clone(),
+        symbol_to_json(&trace.seed),
+    )]);
+    for node in &trace.nodes {
+        symbol_registry
+            .entry(node.symbol.id.clone())
+            .or_insert_with(|| symbol_to_json(&node.symbol));
+    }
+    for edge in &trace.edges {
+        symbol_registry
+            .entry(edge.source_symbol.id.clone())
+            .or_insert_with(|| symbol_to_json(&edge.source_symbol));
+        if let Some(target) = &edge.target_symbol {
+            symbol_registry
+                .entry(target.id.clone())
+                .or_insert_with(|| symbol_to_json(target));
+        }
+    }
     let payload = serde_json::json!({
-        "seed": symbol_to_json(&trace.seed),
-        "nodes": trace.nodes.iter().map(symbol_trace_node_to_json).collect::<Vec<_>>(),
+        "seed_symbol_id": trace.seed.id,
+        "symbols": symbol_registry.into_values().collect::<Vec<_>>(),
+        "nodes": trace.nodes.iter().map(|node| serde_json::json!({
+            "symbol_id": node.symbol.id,
+            "depth": node.depth,
+        })).collect::<Vec<_>>(),
         "edges": trace.edges.iter().map(symbol_trace_edge_to_json).collect::<Vec<_>>(),
         "summary": {
             "node_count": trace.nodes.len(),
@@ -7425,9 +7964,24 @@ fn symbol_path_tool<R: tauri::Runtime>(
         Err(err) => return ToolResult::err(err.to_string()),
     };
     let path_found = source.id == target.id || !path.edges.is_empty();
+    let mut symbol_registry = BTreeMap::from([
+        (path.source.id.clone(), symbol_to_json(&path.source)),
+        (path.target.id.clone(), symbol_to_json(&path.target)),
+    ]);
+    for edge in &path.edges {
+        symbol_registry
+            .entry(edge.source_symbol.id.clone())
+            .or_insert_with(|| symbol_to_json(&edge.source_symbol));
+        if let Some(target) = &edge.target_symbol {
+            symbol_registry
+                .entry(target.id.clone())
+                .or_insert_with(|| symbol_to_json(target));
+        }
+    }
     let payload = serde_json::json!({
-        "source": symbol_to_json(&path.source),
-        "target": symbol_to_json(&path.target),
+        "source_symbol_id": path.source.id,
+        "target_symbol_id": path.target.id,
+        "symbols": symbol_registry.into_values().collect::<Vec<_>>(),
         "path_found": path_found,
         "edges": path.edges.iter().map(symbol_path_edge_to_json).collect::<Vec<_>>(),
         "summary": {
@@ -7634,7 +8188,7 @@ fn symbol_schema_tool<R: tauri::Runtime>(
             "timing_ms": started.elapsed().as_millis(),
             "scope": scope_meta,
             "index_health": service.index_health_snapshot(),
-            "language_support": language_support_meta_json(scope_path),
+            "language_support": language_support_schema_meta_json(scope_path),
         }
     });
     ToolResult::ok(serde_json::to_string_pretty(&payload).unwrap_or_default())
@@ -8202,7 +8756,7 @@ fn rollback_semantic_patch_writes(
         if fs::rename(&staged.backup_path, &staged.write.abs_path).is_err() {
             let _ = fs::write(&staged.write.abs_path, &staged.write.original_content);
         }
-        let _ = service.did_open(&staged.write.file_path, &staged.write.original_content);
+        let _ = service.did_save(&staged.write.file_path, &staged.write.original_content);
     }
     cleanup_semantic_patch_stage_files(staged_writes);
 }
@@ -8243,7 +8797,7 @@ where
     }
 
     for staged in &staged_writes {
-        if let Err(error) = service.did_open(&staged.write.file_path, &staged.write.new_content) {
+        if let Err(error) = service.did_save(&staged.write.file_path, &staged.write.new_content) {
             rollback_semantic_patch_writes(service, &staged_writes, applied_count);
             return Err(format!(
                 "Failed to index {}: {}",

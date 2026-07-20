@@ -142,6 +142,124 @@ fn extract_import_relationships(
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ImportBinding {
+    imported_name: String,
+    module_path: String,
+}
+
+/// Collect unambiguous named ES-module imports keyed by the local identifier
+/// used at call sites. Ambiguous duplicate local bindings are dropped instead
+/// of guessing which module introduced the name.
+fn js_ts_import_bindings(
+    root: &Node<'_>,
+    source: &str,
+    language: Language,
+) -> HashMap<String, ImportBinding> {
+    if !matches!(
+        language,
+        Language::TypeScript
+            | Language::Tsx
+            | Language::Astro
+            | Language::JavaScript
+            | Language::Jsx
+    ) {
+        return HashMap::new();
+    }
+
+    fn visit(
+        node: Node<'_>,
+        source: &str,
+        bindings: &mut HashMap<String, ImportBinding>,
+        ambiguous: &mut HashSet<String>,
+    ) {
+        if node.kind() == "import_statement" {
+            if let Ok(statement) = node.safe_text(source) {
+                for (local_name, binding) in parse_js_ts_named_imports(statement) {
+                    if ambiguous.contains(&local_name) {
+                        continue;
+                    }
+                    if bindings
+                        .get(&local_name)
+                        .is_some_and(|existing| existing != &binding)
+                    {
+                        bindings.remove(&local_name);
+                        ambiguous.insert(local_name);
+                    } else {
+                        bindings.insert(local_name, binding);
+                    }
+                }
+            }
+            return;
+        }
+
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            visit(child, source, bindings, ambiguous);
+        }
+    }
+
+    let mut bindings = HashMap::new();
+    let mut ambiguous = HashSet::new();
+    visit(*root, source, &mut bindings, &mut ambiguous);
+    bindings
+}
+
+fn parse_js_ts_named_imports(statement: &str) -> Vec<(String, ImportBinding)> {
+    let Some(open_quote) = statement.rfind(['\'', '"']) else {
+        return Vec::new();
+    };
+    let quote = statement.as_bytes()[open_quote] as char;
+    let Some(relative_close) = statement[..open_quote].rfind(quote) else {
+        return Vec::new();
+    };
+    let module_path = statement[relative_close + 1..open_quote].trim();
+    if module_path.is_empty() {
+        return Vec::new();
+    }
+
+    let clause = statement[..relative_close]
+        .trim_end()
+        .strip_suffix("from")
+        .map(str::trim_end)
+        .unwrap_or_default();
+    let Some(open_brace) = clause.find('{') else {
+        return Vec::new();
+    };
+    let Some(close_brace) = clause[open_brace + 1..].find('}') else {
+        return Vec::new();
+    };
+    let named = &clause[open_brace + 1..open_brace + 1 + close_brace];
+
+    named
+        .split(',')
+        .filter_map(|entry| {
+            let entry = entry.trim().strip_prefix("type ").unwrap_or(entry.trim());
+            if entry.is_empty() {
+                return None;
+            }
+            let mut words = entry.split_whitespace();
+            let imported_name = words.next()?.trim();
+            let next = words.next();
+            let local_name = match next {
+                None => imported_name,
+                Some("as") => words.next()?.trim(),
+                Some(_) => return None,
+            };
+            if words.next().is_some() || imported_name.is_empty() || local_name.is_empty() {
+                return None;
+            }
+            Some((
+                local_name.to_owned(),
+                ImportBinding {
+                    imported_name: imported_name.to_owned(),
+                    module_path: module_path.to_owned(),
+                },
+            ))
+        })
+        .collect()
+}
+
 impl std::str::FromStr for SymbolType {
     type Err = String;
 
@@ -377,6 +495,12 @@ pub struct SymbolRelationship {
     /// NOT globally mined. Persisted to `metadata_json` as `"recv_self":true`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub recv_self: bool,
+    /// Module specifier that introduced the local call target name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_path: Option<String>,
+    /// Exported name requested from `import_path` before any local alias.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_name: Option<String>,
     /// M5.1 audit tag. Set to `Some("receiver_type")` ONLY when the per-file
     /// resolver disambiguated an otherwise-ambiguous candidate set by `recv_type`.
     /// `None` everywhere else (matching today's per-file resolutions, which carry
@@ -409,6 +533,8 @@ impl Default for SymbolRelationship {
             line: 0,
             recv_type: None,
             recv_self: false,
+            import_path: None,
+            imported_name: None,
             resolution_strategy: None,
             confidence: None,
             receiver_kind: None,
@@ -584,6 +710,8 @@ struct RelState<'a> {
     /// wrong edge). Built only for `Language::Rust`; empty for every other
     /// language, so the per-identifier usage concern rejects in O(1).
     const_targets: HashMap<&'a str, &'a str>,
+    /// Named ES-module bindings keyed by the identifier used in this file.
+    import_bindings: HashMap<String, ImportBinding>,
 }
 
 impl SymbolExtractor {
@@ -916,6 +1044,7 @@ impl SymbolExtractor {
                     Some((name, is_self)) => (Some(name), is_self),
                     None => (None, false),
                 };
+            let import_binding = rel.import_bindings.get(&target_name);
             rel.relationships.push(SymbolRelationship {
                 source_symbol_id: source_id,
                 source_file_path: self.file_path.clone(),
@@ -925,6 +1054,8 @@ impl SymbolExtractor {
                 line,
                 recv_type,
                 recv_self,
+                import_path: import_binding.map(|binding| binding.module_path.clone()),
+                imported_name: import_binding.map(|binding| binding.imported_name.clone()),
                 ..Default::default()
             });
         }
@@ -2513,12 +2644,14 @@ pub(crate) fn extract_symbol_relationships_with_facts(
     // used to resolve bare-identifier env-var KEYs. Precomputed in the shared
     // facts (not during the walk) so a const declared *after* its use still
     // resolves — and so route detection reuses the identical map.
+    let import_bindings = js_ts_import_bindings(&tree.root_node(), source, language);
     let mut rel = RelState {
         relationships: Vec::new(),
         seen: HashSet::new(),
         all_symbols: symbols,
         const_map: &facts.constants,
         const_targets,
+        import_bindings,
     };
 
     // Unified relationship walk: call/macro + structural edges off one DFS,
@@ -5843,6 +5976,48 @@ function run(): string {
             relationship.target_name == "./utils"
                 && relationship.relationship_type == SymbolRelationshipType::Import
         }));
+    }
+
+    #[test]
+    fn test_typescript_calls_preserve_named_import_provenance() {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let code = r#"
+import { createStore as useStore, UserCard, type User } from "@/shared/ui";
+
+export function Page() {
+    const state = useStore();
+    return <UserCard user={state as User} />;
+}
+"#;
+        let tree = parser.parse(code, Language::Tsx).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::Tsx, "src/app/page.tsx");
+        let relationships = extract_symbol_relationships(
+            &tree,
+            code,
+            Language::Tsx,
+            "src/app/page.tsx",
+            &symbols,
+        );
+
+        let use_store = relationships
+            .iter()
+            .find(|relationship| {
+                relationship.relationship_type == SymbolRelationshipType::Call
+                    && relationship.target_name == "useStore"
+            })
+            .expect("aliased imported call");
+        assert_eq!(use_store.import_path.as_deref(), Some("@/shared/ui"));
+        assert_eq!(use_store.imported_name.as_deref(), Some("createStore"));
+
+        let user_card = relationships
+            .iter()
+            .find(|relationship| {
+                relationship.relationship_type == SymbolRelationshipType::Call
+                    && relationship.target_name == "UserCard"
+            })
+            .expect("imported JSX component call");
+        assert_eq!(user_card.import_path.as_deref(), Some("@/shared/ui"));
+        assert_eq!(user_card.imported_name.as_deref(), Some("UserCard"));
     }
 
     #[test]

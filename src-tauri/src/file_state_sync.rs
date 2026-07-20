@@ -29,7 +29,7 @@ pub(crate) fn sync_after_write<R: Runtime>(
     let state = app_handle.state::<AppState>();
     match state.language_service() {
         Ok(service) => {
-            if let Err(error) = service.did_open(&path.to_string_lossy(), content) {
+            if let Err(error) = service.did_save(&path.to_string_lossy(), content) {
                 eprintln!(
                     "[FILE SYNC] Failed to refresh language snapshot for {}: {}",
                     path.display(),

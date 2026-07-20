@@ -64,6 +64,7 @@ pub mod sso;
 pub mod stable_hash;
 pub mod startup;
 pub mod symbol_index;
+mod symbol_wire;
 pub mod telegram_service;
 pub mod terminal;
 pub mod tool_execution;

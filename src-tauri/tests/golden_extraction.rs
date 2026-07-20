@@ -64,6 +64,8 @@ struct SymbolView {
 /// records `self`/`this` provenance — `true` only when `recv_type` is the EXACT
 /// enclosing-class qn (the sole signal the GLOBAL miner consumes); it is omitted
 /// when false so param/constructor-typed calls stay byte-identical.
+/// `import_path` and `imported_name` preserve named ES-module provenance so
+/// alias resolution remains golden-gated.
 #[derive(Serialize)]
 struct RelationshipView {
     relationship_type: String,
@@ -74,6 +76,10 @@ struct RelationshipView {
     recv_type: Option<String>,
     #[serde(skip_serializing_if = "is_false")]
     recv_self: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    import_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    imported_name: Option<String>,
 }
 
 /// `skip_serializing_if` predicate: omit a `bool` field when false.
@@ -175,6 +181,8 @@ fn snapshot_for_case(case: &str, fixture_file: &str) -> String {
             line: r.line,
             recv_type: r.recv_type.clone(),
             recv_self: r.recv_self,
+            import_path: r.import_path.clone(),
+            imported_name: r.imported_name.clone(),
         })
         .collect();
 

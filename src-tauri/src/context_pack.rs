@@ -49,6 +49,32 @@ pub fn build_context_pack(
     open_files: &[String],
     request: &ContextPackRequest,
 ) -> ContextPackPayload {
+    build_context_pack_internal(workspace_root, active_file, open_files, request, None)
+}
+
+pub(crate) fn build_context_pack_with_service(
+    workspace_root: &Path,
+    active_file: Option<&str>,
+    open_files: &[String],
+    request: &ContextPackRequest,
+    service: &LanguageService,
+) -> ContextPackPayload {
+    build_context_pack_internal(
+        workspace_root,
+        active_file,
+        open_files,
+        request,
+        Some(service),
+    )
+}
+
+fn build_context_pack_internal(
+    workspace_root: &Path,
+    active_file: Option<&str>,
+    open_files: &[String],
+    request: &ContextPackRequest,
+    provided_service: Option<&LanguageService>,
+) -> ContextPackPayload {
     let started_at = Instant::now();
     let queries = normalized_queries(&request.query, &request.queries);
     if queries.is_empty() {
@@ -76,23 +102,29 @@ pub fn build_context_pack(
         normalized_open_files.clone(),
     );
 
-    let service = match language_service_for_workspace(workspace_root) {
-        Ok(service) => service,
-        Err(error) => {
-            let mut payload = error_payload("index_unavailable", &error);
-            payload.queries_used = queries;
-            payload.workspace = Some(workspace);
-            payload.project_context = Some(build_project_context(
-                workspace_root,
-                include_project_index_min,
-                normalized_active_file.as_deref(),
-                &normalized_open_files,
-                &[],
-                None,
-            ));
-            payload.timing_ms = Some(started_at.elapsed().as_millis() as u64);
-            return payload;
-        }
+    let owned_service;
+    let service = if let Some(service) = provided_service {
+        service
+    } else {
+        owned_service = match language_service_for_workspace(workspace_root) {
+            Ok(service) => service,
+            Err(error) => {
+                let mut payload = error_payload("index_unavailable", &error);
+                payload.queries_used = queries;
+                payload.workspace = Some(workspace);
+                payload.project_context = Some(build_project_context(
+                    workspace_root,
+                    include_project_index_min,
+                    normalized_active_file.as_deref(),
+                    &normalized_open_files,
+                    &[],
+                    None,
+                ));
+                payload.timing_ms = Some(started_at.elapsed().as_millis() as u64);
+                return payload;
+            }
+        };
+        &owned_service
     };
 
     let index_health = service.audit_index_health().ok();

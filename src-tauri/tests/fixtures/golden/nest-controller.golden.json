@@ -65,7 +65,9 @@
       "relationship_type": "call",
       "source_qualified_name": "UsersController",
       "target_name": "Get",
-      "line": 4
+      "line": 4,
+      "import_path": "@nestjs/common",
+      "imported_name": "Get"
     },
     {
       "relationship_type": "handles",

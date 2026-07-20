@@ -197,7 +197,7 @@ fn short_fragment_query_returns_zero_results() {
 // single-line JSON ------------------------------------------------------------
 
 #[test]
-fn huge_single_line_json_truncates_under_budget_with_head_and_tail() {
+fn huge_single_line_json_truncates_under_budget_as_valid_json() {
     let workspace = fixture_workspace();
     let raw = std::fs::read_to_string(workspace.path().join(HUGE_JSON)).expect("read huge json");
 
@@ -217,23 +217,19 @@ fn huge_single_line_json_truncates_under_budget_with_head_and_tail() {
         TOOL_RESULT_BYTE_CAP,
         TRUNCATION_SLACK
     );
+    let parsed: serde_json::Value =
+        serde_json::from_str(&truncated).expect("truncated tool JSON must remain valid JSON");
+    assert_eq!(parsed["_meta"]["truncation"]["truncated"], true);
+    let original: serde_json::Value = serde_json::from_str(&raw).expect("fixture JSON");
+    let payload = parsed["payload"].as_str().expect("truncated payload string");
+    let original_payload = original["payload"].as_str().expect("original payload string");
     assert!(
-        truncated.contains("[TRUNCATED:"),
-        "truncation banner missing"
+        payload.starts_with(&original_payload[..64]),
+        "truncated JSON string must preserve its head"
     );
     assert!(
-        truncated.contains("showing first") && truncated.contains("bytes]"),
-        "single-line payload must fall back to byte-based head/tail truncation"
-    );
-    // Head marker: the result must still begin with the original head bytes...
-    assert!(
-        truncated.starts_with(&raw[..64]),
-        "truncated result must preserve the head of the payload"
-    );
-    // ...and end with the original tail bytes.
-    assert!(
-        truncated.ends_with(&raw[raw.len() - 64..]),
-        "truncated result must preserve the tail of the payload"
+        payload.ends_with(&original_payload[original_payload.len() - 64..]),
+        "truncated JSON string must preserve its tail"
     );
 }
 

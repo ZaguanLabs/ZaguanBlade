@@ -31,6 +31,8 @@ pub struct SearchQuery {
     pub active_file: Option<String>,
     pub preferred_files: Vec<String>,
     pub preferred_directories: Vec<String>,
+    /// Include deterministic score components in returned results.
+    pub explain: bool,
 }
 
 impl SearchQuery {
@@ -94,6 +96,32 @@ impl SearchQuery {
         self.preferred_directories = directories;
         self
     }
+
+    pub fn with_explain(mut self, explain: bool) -> Self {
+        self.explain = explain;
+        self
+    }
+}
+
+/// Confidence tier derived from weighted cross-field query coverage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchConfidence {
+    High,
+    Medium,
+    Low,
+}
+
+/// Explainable components of a deterministic symbol score.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScoreBreakdown {
+    pub matched_tokens: Vec<String>,
+    pub missing_tokens: Vec<String>,
+    pub matched_fields: Vec<String>,
+    pub token_coverage: f32,
+    pub phrase_match: bool,
+    pub exact_identifier: bool,
+    pub confidence: SearchConfidence,
 }
 
 /// Search result with relevance score
@@ -106,6 +134,8 @@ pub struct SearchResult {
     /// Matched portions of the name (for highlighting)
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub highlights: Vec<(usize, usize)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score_breakdown: Option<ScoreBreakdown>,
 }
 
 impl SearchResult {
@@ -115,6 +145,7 @@ impl SearchResult {
             symbol,
             score: 1.0,
             highlights: vec![],
+            score_breakdown: None,
         }
     }
 
@@ -124,6 +155,16 @@ impl SearchResult {
             symbol,
             score,
             highlights: vec![],
+            score_breakdown: None,
+        }
+    }
+
+    fn with_breakdown(symbol: Symbol, score: f32, score_breakdown: ScoreBreakdown) -> Self {
+        Self {
+            symbol,
+            score,
+            highlights: Vec::new(),
+            score_breakdown: Some(score_breakdown),
         }
     }
 }
@@ -148,25 +189,29 @@ pub fn execute_search(
 
     // Search by text
     if let Some(ref text) = query.text {
-        let symbols = search_symbol_candidates(store, text, search_candidate_limit(query, limit))?;
+        let query_model = QueryModel::parse(text);
+        if query_model.is_empty() {
+            return Ok(Vec::new());
+        }
+        let symbols = search_symbol_candidates(
+            store,
+            text,
+            &query_model,
+            search_candidate_limit(query, limit),
+        )?;
         let mut results: Vec<SearchResult> = symbols
             .into_iter()
-            .map(|s| {
-                let score = calculate_symbol_relevance(&s, text);
-                SearchResult::with_score(s, score)
+            .filter_map(|symbol| {
+                let (score, breakdown) = score_symbol(&symbol, &query_model)?;
+                Some(if query.explain {
+                    SearchResult::with_breakdown(symbol, score, breakdown)
+                } else {
+                    SearchResult::with_score(symbol, score)
+                })
             })
             .collect();
 
         apply_result_filters(&mut results, query);
-
-        // Reject candidates with zero lexical score — they matched in the
-        // broad candidate retrieval (FTS/LIKE) but have no token-level or
-        // prefix-level relevance to the query.  Keeping them would
-        // manufacture false confidence from retrieval noise.  This must run
-        // BEFORE contextual boosts: boosts are additive re-ranking signals
-        // (active file, preferred paths) and must not admit a candidate that
-        // has no lexical relevance at all.
-        results.retain(|r| r.score > 0.0);
 
         apply_contextual_boosts(&mut results, query);
 
@@ -175,6 +220,9 @@ pub fn execute_search(
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.symbol.qualified_name.cmp(&b.symbol.qualified_name))
+                .then_with(|| a.symbol.file_path.cmp(&b.symbol.file_path))
+                .then_with(|| a.symbol.id.cmp(&b.symbol.id))
         });
         results.truncate(limit);
 
@@ -207,7 +255,7 @@ fn filter_symbols(symbols: Vec<Symbol>, query: &SearchQuery) -> Vec<Symbol> {
         .collect()
 }
 
-fn symbol_matches_query_filters(symbol: &Symbol, query: &SearchQuery) -> bool {
+pub(crate) fn symbol_matches_query_filters(symbol: &Symbol, query: &SearchQuery) -> bool {
     if !query
         .symbol_types
         .as_deref()
@@ -284,25 +332,37 @@ fn single_pattern_matches(value: &str, pattern: &str) -> bool {
 fn search_symbol_candidates(
     store: &SymbolStore,
     text: &str,
+    query: &QueryModel,
     candidate_limit: usize,
 ) -> Result<Vec<Symbol>, SymbolStoreError> {
     let mut symbols = Vec::new();
     let mut seen = HashSet::new();
 
-    for symbol in store.search_by_name(text, candidate_limit)? {
+    // Whole-query identifier/signature/docstring lane. Always union it with
+    // FTS: a saturated FTS window must not prevent stronger LIKE candidates
+    // from reaching the scorer.
+    for symbol in store.search_by_name_like(text, candidate_limit)? {
         if seen.insert(symbol.id.clone()) {
             symbols.push(symbol);
         }
     }
 
-    if symbols.len() < candidate_limit {
-        for symbol in store.search_by_name_like(text, candidate_limit)? {
-            if seen.insert(symbol.id.clone()) {
-                symbols.push(symbol);
+    // Balanced identifier lanes keep one common query term from filling the
+    // entire candidate window before a concise entry point is considered.
+    if query.len() > 1 {
+        let per_term_limit = candidate_limit.div_ceil(query.len()).max(8);
+        for term in query.tokens() {
+            for symbol in store.search_by_name_like(term, per_term_limit)? {
+                if seen.insert(symbol.id.clone()) {
+                    symbols.push(symbol);
+                }
             }
-            if symbols.len() >= candidate_limit {
-                break;
-            }
+        }
+    }
+
+    for symbol in store.search_by_name(text, candidate_limit)? {
+        if seen.insert(symbol.id.clone()) {
+            symbols.push(symbol);
         }
     }
 
@@ -410,25 +470,280 @@ fn same_directory(directory: &str, file_path: &str) -> bool {
     parent_directory(file_path).is_some_and(|candidate| candidate == directory)
 }
 
-fn calculate_symbol_relevance(symbol: &Symbol, query: &str) -> f32 {
-    let name_score = calculate_relevance(&symbol.name, query);
-    let qualified_score = calculate_relevance(&symbol.qualified_name, query) * 0.92;
-    let signature_score = symbol
-        .signature
-        .as_deref()
-        .map(|signature| calculate_relevance(signature, query) * 0.62)
-        .unwrap_or(0.0);
-    let docstring_score = symbol
-        .docstring
-        .as_deref()
-        .map(|docstring| calculate_relevance(docstring, query) * 0.48)
-        .unwrap_or(0.0);
-    let lexical_score = name_score
-        .max(qualified_score)
-        .max(signature_score)
-        .max(docstring_score);
+/// Parsed query shared by balanced candidate retrieval and final ranking.
+#[derive(Debug, Clone)]
+struct QueryModel {
+    normalized_phrase: String,
+    terms: Vec<QueryTerm>,
+    total_weight: f32,
+}
 
-    (lexical_score * symbol_type_relevance_multiplier(symbol.symbol_type)).min(1.0)
+#[derive(Debug, Clone)]
+struct QueryTerm {
+    text: String,
+    weight: f32,
+}
+
+impl QueryModel {
+    fn parse(query: &str) -> Self {
+        let mut seen = HashSet::new();
+        let terms = text_tokens(query)
+            .into_iter()
+            .filter(|term| term.chars().count() >= 2)
+            .filter(|term| seen.insert(term.clone()))
+            .map(|text| QueryTerm {
+                weight: query_token_weight(&text),
+                text,
+            })
+            .collect::<Vec<_>>();
+        let total_weight = terms.iter().map(|term| term.weight).sum();
+        let normalized_phrase = terms
+            .iter()
+            .map(|term| term.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        Self {
+            normalized_phrase,
+            terms,
+            total_weight,
+        }
+    }
+
+    fn tokens(&self) -> impl Iterator<Item = &str> {
+        self.terms.iter().map(|term| term.text.as_str())
+    }
+
+    fn len(&self) -> usize {
+        self.terms.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.terms.is_empty()
+    }
+}
+
+struct SearchField {
+    name: &'static str,
+    weight: f32,
+    normalized: String,
+    tokens: Vec<String>,
+}
+
+impl SearchField {
+    fn new(name: &'static str, weight: f32, text: &str) -> Self {
+        let tokens = text_tokens(text);
+        let normalized = tokens.join(" ");
+        Self {
+            name,
+            weight,
+            normalized,
+            tokens,
+        }
+    }
+}
+
+struct QueryEvaluation {
+    matched_tokens: Vec<String>,
+    missing_tokens: Vec<String>,
+    matched_fields: Vec<String>,
+    coverage: f32,
+    field_quality: f32,
+}
+
+fn score_symbol(symbol: &Symbol, query: &QueryModel) -> Option<(f32, ScoreBreakdown)> {
+    if query.is_empty() {
+        return None;
+    }
+    let fields = [
+        SearchField::new("name", 1.0, &symbol.name),
+        SearchField::new("qualified_name", 0.88, &symbol.qualified_name),
+        SearchField::new(
+            "signature",
+            0.62,
+            symbol.signature.as_deref().unwrap_or_default(),
+        ),
+        SearchField::new(
+            "docstring",
+            0.45,
+            symbol.docstring.as_deref().unwrap_or_default(),
+        ),
+        SearchField::new("path", 0.30, &symbol.file_path),
+    ];
+    let exact_identifier = fields[0].normalized == query.normalized_phrase
+        || fields[1].normalized == query.normalized_phrase;
+    let phrase_match = fields
+        .iter()
+        .any(|field| field.normalized.contains(&query.normalized_phrase));
+    let evaluation = evaluate_query(query, &fields);
+    let exploratory_name_match = query.len() >= 4
+        && is_entry_point_kind(symbol.symbol_type)
+        && has_distinctive_exact_name_match(query, &fields[..2]);
+    let partial_short_only = query.len() >= 2
+        && !evaluation
+            .matched_tokens
+            .iter()
+            .any(|token| token.chars().count() >= 3)
+        && !evaluation.missing_tokens.is_empty();
+    if evaluation.matched_tokens.is_empty()
+        || partial_short_only
+        || (query.len() >= 2 && evaluation.coverage + f32::EPSILON < 0.5 && !exploratory_name_match)
+    {
+        return None;
+    }
+
+    let ordered = fields
+        .iter()
+        .any(|field| contains_ordered_tokens(&field.tokens, query));
+    let confidence = if exact_identifier || phrase_match || evaluation.coverage >= 0.75 {
+        SearchConfidence::High
+    } else if evaluation.coverage >= 0.5 {
+        SearchConfidence::Medium
+    } else {
+        SearchConfidence::Low
+    };
+    let raw_score = evaluation.coverage * 58.0
+        + evaluation.field_quality * 30.0
+        + if exact_identifier { 42.0 } else { 0.0 }
+        + if phrase_match { 24.0 } else { 0.0 }
+        + if ordered && query.len() > 1 { 6.0 } else { 0.0 }
+        + if exploratory_name_match { 8.0 } else { 0.0 };
+    let path_only_multiplier =
+        if evaluation.matched_fields.len() == 1 && evaluation.matched_fields[0] == "path" {
+            0.55
+        } else {
+            1.0
+        };
+    // Keep Blade's established normalized score contract while preserving
+    // Scout's relative weighting and deterministic breakdown.
+    let score = (raw_score / 160.0
+        * symbol_type_relevance_multiplier(symbol.symbol_type)
+        * path_only_multiplier)
+        .min(1.0);
+    Some((
+        score,
+        ScoreBreakdown {
+            matched_tokens: evaluation.matched_tokens,
+            missing_tokens: evaluation.missing_tokens,
+            matched_fields: evaluation.matched_fields,
+            token_coverage: evaluation.coverage,
+            phrase_match,
+            exact_identifier,
+            confidence,
+        },
+    ))
+}
+
+/// Recompute the shared lexical score explanation for a returned symbol.
+/// Contextual active-file boosts remain represented by the result's final
+/// `score`, while this breakdown explains deterministic query matching.
+pub fn explain_symbol_score(symbol: &Symbol, query: &str) -> Option<ScoreBreakdown> {
+    let query = QueryModel::parse(query);
+    score_symbol(symbol, &query).map(|(_, breakdown)| breakdown)
+}
+
+pub(crate) fn score_symbol_query(
+    symbol: &Symbol,
+    query: &str,
+) -> Option<(f32, ScoreBreakdown)> {
+    score_symbol(symbol, &QueryModel::parse(query))
+}
+
+fn evaluate_query(query: &QueryModel, fields: &[SearchField]) -> QueryEvaluation {
+    let mut matched_tokens = Vec::new();
+    let mut missing_tokens = Vec::new();
+    let mut matched_fields = Vec::new();
+    let mut matched_weight = 0.0;
+    let mut weighted_quality = 0.0;
+
+    for term in &query.terms {
+        let best = fields
+            .iter()
+            .filter_map(|field| {
+                token_match_quality(&term.text, &field.tokens)
+                    .map(|quality| (field, quality * field.weight))
+            })
+            .max_by(|left, right| left.1.total_cmp(&right.1));
+        if let Some((field, quality)) = best {
+            matched_weight += term.weight;
+            weighted_quality += term.weight * quality;
+            matched_tokens.push(term.text.clone());
+            if !matched_fields.iter().any(|name| name == field.name) {
+                matched_fields.push(field.name.to_string());
+            }
+        } else {
+            missing_tokens.push(term.text.clone());
+        }
+    }
+    let coverage = if query.total_weight > 0.0 {
+        matched_weight / query.total_weight
+    } else {
+        0.0
+    };
+    let field_quality = if query.total_weight > 0.0 {
+        weighted_quality / query.total_weight
+    } else {
+        0.0
+    };
+    QueryEvaluation {
+        matched_tokens,
+        missing_tokens,
+        matched_fields,
+        coverage,
+        field_quality,
+    }
+}
+
+fn token_match_quality(query: &str, candidate: &[String]) -> Option<f32> {
+    if candidate.iter().any(|token| token == query) {
+        return Some(1.0);
+    }
+    if query.chars().count() >= 3
+        && candidate.iter().any(|token| {
+            token.chars().count() >= 3 && (token.starts_with(query) || query.starts_with(token))
+        })
+    {
+        return Some(0.78);
+    }
+    if query.chars().count() >= 4 && candidate.iter().any(|token| token.contains(query)) {
+        return Some(0.62);
+    }
+    None
+}
+
+fn contains_ordered_tokens(candidate: &[String], query: &QueryModel) -> bool {
+    let mut next = 0;
+    for token in candidate {
+        if query.terms.get(next).is_some_and(|term| {
+            token_match_quality(&term.text, std::slice::from_ref(token)).is_some()
+        }) {
+            next += 1;
+            if next == query.terms.len() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn has_distinctive_exact_name_match(query: &QueryModel, name_fields: &[SearchField]) -> bool {
+    query.terms.iter().any(|term| {
+        term.weight >= 1.0
+            && name_fields
+                .iter()
+                .any(|field| field.tokens.iter().any(|token| token == &term.text))
+    })
+}
+
+const fn is_entry_point_kind(kind: SymbolType) -> bool {
+    matches!(
+        kind,
+        SymbolType::Function
+            | SymbolType::Method
+            | SymbolType::Class
+            | SymbolType::Struct
+            | SymbolType::Interface
+            | SymbolType::Trait
+    )
 }
 
 fn symbol_type_relevance_multiplier(symbol_type: SymbolType) -> f32 {
@@ -452,6 +767,7 @@ fn symbol_type_relevance_multiplier(symbol_type: SymbolType) -> f32 {
 }
 
 /// Calculate relevance score between query and symbol name
+#[cfg(test)]
 fn calculate_relevance(name: &str, query: &str) -> f32 {
     let name_lower = name.to_lowercase();
     let query_lower = query.to_lowercase();
@@ -486,6 +802,7 @@ fn calculate_relevance(name: &str, query: &str) -> f32 {
     0.0
 }
 
+#[cfg(test)]
 fn calculate_token_relevance(name: &str, query: &str) -> f32 {
     let name_tokens = text_tokens(name);
     let query_tokens = text_tokens(query);
@@ -589,31 +906,28 @@ fn query_token_weight(token: &str) -> f32 {
 }
 
 fn text_tokens(text: &str) -> Vec<String> {
+    let characters = text.chars().collect::<Vec<_>>();
     let mut tokens = Vec::new();
     let mut current = String::new();
-    let mut previous_was_lower_or_digit = false;
-    let mut previous_was_upper = false;
 
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if !ch.is_ascii_alphanumeric() {
+    for (index, character) in characters.iter().copied().enumerate() {
+        if !character.is_alphanumeric() {
             push_token(&mut tokens, &mut current);
-            previous_was_lower_or_digit = false;
-            previous_was_upper = false;
             continue;
         }
-
-        if ch.is_ascii_uppercase() && !current.is_empty() {
-            if previous_was_lower_or_digit
-                || (previous_was_upper
-                    && chars.peek().is_some_and(|next| next.is_ascii_lowercase()))
-            {
-                push_token(&mut tokens, &mut current);
-            }
+        let previous = index.checked_sub(1).and_then(|index| characters.get(index));
+        let next = characters.get(index + 1);
+        let camel_boundary = !current.is_empty()
+            && character.is_uppercase()
+            && (previous.is_some_and(|value| value.is_lowercase())
+                || (previous.is_some_and(|value| value.is_uppercase())
+                    && next.is_some_and(|value| value.is_lowercase())));
+        let digit_boundary = !current.is_empty()
+            && previous.is_some_and(|value| value.is_numeric() != character.is_numeric());
+        if camel_boundary || digit_boundary {
+            push_token(&mut tokens, &mut current);
         }
-        current.push(ch.to_ascii_lowercase());
-        previous_was_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
-        previous_was_upper = ch.is_ascii_uppercase();
+        current.extend(character.to_lowercase());
     }
 
     push_token(&mut tokens, &mut current);
@@ -905,6 +1219,85 @@ mod tests {
         )
         .unwrap();
         assert_eq!(git_results[0].symbol.name, "GitCommitMessage");
+    }
+
+    #[test]
+    fn query_model_splits_camel_acronym_digits_and_unicode_terms() {
+        let model = QueryModel::parse("HTTPServer symbol_search planSummary i18n Zaguán");
+        assert_eq!(
+            model.tokens().collect::<Vec<_>>(),
+            [
+                "http", "server", "symbol", "search", "plan", "summary", "18", "zaguán"
+            ]
+        );
+    }
+
+    #[test]
+    fn cross_field_coverage_admits_a_symbol_and_explains_the_match() {
+        let mut symbol = create_test_symbol_in_file(
+            "findUser",
+            SymbolType::Function,
+            "src/services/accounts.ts",
+        );
+        symbol.signature = Some("(id: UserId) -> AccountDto".to_string());
+        let query = QueryModel::parse("user account dto");
+
+        let (_, breakdown) = score_symbol(&symbol, &query).expect("cross-field match");
+        assert_eq!(breakdown.matched_tokens, ["user", "account", "dto"]);
+        assert!(breakdown
+            .matched_fields
+            .iter()
+            .any(|field| field == "name"));
+        assert!(breakdown
+            .matched_fields
+            .iter()
+            .any(|field| field == "signature"));
+        assert!(breakdown.token_coverage >= 0.99);
+    }
+
+    #[test]
+    fn long_queries_admit_declared_entry_points_but_not_path_only_properties() {
+        let query = QueryModel::parse("mobile top navigation icons locale location");
+        let entry_point = create_test_symbol_in_file(
+            "MobileHeader",
+            SymbolType::Function,
+            "src/components/header.tsx",
+        );
+        let (_, breakdown) = score_symbol(&entry_point, &query).expect("named entry point");
+        assert_eq!(breakdown.matched_tokens, ["mobile"]);
+        assert_eq!(breakdown.confidence, SearchConfidence::Low);
+
+        let incidental = create_test_symbol_in_file(
+            "top_venues",
+            SymbolType::Property,
+            "src/lib/i18n/locales/da/venues.json",
+        );
+        assert!(score_symbol(&incidental, &query).is_none());
+    }
+
+    #[test]
+    fn explain_mode_returns_score_breakdown_only_when_requested() {
+        let store = SymbolStore::in_memory().unwrap();
+        store
+            .upsert_symbols(&[create_test_symbol("HTTPServer", SymbolType::Struct)])
+            .unwrap();
+
+        let explained = execute_search(
+            &store,
+            &SearchQuery::text("HTTPServer")
+                .with_limit(5)
+                .with_explain(true),
+        )
+        .unwrap();
+        assert!(explained[0].score_breakdown.is_some());
+        assert!(explained[0]
+            .score_breakdown
+            .as_ref()
+            .is_some_and(|breakdown| breakdown.exact_identifier));
+
+        let compact =
+            execute_search(&store, &SearchQuery::text("HTTPServer").with_limit(5)).unwrap();
+        assert!(compact[0].score_breakdown.is_none());
     }
 
     // ---- Track G: weighted coverage, generic-term penalty, score floor --------

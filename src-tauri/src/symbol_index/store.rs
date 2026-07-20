@@ -6,7 +6,7 @@
 use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::tree_sitter::{
@@ -160,7 +160,19 @@ SELECT DISTINCT target_name AS name, relationship_type AS relationship_type
 FROM symbol_relationships
 WHERE target_symbol_id IS NULL
   AND relationship_type != 'import'
-  AND target_name != '';
+  AND target_name != ''
+  AND NOT (
+        relationship_type = 'call'
+        AND (
+            lower(source_file_path) GLOB '*.ts'
+            OR lower(source_file_path) GLOB '*.tsx'
+            OR lower(source_file_path) GLOB '*.astro'
+            OR lower(source_file_path) GLOB '*.js'
+            OR lower(source_file_path) GLOB '*.jsx'
+            OR lower(source_file_path) GLOB '*.mjs'
+            OR lower(source_file_path) GLOB '*.cjs'
+        )
+      );
 CREATE UNIQUE INDEX wanted_relationship_names_idx
     ON wanted_relationship_names(name, relationship_type);
 
@@ -210,6 +222,168 @@ DROP TABLE relationship_kind_allowlist;
 DROP TABLE wanted_relationship_names;
 DROP TABLE unique_relationship_targets;
 "#;
+
+/// Resolve named ES-module call bindings from their source import provenance.
+/// A relationship is updated only when exactly one top-level callable/value
+/// with the exported name exists in the imported module path.
+fn resolve_import_provenance(
+    transaction: &rusqlite::Transaction<'_>,
+) -> Result<usize, SymbolStoreError> {
+    struct PendingBinding {
+        rowid: i64,
+        source_path: String,
+        import_path: String,
+        imported_name: String,
+    }
+
+    struct Candidate {
+        id: String,
+        name: String,
+        file_path: String,
+    }
+
+    let pending = {
+        let mut statement = transaction.prepare(
+            r#"
+            SELECT rowid, source_file_path, import_path, imported_name
+            FROM symbol_relationships
+            WHERE target_symbol_id IS NULL
+              AND relationship_type = 'call'
+              AND import_path IS NOT NULL
+              AND imported_name IS NOT NULL
+            "#,
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(PendingBinding {
+                    rowid: row.get(0)?,
+                    source_path: row.get(1)?,
+                    import_path: row.get(2)?,
+                    imported_name: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+
+    if pending.is_empty() {
+        return Ok(0);
+    }
+
+    let wanted = pending
+        .iter()
+        .map(|binding| binding.imported_name.as_str())
+        .collect::<HashSet<_>>();
+    let candidates = {
+        let mut statement = transaction.prepare(
+            r#"
+            SELECT id, name, file_path
+            FROM symbols
+            WHERE symbol_type IN ('function','method','class','struct','type','enum','constant')
+              AND parent_id IS NULL
+            "#,
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(Candidate {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    file_path: row.get(2)?,
+                })
+            })?
+            .filter_map(|row| match row {
+                Ok(candidate) if wanted.contains(candidate.name.as_str()) => Some(Ok(candidate)),
+                Ok(_) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+        rows
+    };
+
+    let mut resolved = 0usize;
+    for binding in pending {
+        let matches = candidates
+            .iter()
+            .filter(|candidate| {
+                candidate.name == binding.imported_name
+                    && candidate_path_matches_import(
+                        &binding.source_path,
+                        &binding.import_path,
+                        &candidate.file_path,
+                    )
+            })
+            .collect::<Vec<_>>();
+        if let [candidate] = matches.as_slice() {
+            resolved = resolved.saturating_add(transaction.execute(
+                r#"
+                UPDATE symbol_relationships
+                SET target_symbol_id = ?1,
+                    resolution_strategy = 'import_binding',
+                    confidence = 0.9
+                WHERE rowid = ?2 AND target_symbol_id IS NULL
+                "#,
+                params![candidate.id, binding.rowid],
+            )?);
+        }
+    }
+
+    Ok(resolved)
+}
+
+fn candidate_path_matches_import(
+    source_path: &str,
+    import_path: &str,
+    candidate_path: &str,
+) -> bool {
+    let candidate_stem = module_stem(candidate_path);
+    let import_path = import_path.trim();
+    if import_path.is_empty() {
+        return false;
+    }
+
+    let target = if import_path.starts_with('.') {
+        let source_parent = Path::new(source_path)
+            .parent()
+            .unwrap_or_else(|| Path::new(""));
+        normalize_lexical(&source_parent.join(import_path))
+            .to_string_lossy()
+            .replace('\\', "/")
+    } else if let Some(path) = import_path
+        .strip_prefix("@/")
+        .or_else(|| import_path.strip_prefix("~/"))
+        .or_else(|| import_path.strip_prefix('/'))
+    {
+        path.trim_matches('/').to_owned()
+    } else {
+        return false;
+    };
+
+    candidate_stem == target
+        || candidate_stem == format!("{target}/index")
+        || candidate_stem.ends_with(&format!("/{target}"))
+        || candidate_stem.ends_with(&format!("/{target}/index"))
+}
+
+fn normalize_lexical(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+            Component::RootDir | Component::Prefix(_) => {}
+        }
+    }
+    normalized
+}
+
+fn module_stem(path: &str) -> String {
+    let mut stem = PathBuf::from(path);
+    stem.set_extension("");
+    stem.to_string_lossy().replace('\\', "/")
+}
 
 /// Target-driven global anchor resolution — the same shape as the relationship
 /// back-fill above, with the anchor rules preserved: lookups match `name` OR
@@ -1066,6 +1240,8 @@ pub struct SymbolReference {
     pub resolution_confidence: Option<f32>,
     pub receiver_type: Option<String>,
     pub receiver_is_self: bool,
+    pub import_path: Option<String>,
+    pub imported_name: Option<String>,
 }
 
 struct StoredRelationshipReference {
@@ -1077,6 +1253,8 @@ struct StoredRelationshipReference {
     resolution_strategy: Option<String>,
     resolution_confidence: Option<f32>,
     metadata_json: Option<String>,
+    import_path: Option<String>,
+    imported_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1466,27 +1644,30 @@ impl SymbolStore {
             -- Full-text search using FTS5
             CREATE VIRTUAL TABLE IF NOT EXISTS symbols_fts USING fts5(
                 name,
+                qualified_name,
+                signature,
                 docstring,
                 content=symbols,
-                content_rowid=rowid
+                content_rowid=rowid,
+                tokenize='unicode61'
             );
 
             -- Triggers to keep FTS in sync
             CREATE TRIGGER IF NOT EXISTS symbols_ai AFTER INSERT ON symbols BEGIN
-                INSERT INTO symbols_fts(rowid, name, docstring)
-                VALUES (new.rowid, new.name, new.docstring);
+                INSERT INTO symbols_fts(rowid, name, qualified_name, signature, docstring)
+                VALUES (new.rowid, new.name, new.qualified_name, new.signature, new.docstring);
             END;
 
             CREATE TRIGGER IF NOT EXISTS symbols_ad AFTER DELETE ON symbols BEGIN
-                INSERT INTO symbols_fts(symbols_fts, rowid, name, docstring)
-                VALUES ('delete', old.rowid, old.name, old.docstring);
+                INSERT INTO symbols_fts(symbols_fts, rowid, name, qualified_name, signature, docstring)
+                VALUES ('delete', old.rowid, old.name, old.qualified_name, old.signature, old.docstring);
             END;
 
             CREATE TRIGGER IF NOT EXISTS symbols_au AFTER UPDATE ON symbols BEGIN
-                INSERT INTO symbols_fts(symbols_fts, rowid, name, docstring)
-                VALUES ('delete', old.rowid, old.name, old.docstring);
-                INSERT INTO symbols_fts(rowid, name, docstring)
-                VALUES (new.rowid, new.name, new.docstring);
+                INSERT INTO symbols_fts(symbols_fts, rowid, name, qualified_name, signature, docstring)
+                VALUES ('delete', old.rowid, old.name, old.qualified_name, old.signature, old.docstring);
+                INSERT INTO symbols_fts(rowid, name, qualified_name, signature, docstring)
+                VALUES (new.rowid, new.name, new.qualified_name, new.signature, new.docstring);
             END;
 
             -- File metadata for tracking indexing status
@@ -1942,8 +2123,8 @@ impl SymbolStore {
             tx.execute(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
-                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, resolution_strategy, confidence, metadata_json)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, import_path, imported_name, resolution_strategy, confidence, metadata_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                 "#,
                 params![
                     &relationship.source_symbol_id,
@@ -1952,6 +2133,8 @@ impl SymbolStore {
                     relationship.target_symbol_id.as_deref(),
                     relationship.relationship_type.to_string(),
                     relationship.line,
+                    relationship.import_path.as_deref(),
+                    relationship.imported_name.as_deref(),
                     relationship.resolution_strategy.as_deref(),
                     relationship.confidence,
                     relationship_metadata_json(relationship),
@@ -2058,8 +2241,8 @@ impl SymbolStore {
             tx.execute(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
-                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, resolution_strategy, confidence, metadata_json)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, import_path, imported_name, resolution_strategy, confidence, metadata_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                 "#,
                 params![
                     &relationship.source_symbol_id,
@@ -2068,6 +2251,8 @@ impl SymbolStore {
                     relationship.target_symbol_id.as_deref(),
                     relationship.relationship_type.to_string(),
                     relationship.line,
+                    relationship.import_path.as_deref(),
+                    relationship.imported_name.as_deref(),
                     relationship.resolution_strategy.as_deref(),
                     relationship.confidence,
                     relationship_metadata_json(relationship),
@@ -2197,8 +2382,8 @@ impl SymbolStore {
             let mut insert_relationship = tx.prepare_cached(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
-                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, resolution_strategy, confidence, metadata_json)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, import_path, imported_name, resolution_strategy, confidence, metadata_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                 "#,
             )?;
 
@@ -2211,6 +2396,8 @@ impl SymbolStore {
                         relationship.target_symbol_id.as_deref(),
                         relationship.relationship_type.to_string(),
                         relationship.line,
+                        relationship.import_path.as_deref(),
+                        relationship.imported_name.as_deref(),
                         relationship.resolution_strategy.as_deref(),
                         relationship.confidence,
                         relationship_metadata_json(relationship),
@@ -2269,8 +2456,8 @@ impl SymbolStore {
             let mut insert_relationship = tx.prepare_cached(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
-                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, resolution_strategy, confidence, metadata_json)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, import_path, imported_name, resolution_strategy, confidence, metadata_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                 "#,
             )?;
 
@@ -2283,6 +2470,8 @@ impl SymbolStore {
                         relationship.target_symbol_id.as_deref(),
                         relationship.relationship_type.to_string(),
                         relationship.line,
+                        relationship.import_path.as_deref(),
+                        relationship.imported_name.as_deref(),
                         relationship.resolution_strategy.as_deref(),
                         relationship.confidence,
                         relationship_metadata_json(relationship),
@@ -2322,11 +2511,12 @@ impl SymbolStore {
     pub fn backfill_unresolved_relationship_targets(&self) -> Result<usize, SymbolStoreError> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
+        let import_resolved = resolve_import_provenance(&tx)?;
         tx.execute_batch(&build_unique_relationship_targets_sql())?;
         let resolved = tx.execute(BACKFILL_GLOBAL_UNIQUE_SQL, [])?;
         tx.execute_batch(DROP_UNIQUE_RELATIONSHIP_TARGETS_SQL)?;
         tx.commit()?;
-        Ok(resolved)
+        Ok(import_resolved.saturating_add(resolved))
     }
 
     /// Resolve deterministic semantic-anchor targets after their candidate
@@ -3279,7 +3469,8 @@ impl SymbolStore {
                 SELECT s.id, s.name, s.qualified_name, s.symbol_type, s.file_path, s.start_line, s.start_char,
                        s.end_line, s.end_char, s.byte_offset, s.byte_length, s.parent_id, s.docstring, s.signature,
                        s.content_hash, r.relationship_type, r.target_name, r.target_symbol_id, r.line,
-                       r.resolution_strategy, r.confidence, r.metadata_json
+                       r.resolution_strategy, r.confidence, r.metadata_json,
+                       r.import_path, r.imported_name
                 FROM symbol_relationships r
                 JOIN symbols s ON s.id = r.source_symbol_id
                 WHERE r.target_name = ?1 AND r.relationship_type = ?2
@@ -3301,6 +3492,8 @@ impl SymbolStore {
                             resolution_strategy: row.get(19)?,
                             resolution_confidence: row.get(20)?,
                             metadata_json: row.get(21)?,
+                            import_path: row.get(22)?,
+                            imported_name: row.get(23)?,
                         })
                     },
                 )?
@@ -3325,7 +3518,8 @@ impl SymbolStore {
                 SELECT s.id, s.name, s.qualified_name, s.symbol_type, s.file_path, s.start_line, s.start_char,
                        s.end_line, s.end_char, s.byte_offset, s.byte_length, s.parent_id, s.docstring, s.signature,
                        s.content_hash, r.relationship_type, r.target_name, r.target_symbol_id, r.line,
-                       r.resolution_strategy, r.confidence, r.metadata_json
+                       r.resolution_strategy, r.confidence, r.metadata_json,
+                       r.import_path, r.imported_name
                 FROM symbol_relationships r
                 JOIN symbols s ON s.id = r.source_symbol_id
                 WHERE r.target_symbol_id = ?1 AND r.relationship_type = ?2
@@ -3351,6 +3545,8 @@ impl SymbolStore {
                             resolution_strategy: row.get(19)?,
                             resolution_confidence: row.get(20)?,
                             metadata_json: row.get(21)?,
+                            import_path: row.get(22)?,
+                            imported_name: row.get(23)?,
                         })
                     },
                 )?
@@ -3377,7 +3573,8 @@ impl SymbolStore {
             let mut stmt = conn.prepare(
                 r#"
                 SELECT relationship_type, target_name, target_symbol_id, line,
-                       resolution_strategy, confidence, metadata_json
+                       resolution_strategy, confidence, metadata_json,
+                       import_path, imported_name
                 FROM symbol_relationships
                 WHERE source_symbol_id = ?1 AND relationship_type = ?2
                 ORDER BY line, target_name
@@ -3402,6 +3599,8 @@ impl SymbolStore {
                             resolution_strategy: row.get(4)?,
                             resolution_confidence: row.get(5)?,
                             metadata_json: row.get(6)?,
+                            import_path: row.get(7)?,
+                            imported_name: row.get(8)?,
                         })
                     },
                 )?
@@ -3472,7 +3671,7 @@ impl SymbolStore {
             FROM symbols s
             JOIN symbols_fts fts ON s.rowid = fts.rowid
             WHERE symbols_fts MATCH ?1
-            ORDER BY bm25(symbols_fts), length(s.name), s.name
+            ORDER BY bm25(symbols_fts, 8.0, 5.0, 2.0, 1.0), length(s.name), s.name
             LIMIT ?2
             "#,
         )?;
@@ -4439,6 +4638,8 @@ impl SymbolStore {
                 resolution_confidence: row.resolution_confidence,
                 receiver_type,
                 receiver_is_self,
+                import_path: row.import_path,
+                imported_name: row.imported_name,
             });
         }
 
@@ -4735,6 +4936,8 @@ const MIGRATIONS: &[fn(&Connection) -> Result<(), SymbolStoreError>] = &[
     migration_v1_relationship_resolution_columns,
     migration_v2_semantic_anchor_links,
     migration_v3_drop_redundant_relationship_source_index,
+    migration_v4_import_binding_provenance,
+    migration_v5_expand_symbol_fts,
 ];
 
 /// Apply every pending migration step, advancing `PRAGMA user_version`.
@@ -4824,6 +5027,59 @@ fn migration_v3_drop_redundant_relationship_source_index(
     conn: &Connection,
 ) -> Result<(), SymbolStoreError> {
     conn.execute_batch("DROP INDEX IF EXISTS idx_symbol_relationships_source")?;
+    Ok(())
+}
+
+/// Migration v4: retain the ES-module specifier and exported name that
+/// introduced a local JS/TS call target. These columns make aliased import
+/// resolution provenance-based instead of a repository-wide name guess.
+fn migration_v4_import_binding_provenance(conn: &Connection) -> Result<(), SymbolStoreError> {
+    ensure_column(conn, "symbol_relationships", "import_path", "TEXT")?;
+    ensure_column(conn, "symbol_relationships", "imported_name", "TEXT")?;
+    Ok(())
+}
+
+/// Migration v5: index qualified names and signatures alongside names and
+/// docstrings. Rebuilding the disposable FTS projection keeps the authoritative
+/// `symbols` table and stable IDs unchanged.
+fn migration_v5_expand_symbol_fts(conn: &Connection) -> Result<(), SymbolStoreError> {
+    conn.execute_batch(
+        r#"
+        DROP TRIGGER IF EXISTS symbols_ai;
+        DROP TRIGGER IF EXISTS symbols_ad;
+        DROP TRIGGER IF EXISTS symbols_au;
+        DROP TABLE IF EXISTS symbols_fts;
+
+        CREATE VIRTUAL TABLE symbols_fts USING fts5(
+            name,
+            qualified_name,
+            signature,
+            docstring,
+            content=symbols,
+            content_rowid=rowid,
+            tokenize='unicode61'
+        );
+
+        CREATE TRIGGER symbols_ai AFTER INSERT ON symbols BEGIN
+            INSERT INTO symbols_fts(rowid, name, qualified_name, signature, docstring)
+            VALUES (new.rowid, new.name, new.qualified_name, new.signature, new.docstring);
+        END;
+
+        CREATE TRIGGER symbols_ad AFTER DELETE ON symbols BEGIN
+            INSERT INTO symbols_fts(symbols_fts, rowid, name, qualified_name, signature, docstring)
+            VALUES ('delete', old.rowid, old.name, old.qualified_name, old.signature, old.docstring);
+        END;
+
+        CREATE TRIGGER symbols_au AFTER UPDATE ON symbols BEGIN
+            INSERT INTO symbols_fts(symbols_fts, rowid, name, qualified_name, signature, docstring)
+            VALUES ('delete', old.rowid, old.name, old.qualified_name, old.signature, old.docstring);
+            INSERT INTO symbols_fts(rowid, name, qualified_name, signature, docstring)
+            VALUES (new.rowid, new.name, new.qualified_name, new.signature, new.docstring);
+        END;
+
+        INSERT INTO symbols_fts(symbols_fts) VALUES ('rebuild');
+        "#,
+    )?;
     Ok(())
 }
 
@@ -5260,17 +5516,17 @@ WHERE anchor.target_file_path IS NULL
                 create_test_symbol("Shared", "a.ts"),
                 create_test_symbol("Shared", "b.ts"),
                 create_test_symbol("OnlyOne", "c.ts"),
-                create_test_symbol("caller", "caller.ts"),
+                create_test_symbol("caller", "caller.py"),
             ])
             .unwrap();
 
-        let caller_id = "caller.ts::caller#function";
+        let caller_id = "caller.py::caller#function";
         store
             .replace_relationships_for_file(
-                "caller.ts",
+                "caller.py",
                 &[
-                    create_test_relationship(caller_id, "caller.ts", "Shared"),
-                    create_test_relationship(caller_id, "caller.ts", "OnlyOne"),
+                    create_test_relationship(caller_id, "caller.py", "Shared"),
+                    create_test_relationship(caller_id, "caller.py", "OnlyOne"),
                 ],
             )
             .unwrap();
@@ -5312,6 +5568,114 @@ WHERE anchor.target_file_path IS NULL
         assert_eq!(unique_target.as_deref(), Some("c.ts::OnlyOne#function"));
         assert_eq!(unique_strategy.as_deref(), Some("global_unique"));
         assert_eq!(unique_confidence, Some(0.5));
+    }
+
+    #[test]
+    fn import_provenance_resolves_alias_to_the_declared_module() {
+        let store = SymbolStore::in_memory().unwrap();
+        let caller = create_test_symbol("Page", "src/app/page.tsx");
+        let mut intended = create_test_symbol("createStore", "src/shared/ui.ts");
+        intended.symbol_type = SymbolType::Constant;
+        let mut duplicate = create_test_symbol("createStore", "src/other/ui.ts");
+        duplicate.symbol_type = SymbolType::Constant;
+
+        store
+            .upsert_symbols(&[caller.clone(), intended.clone(), duplicate])
+            .unwrap();
+        store
+            .replace_relationships_for_file(
+                "src/app/page.tsx",
+                &[SymbolRelationship {
+                    source_symbol_id: caller.id.clone(),
+                    source_file_path: caller.file_path.clone(),
+                    target_name: "useStore".to_string(),
+                    target_symbol_id: None,
+                    relationship_type: SymbolRelationshipType::Call,
+                    line: 4,
+                    import_path: Some("@/shared/ui".to_string()),
+                    imported_name: Some("createStore".to_string()),
+                    ..Default::default()
+                }],
+            )
+            .unwrap();
+
+        assert_eq!(store.backfill_unresolved_relationship_targets().unwrap(), 1);
+        let (target, strategy, confidence): (Option<String>, Option<String>, Option<f64>) = {
+            let conn = store.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT target_symbol_id, resolution_strategy, confidence
+                 FROM symbol_relationships WHERE source_symbol_id = ?1",
+                params![caller.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!(target, Some(intended.id));
+        assert_eq!(strategy.as_deref(), Some("import_binding"));
+        assert_eq!(confidence, Some(0.9));
+
+        let references = store
+            .get_relationship_edges_from_source(&caller.id, SymbolRelationshipType::Call, 10)
+            .unwrap();
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].import_path.as_deref(), Some("@/shared/ui"));
+        assert_eq!(references[0].imported_name.as_deref(), Some("createStore"));
+    }
+
+    #[test]
+    fn javascript_family_calls_never_use_global_unique_fallback() {
+        let store = SymbolStore::in_memory().unwrap();
+        let caller = create_test_symbol("run", "src/browser.ts");
+        let unrelated = create_test_symbol("register", "src/server.rs");
+        store
+            .upsert_symbols(&[caller.clone(), unrelated])
+            .unwrap();
+        store
+            .replace_relationships_for_file(
+                "src/browser.ts",
+                &[create_test_relationship(
+                    &caller.id,
+                    &caller.file_path,
+                    "register",
+                )],
+            )
+            .unwrap();
+
+        assert_eq!(store.backfill_unresolved_relationship_targets().unwrap(), 0);
+        let target: Option<String> = {
+            let conn = store.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT target_symbol_id FROM symbol_relationships WHERE source_symbol_id = ?1",
+                params![caller.id],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(target, None);
+    }
+
+    #[test]
+    fn import_path_matching_supports_relative_root_alias_and_index_modules() {
+        assert!(candidate_path_matches_import(
+            "src/app/page.tsx",
+            "../shared/ui",
+            "src/shared/ui.ts"
+        ));
+        assert!(candidate_path_matches_import(
+            "src/app/page.tsx",
+            "@/shared/ui",
+            "src/shared/ui.ts"
+        ));
+        assert!(candidate_path_matches_import(
+            "src/app/page.tsx",
+            "~/shared/ui",
+            "src/shared/ui/index.ts"
+        ));
+        assert!(!candidate_path_matches_import(
+            "src/app/page.tsx",
+            "@/shared/ui",
+            "src/other/ui.ts"
+        ));
     }
 
     /// The back-fill never overwrites an already-resolved (non-NULL) target and
@@ -6097,6 +6461,23 @@ WHERE anchor.target_file_path IS NULL
     }
 
     #[test]
+    fn test_search_by_name_fts_indexes_qualified_names_and_signatures() {
+        let store = SymbolStore::in_memory().unwrap();
+        let mut symbol = create_test_symbol("findUser", "service.ts");
+        symbol.qualified_name = "accounts::findUser".to_string();
+        symbol.signature = Some("(id: UserId) -> AccountDto".to_string());
+        store.upsert_symbols(&[symbol.clone()]).unwrap();
+
+        let by_qualified = store.search_by_name("accounts", 10).unwrap();
+        assert_eq!(by_qualified.len(), 1);
+        assert_eq!(by_qualified[0].id, symbol.id);
+
+        let by_signature = store.search_by_name("AccountDto", 10).unwrap();
+        assert_eq!(by_signature.len(), 1);
+        assert_eq!(by_signature[0].id, symbol.id);
+    }
+
+    #[test]
     fn test_delete_file_symbols() {
         let store = SymbolStore::in_memory().unwrap();
         let sym1 = create_test_symbol("func1", "test.ts");
@@ -6208,8 +6589,13 @@ WHERE anchor.target_file_path IS NULL
             .unwrap()
     }
 
-    const NEW_RELATIONSHIP_COLUMNS: [&str; 3] =
-        ["resolution_strategy", "confidence", "metadata_json"];
+    const NEW_RELATIONSHIP_COLUMNS: [&str; 5] = [
+        "resolution_strategy",
+        "confidence",
+        "metadata_json",
+        "import_path",
+        "imported_name",
+    ];
     const NEW_SEMANTIC_ANCHOR_COLUMNS: [&str; 4] = [
         "owner_symbol_id",
         "target_file_path",
@@ -6273,7 +6659,14 @@ WHERE anchor.target_file_path IS NULL
         // table, `user_version = 0`, none of the new columns present.
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE symbol_relationships (
+            "CREATE TABLE symbols (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                qualified_name TEXT NOT NULL DEFAULT '',
+                signature TEXT,
+                docstring TEXT
+            );
+            CREATE TABLE symbol_relationships (
                 source_symbol_id TEXT NOT NULL,
                 source_file_path TEXT NOT NULL,
                 target_name TEXT NOT NULL,
@@ -6431,6 +6824,8 @@ WHERE anchor.target_file_path IS NULL
                     line: 3,
                     recv_type: Some("Helper".to_string()),
                     recv_self: true,
+                    import_path: None,
+                    imported_name: None,
                     resolution_strategy: Some("receiver_type".to_string()),
                     confidence: Some(0.8),
                     receiver_kind: None,
@@ -6932,36 +7327,36 @@ WHERE anchor.target_file_path IS NULL
         let store = SymbolStore::in_memory().unwrap();
         store
             .upsert_symbols(&[
-                create_test_symbol("envHelper", "util.ts"),
-                create_test_symbol("caller", "caller.ts"),
+                create_test_symbol("envHelper", "util.py"),
+                create_test_symbol("caller", "caller.py"),
             ])
             .unwrap();
-        let caller_id = "caller.ts::caller#function";
+        let caller_id = "caller.py::caller#function";
         store
             .replace_relationships_for_file(
-                "caller.ts",
+                "caller.py",
                 &[
                     kind_relationship(
                         caller_id,
-                        "caller.ts",
+                        "caller.py",
                         "envHelper",
                         SymbolRelationshipType::Import,
                     ),
                     kind_relationship(
                         caller_id,
-                        "caller.ts",
+                        "caller.py",
                         "envHelper",
                         SymbolRelationshipType::Export,
                     ),
                     kind_relationship(
                         caller_id,
-                        "caller.ts",
+                        "caller.py",
                         "envHelper",
                         SymbolRelationshipType::ReadsEnv,
                     ),
                     kind_relationship(
                         caller_id,
-                        "caller.ts",
+                        "caller.py",
                         "envHelper",
                         SymbolRelationshipType::Call,
                     ),
@@ -6986,7 +7381,7 @@ WHERE anchor.target_file_path IS NULL
         }
         let (call_target, _, _) =
             edge_resolution_for_kind(&store, caller_id, "envHelper", SymbolRelationshipType::Call);
-        assert_eq!(call_target.as_deref(), Some("util.ts::envHelper#function"));
+        assert_eq!(call_target.as_deref(), Some("util.py::envHelper#function"));
     }
 
     // ---- Track C — Go implicit interface implementation mining ----
