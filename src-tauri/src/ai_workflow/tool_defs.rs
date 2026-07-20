@@ -870,9 +870,7 @@ mod tests {
                 ["properties"]
         };
 
-        for key in ["detail"] {
-            assert!(properties("fast_context").get(key).is_some());
-        }
+        assert!(properties("fast_context").get("detail").is_some());
         for key in ["nested", "include_imports", "include_locals"] {
             assert!(properties("symbol_outline").get(key).is_some());
         }

@@ -8479,7 +8479,7 @@ fn old_text_not_found_error(content: &str, old_text: &str) -> String {
         old_text.len()
     );
     if let Some(hint) = punctuation_confusable_hint(content, old_text) {
-        message.push_str(" ");
+        message.push(' ');
         message.push_str(&hint);
     } else if let Some(anchor) = old_text
         .lines()

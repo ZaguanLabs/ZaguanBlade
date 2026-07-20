@@ -7832,7 +7832,7 @@ fn count_unescaped_backticks(line: &str) -> usize {
             backslash_run += 1;
             continue;
         }
-        if character == '`' && backslash_run % 2 == 0 {
+        if character == '`' && backslash_run.is_multiple_of(2) {
             count += 1;
         }
         backslash_run = 0;

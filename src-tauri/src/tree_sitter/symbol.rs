@@ -2896,11 +2896,10 @@ fn walk_routes(
     out: &mut Vec<DetectedRoute>,
 ) {
     match language {
-        Language::Python => {
-            if node.kind() == "decorated_definition" {
-                python_routes_from_decorated(node, source, const_map, out);
-            }
+        Language::Python if node.kind() == "decorated_definition" => {
+            python_routes_from_decorated(node, source, const_map, out);
         }
+        Language::Python => {}
         Language::TypeScript
         | Language::Tsx
         | Language::Astro

@@ -2205,7 +2205,7 @@ mod tests {
         assert!(enrichment
             .suggested_ranges
             .iter()
-            .all(|range| range.end_line - range.start_line + 1 <= MAX_CONTEXT_RANGE_LINES));
+            .all(|range| range.end_line - range.start_line < MAX_CONTEXT_RANGE_LINES));
     }
 
     #[test]
