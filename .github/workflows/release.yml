@@ -135,5 +135,17 @@ jobs:
         run: |
           version="$(jq -r '.version' src-tauri/tauri.conf.json)"
           archive="ZaguanBlade_${version}_${RELEASE_ARCH}.tar.gz"
-          tar -czf "$archive" -C src-tauri/target/release zblade
+          package_dir="$(mktemp -d)"
+          trap 'rm -rf "$package_dir"' EXIT
+
+          install -Dm755 src-tauri/target/release/zblade "$package_dir/zblade"
+          install -Dm644 LICENSE "$package_dir/LICENSE"
+          install -Dm644 README.md "$package_dir/README.md"
+          find docs -type f -name '*.md' \
+            ! -path 'docs/bugs/*' \
+            ! -path 'docs/internal/*' \
+            ! -path 'docs/live/*' \
+            -exec cp --parents --preserve=mode {} "$package_dir" \;
+
+          tar -czf "$archive" -C "$package_dir" zblade LICENSE README.md docs
           gh release upload "v${version}" "$archive" --clobber
