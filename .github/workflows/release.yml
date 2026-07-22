@@ -67,10 +67,12 @@ jobs:
           - platform: 'ubuntu-24.04'
             rust_target: ''
             bundles: 'appimage deb rpm'
+            release_arch: 'amd64'
           # Linux ARM64
           - platform: 'ubuntu-24.04-arm'
             rust_target: ''
             bundles: 'appimage deb rpm'
+            release_arch: 'arm64'
           # Windows x86_64
           - platform: 'windows-latest'
             rust_target: ''
@@ -123,3 +125,15 @@ jobs:
           prerelease: false
           tauriScript: bun run tauri
           args: ${{ matrix.rust_target && format('--target {0} ', matrix.rust_target) }}--bundles ${{ matrix.bundles }}
+
+      - name: upload Linux binary archive
+        if: startsWith(matrix.platform, 'ubuntu')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ARCH: ${{ matrix.release_arch }}
+        shell: bash
+        run: |
+          version="$(jq -r '.version' src-tauri/tauri.conf.json)"
+          archive="ZaguanBlade_${version}_${RELEASE_ARCH}.tar.gz"
+          tar -czf "$archive" -C src-tauri/target/release zblade
+          gh release upload "v${version}" "$archive" --clobber
