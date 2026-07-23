@@ -7,7 +7,7 @@ mod snapshot;
 use std::path::Path;
 
 pub use discovery::{discover_available_skills, discover_skill_catalog, discover_workspace_skills};
-pub use loading::{load_skill, load_workspace_skill};
+pub use loading::{load_skill, load_skill_chunk, load_workspace_skill};
 pub use model::{
     LoadedSkill, SkillCatalog, SkillCatalogEntry, SkillDiscoveryDiagnostic, SkillSource,
 };
@@ -236,8 +236,52 @@ mod tests {
 
         let loaded = load_workspace_skill(dir.path(), &skill_id).unwrap();
 
-        assert_eq!(loaded.base_dir, ".agents/skills/example");
-        assert_eq!(loaded.content, "Read references/guide.md.");
+        assert_eq!(
+            loaded.base_dir,
+            dir.path()
+                .join(".agents/skills/example")
+                .to_string_lossy()
+                .to_string()
+        );
+        assert_eq!(loaded.instructions, "Read references/guide.md.");
+        assert!(loaded.complete);
+        assert_eq!(loaded.next_offset, None);
+    }
+
+    #[test]
+    fn load_skill_paginates_large_utf8_instructions() {
+        let dir = TempDir::new().unwrap();
+        let body = format!("{}é-tail", "a".repeat(12 * 1024 - 1));
+        write(
+            &dir.path().join(".agents/skills/example/SKILL.md"),
+            &skill("example", "Helpful workflow", &body),
+        );
+        let skill_id = discover_workspace_skills(dir.path())[0].skill_id.clone();
+
+        let first = load_skill_chunk(dir.path(), &skill_id, 0).unwrap();
+        assert!(!first.complete);
+        assert_eq!(first.instructions.len(), 12 * 1024 - 1);
+        let next_offset = first.next_offset.expect("next offset");
+        let second = load_skill_chunk(dir.path(), &skill_id, next_offset).unwrap();
+
+        assert_eq!(second.instructions, "é-tail");
+        assert!(second.complete);
+        assert_eq!(second.next_offset, None);
+    }
+
+    #[test]
+    fn load_skill_rejects_files_over_forty_kibibytes() {
+        let dir = TempDir::new().unwrap();
+        write(
+            &dir.path().join(".agents/skills/example/SKILL.md"),
+            &skill("example", "Helpful workflow", &"x".repeat(40 * 1024)),
+        );
+        let skill_id = discover_workspace_skills(dir.path())[0].skill_id.clone();
+
+        let error = load_skill(dir.path(), &skill_id).unwrap_err();
+
+        assert!(error.contains("40960-byte limit"));
+        assert!(error.contains("referenced files"));
     }
 
     #[test]
@@ -289,8 +333,8 @@ mod tests {
         let loaded =
             load_skill_with_global_root(workspace.path(), global.path(), &skill_id).unwrap();
 
-        assert_eq!(loaded.source, SkillSource::Global);
-        assert_eq!(loaded.content, "Use globally.");
+        assert_eq!(loaded.name, "shared");
+        assert_eq!(loaded.instructions, "Use globally.");
         assert_eq!(
             loaded.base_dir,
             global.path().join("shared").to_string_lossy().to_string()

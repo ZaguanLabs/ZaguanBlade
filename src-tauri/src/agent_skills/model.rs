@@ -72,17 +72,13 @@ impl SkillCatalogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LoadedSkill {
     pub skill_id: String,
-    pub source: SkillSource,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub triggers: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub short_description: Option<String>,
+    pub name: String,
     pub base_dir: String,
-    pub content: String,
+    pub instructions: String,
+    pub offset: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<usize>,
+    pub complete: bool,
     pub note: String,
 }
 

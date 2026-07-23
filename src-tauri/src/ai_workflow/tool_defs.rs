@@ -356,12 +356,13 @@ pub fn get_tool_definitions() -> Vec<Value> {
             "name": "load_skill",
             "function": {
                 "name": "load_skill",
-                "description": "Load the full instructions for an available skill by skill_id. Use this only when the task clearly matches a skill from the available skills catalog.",
+                "description": "Load one selected specialized workflow by skill_id. Continue with next_offset until complete before acting.",
                 "strict": false,
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "skill_id": { "type": "string", "description": "Skill ID from the available skills catalog" }
+                        "skill_id": { "type": "string", "description": "Exact skill ID returned by list_skills" },
+                        "offset": { "type": "integer", "description": "Optional byte offset returned as next_offset", "minimum": 0 }
                     },
                     "required": ["skill_id"],
                     "additionalProperties": false

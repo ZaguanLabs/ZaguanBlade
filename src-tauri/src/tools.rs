@@ -2298,12 +2298,25 @@ mod tests {
         assert!(result.success, "load_skill should succeed");
         let payload: serde_json::Value =
             serde_json::from_str(&result.content).expect("load_skill json output");
-        assert_eq!(payload["skill_id"].as_str(), Some("example"));
-        assert_eq!(payload["base_dir"].as_str(), Some(".agents/skills/example"));
-        assert!(payload["content"]
+        assert!(payload["skill_id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("host:"));
+        assert_eq!(
+            payload["base_dir"].as_str(),
+            Some(
+                workspace
+                    .path()
+                    .join(".agents/skills/example")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+        assert!(payload["instructions"]
             .as_str()
             .unwrap_or_default()
             .contains("Read references/guide.md."));
+        assert_eq!(payload["complete"].as_bool(), Some(true));
         assert!(!result.content.contains("reference details"));
     }
 
@@ -3542,8 +3555,15 @@ fn load_skill_tool(workspace_root: &Path, args: &HashMap<String, serde_json::Val
     let Some(skill_id) = get_string_arg(args, &["skill_id", "id", "name"]) else {
         return ToolResult::err("missing required arg: skill_id");
     };
+    let offset = match args.get("offset") {
+        Some(value) => match value.as_u64().and_then(|value| usize::try_from(value).ok()) {
+            Some(offset) => offset,
+            None => return ToolResult::err("offset must be a non-negative integer"),
+        },
+        None => 0,
+    };
 
-    match crate::agent_skills::load_skill(workspace_root, &skill_id) {
+    match crate::agent_skills::load_skill_chunk(workspace_root, &skill_id, offset) {
         Ok(skill) => ToolResult::ok(serde_json::to_string_pretty(&skill).unwrap_or_default()),
         Err(error) => ToolResult::err(error),
     }
