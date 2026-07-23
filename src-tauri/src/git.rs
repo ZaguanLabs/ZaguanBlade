@@ -1,6 +1,7 @@
 use serde::Serialize;
 use serde_json::json;
 use std::collections::BTreeSet;
+use std::path::Path;
 use tauri::{AppHandle, Manager, State};
 use tokio::process::Command as TokioCommand;
 
@@ -1465,7 +1466,7 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
         active_file: None,
         cursor_position: None,
         open_files: Vec::new(),
-        host_skills: crate::blade_ws_client::HostSkillsSnapshot::empty(),
+        host_skills: crate::agent_skills::build_host_skills_snapshot(Some(Path::new(&root))),
     };
 
     let available_models = load_models(&state).await;

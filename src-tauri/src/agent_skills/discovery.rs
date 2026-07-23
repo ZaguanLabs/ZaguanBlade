@@ -1,0 +1,297 @@
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use walkdir::{DirEntry, WalkDir};
+
+use super::frontmatter::read_catalog_metadata;
+use super::model::{SkillCatalog, SkillCatalogEntry, SkillDiscoveryDiagnostic, SkillSource};
+use super::snapshot::stable_host_skill_id;
+
+const AGENTS_SKILLS_DIR: &str = ".agents/skills";
+const SKILL_FILE_NAME: &str = "SKILL.md";
+const MAX_SCAN_DEPTH: usize = 6;
+const MAX_DIRECTORIES_PER_ROOT: usize = 2_000;
+const MAX_ENTRIES_PER_ROOT: usize = 20_000;
+const MAX_SKILLS_PER_SNAPSHOT: usize = 1_000;
+const MAX_DIAGNOSTICS: usize = 2_000;
+
+#[derive(Debug)]
+pub(crate) struct DiscoveryRoots {
+    pub workspace: Option<PathBuf>,
+    pub user: Option<PathBuf>,
+    pub legacy_user: Option<PathBuf>,
+}
+
+impl DiscoveryRoots {
+    fn standard(workspace_root: Option<&Path>) -> Self {
+        Self {
+            workspace: workspace_root.map(|root| root.join(AGENTS_SKILLS_DIR)),
+            user: crate::config::standard_user_skills_dir(),
+            legacy_user: Some(crate::config::global_skills_dir()),
+        }
+    }
+}
+
+pub fn discover_workspace_skills(workspace_root: &Path) -> Vec<SkillCatalogEntry> {
+    discover_catalog_with_roots(DiscoveryRoots {
+        workspace: Some(workspace_root.join(AGENTS_SKILLS_DIR)),
+        user: None,
+        legacy_user: None,
+    })
+    .skills
+}
+
+pub fn discover_available_skills(workspace_root: &Path) -> Vec<SkillCatalogEntry> {
+    discover_skill_catalog(Some(workspace_root)).skills
+}
+
+pub fn discover_skill_catalog(workspace_root: Option<&Path>) -> SkillCatalog {
+    discover_catalog_with_roots(DiscoveryRoots::standard(workspace_root))
+}
+
+pub(crate) fn discover_available_skills_with_global_root(
+    workspace_root: &Path,
+    global_skills_root: &Path,
+) -> Vec<SkillCatalogEntry> {
+    discover_catalog_with_roots(DiscoveryRoots {
+        workspace: Some(workspace_root.join(AGENTS_SKILLS_DIR)),
+        user: None,
+        legacy_user: Some(global_skills_root.to_path_buf()),
+    })
+    .skills
+}
+
+pub(crate) fn discover_global_skills_from_root(skills_root: &Path) -> Vec<SkillCatalogEntry> {
+    discover_catalog_with_roots(DiscoveryRoots {
+        workspace: None,
+        user: None,
+        legacy_user: Some(skills_root.to_path_buf()),
+    })
+    .skills
+}
+
+pub(crate) fn discover_catalog_with_roots(roots: DiscoveryRoots) -> SkillCatalog {
+    let mut catalog = SkillCatalog::default();
+    let mut canonical_paths = HashSet::new();
+
+    if let Some(root) = roots.workspace {
+        discover_root(
+            &root,
+            SkillSource::Workspace,
+            true,
+            &mut canonical_paths,
+            &mut catalog,
+        );
+    }
+    if let Some(root) = roots.user {
+        discover_root(
+            &root,
+            SkillSource::User,
+            true,
+            &mut canonical_paths,
+            &mut catalog,
+        );
+    }
+    if let Some(root) = roots.legacy_user {
+        discover_root(
+            &root,
+            SkillSource::Global,
+            false,
+            &mut canonical_paths,
+            &mut catalog,
+        );
+    }
+
+    catalog
+        .skills
+        .sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
+    catalog
+}
+
+fn discover_root(
+    skills_root: &Path,
+    source: SkillSource,
+    follow_directory_links: bool,
+    canonical_paths: &mut HashSet<PathBuf>,
+    catalog: &mut SkillCatalog,
+) {
+    if !skills_root.is_dir() {
+        return;
+    }
+
+    let mut directory_count = 0usize;
+    let mut entry_count = 0usize;
+    let walker = WalkDir::new(skills_root)
+        .follow_links(follow_directory_links)
+        .max_depth(MAX_SCAN_DEPTH)
+        .into_iter()
+        .filter_entry(should_descend);
+
+    for result in walker {
+        if entry_count >= MAX_ENTRIES_PER_ROOT {
+            catalog.truncated = true;
+            push_diagnostic(
+                catalog,
+                skills_root,
+                format!("root exceeded {MAX_ENTRIES_PER_ROOT} filesystem entries"),
+            );
+            break;
+        }
+        entry_count += 1;
+
+        let entry = match result {
+            Ok(entry) => entry,
+            Err(error) => {
+                push_diagnostic(catalog, skills_root, format!("traversal error: {error}"));
+                continue;
+            }
+        };
+        if entry.file_type().is_dir() {
+            directory_count += 1;
+            if directory_count > MAX_DIRECTORIES_PER_ROOT {
+                catalog.truncated = true;
+                push_diagnostic(
+                    catalog,
+                    skills_root,
+                    format!("root exceeded {MAX_DIRECTORIES_PER_ROOT} directories"),
+                );
+                break;
+            }
+            continue;
+        }
+        if !is_skill_file(&entry) {
+            continue;
+        }
+        if catalog.skills.len() >= MAX_SKILLS_PER_SNAPSHOT {
+            catalog.truncated = true;
+            break;
+        }
+
+        let discovered_path = entry.path();
+        let canonical_path = match fs::canonicalize(discovered_path) {
+            Ok(path) => path,
+            Err(error) => {
+                push_diagnostic(
+                    catalog,
+                    discovered_path,
+                    format!("canonicalize skill path: {error}"),
+                );
+                continue;
+            }
+        };
+        if !canonical_paths.insert(canonical_path.clone()) {
+            continue;
+        }
+
+        match catalog_entry_from_path(skills_root, discovered_path, canonical_path, source) {
+            Ok((skill, recovered_name)) => {
+                if recovered_name {
+                    push_diagnostic(
+                        catalog,
+                        discovered_path,
+                        "missing name recovered from parent directory".to_string(),
+                    );
+                }
+                catalog.skills.push(skill);
+            }
+            Err(error) => push_diagnostic(catalog, discovered_path, error),
+        }
+    }
+}
+
+fn catalog_entry_from_path(
+    skills_root: &Path,
+    discovered_path: &Path,
+    canonical_path: PathBuf,
+    source: SkillSource,
+) -> Result<(SkillCatalogEntry, bool), String> {
+    let directory_name = discovered_path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "skill directory name is not valid UTF-8".to_string())?;
+    let parsed = read_catalog_metadata(discovered_path, directory_name)?;
+    let metadata =
+        fs::metadata(&canonical_path).map_err(|error| format!("read skill metadata: {error}"))?;
+    let display_locator = display_locator(skills_root, discovered_path, source);
+    let skill_id = stable_host_skill_id(source, &canonical_path);
+    let recovered_name = parsed.recovered_name;
+
+    Ok((
+        SkillCatalogEntry {
+            skill_id,
+            source,
+            name: Some(parsed.name),
+            description: Some(parsed.description),
+            triggers: parsed.triggers,
+            short_description: parsed.short_description,
+            path: display_locator,
+            license: parsed.license,
+            compatibility: parsed.compatibility,
+            metadata: parsed.metadata,
+            allowed_tools: parsed.allowed_tools,
+            canonical_path,
+            file_size: metadata.len(),
+            modified: metadata.modified().ok(),
+        },
+        recovered_name,
+    ))
+}
+
+fn display_locator(skills_root: &Path, path: &Path, source: SkillSource) -> String {
+    let relative = path.strip_prefix(skills_root).unwrap_or(path);
+    match source {
+        SkillSource::Workspace => {
+            normalize_path(Path::new(AGENTS_SKILLS_DIR).join(relative).as_path())
+        }
+        SkillSource::User => {
+            let suffix = normalize_path(relative);
+            if suffix.is_empty() {
+                "~/.agents/skills".to_string()
+            } else {
+                format!("~/.agents/skills/{suffix}")
+            }
+        }
+        SkillSource::Global => {
+            let suffix = normalize_path(relative);
+            if suffix.is_empty() {
+                "legacy-skills".to_string()
+            } else {
+                format!("legacy-skills/{suffix}")
+            }
+        }
+    }
+}
+
+fn should_descend(entry: &DirEntry) -> bool {
+    if entry.depth() == 0 {
+        return true;
+    }
+    entry
+        .file_name()
+        .to_str()
+        .map(|name| !name.starts_with('.'))
+        .unwrap_or(false)
+}
+
+fn is_skill_file(entry: &DirEntry) -> bool {
+    entry.file_type().is_file() && entry.file_name() == SKILL_FILE_NAME
+}
+
+fn push_diagnostic(catalog: &mut SkillCatalog, path: &Path, message: String) {
+    if catalog.diagnostics.len() >= MAX_DIAGNOSTICS {
+        return;
+    }
+    catalog.diagnostics.push(SkillDiscoveryDiagnostic {
+        path: path.to_string_lossy().to_string(),
+        message,
+    });
+}
+
+fn normalize_path(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}

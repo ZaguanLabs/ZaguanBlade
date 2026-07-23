@@ -450,6 +450,10 @@ pub fn global_skills_dir() -> PathBuf {
     default_global_config_dir().join("skills")
 }
 
+pub fn standard_user_skills_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|home_dir| home_dir.join(".agents").join("skills"))
+}
+
 pub fn ensure_global_prompts_dir() -> Result<(), String> {
     let dir = global_prompts_dir();
     fs::create_dir_all(&dir).map_err(|e| e.to_string())
