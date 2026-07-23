@@ -25,6 +25,34 @@ fn project_data_root(workspace_root: Option<&PathBuf>) -> PathBuf {
         .join(".zblade")
 }
 
+fn get_or_try_init_arc<T>(
+    slot: &RwLock<Option<Arc<T>>>,
+    resource_name: &str,
+    initialize: impl FnOnce() -> Result<T, String>,
+) -> Result<Arc<T>, String> {
+    if let Some(value) = slot
+        .read()
+        .map_err(|error| format!("Failed to lock {}: {}", resource_name, error))?
+        .clone()
+    {
+        return Ok(value);
+    }
+
+    // Initialization must happen while the write lock is held. Creating the
+    // value before taking this lock allows concurrent callers to both observe
+    // `None` and run side-effectful initialization against the same resource.
+    let mut guard = slot
+        .write()
+        .map_err(|error| format!("Failed to write {}: {}", resource_name, error))?;
+    if let Some(value) = guard.clone() {
+        return Ok(value);
+    }
+
+    let value = Arc::new(initialize()?);
+    *guard = Some(value.clone());
+    Ok(value)
+}
+
 pub struct FrontendWatchdogState {
     pub last_ping_ms: AtomicU64,
     pub last_recovery_ms: AtomicU64,
@@ -271,39 +299,27 @@ impl AppState {
     pub fn language_service(
         &self,
     ) -> Result<Arc<crate::language_service::LanguageService>, String> {
-        if let Some(service) = self
-            .language_service
-            .read()
-            .map_err(|e| format!("Failed to lock language service: {}", e))?
-            .clone()
-        {
-            return Ok(service);
-        }
+        get_or_try_init_arc(&self.language_service, "language service", || {
+            let project_data_dir = self.ensure_project_data_dir()?;
+            let db_path = project_data_dir.join("index").join("symbols.db");
+            if let Some(parent) = db_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
 
-        let project_data_dir = self.ensure_project_data_dir()?;
-        let db_path = project_data_dir.join("index").join("symbols.db");
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
+            let workspace_root = self.workspace_root().unwrap_or_else(|| PathBuf::from("."));
+            let symbol_store = Arc::new(
+                crate::symbol_index::store::SymbolStore::new(&db_path)
+                    .map_err(|error| format!("Failed to create SymbolStore: {}", error))?,
+            );
+            let service =
+                crate::language_service::LanguageService::new(workspace_root, symbol_store)
+                    .map_err(|error| format!("Failed to initialize LanguageService: {}", error))?;
+            if let Ok(worktree) = self.worktree() {
+                service.set_worktree_store(worktree);
+            }
 
-        let workspace_root = self.workspace_root().unwrap_or_else(|| PathBuf::from("."));
-        let symbol_store = Arc::new(
-            crate::symbol_index::store::SymbolStore::new(&db_path)
-                .map_err(|e| format!("Failed to create SymbolStore: {}", e))?,
-        );
-        let service = Arc::new(
-            crate::language_service::LanguageService::new(workspace_root, symbol_store)
-                .map_err(|e| format!("Failed to initialize LanguageService: {}", e))?,
-        );
-        if let Ok(worktree) = self.worktree() {
-            service.set_worktree_store(worktree);
-        }
-
-        let mut guard = self
-            .language_service
-            .write()
-            .map_err(|e| format!("Failed to write language service: {}", e))?;
-        Ok(guard.get_or_insert_with(|| service).clone())
+            Ok(service)
+        })
     }
 
     pub fn language_handler(&self) -> Result<crate::language_service::LanguageHandler, String> {
@@ -349,5 +365,63 @@ impl AppState {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Barrier;
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn shared_initializer_runs_once_under_concurrent_access() {
+        const THREAD_COUNT: usize = 8;
+
+        let slot = Arc::new(RwLock::new(None));
+        let start = Arc::new(Barrier::new(THREAD_COUNT));
+        let initialization_count = Arc::new(AtomicUsize::new(0));
+
+        let handles = (0..THREAD_COUNT)
+            .map(|_| {
+                let slot = slot.clone();
+                let start = start.clone();
+                let initialization_count = initialization_count.clone();
+                thread::spawn(move || {
+                    start.wait();
+                    get_or_try_init_arc(&slot, "test resource", || {
+                        initialization_count.fetch_add(1, Ordering::SeqCst);
+                        thread::sleep(Duration::from_millis(25));
+                        Ok(42)
+                    })
+                    .expect("shared initialization should succeed")
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let values = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("worker should not panic"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(initialization_count.load(Ordering::SeqCst), 1);
+        assert!(values.iter().all(|value| Arc::ptr_eq(value, &values[0])));
+    }
+
+    #[test]
+    fn failed_shared_initialization_can_be_retried() {
+        let slot = RwLock::new(None);
+
+        let error = get_or_try_init_arc::<usize>(&slot, "test resource", || {
+            Err("initialization failed".to_string())
+        })
+        .expect_err("first initialization should fail");
+        assert_eq!(error, "initialization failed");
+
+        let value = get_or_try_init_arc(&slot, "test resource", || Ok(42))
+            .expect("second initialization should succeed");
+        assert_eq!(*value, 42);
     }
 }

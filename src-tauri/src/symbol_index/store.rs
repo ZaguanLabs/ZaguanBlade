@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use crate::tree_sitter::{
     Language, Symbol, SymbolRelationship, SymbolRelationshipType, SymbolType,
@@ -26,6 +27,11 @@ const GENERATED_INDEX_TABLES: &[&str] = &[
     "symbols",
     "indexed_files",
 ];
+
+// Index initialization and writes run off the UI thread. A bounded 30-second
+// wait tolerates large commits and schema checks without surfacing transient
+// SQLITE_BUSY errors to editor synchronization.
+const INDEX_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Track D — the symbol kinds each relationship kind may legally resolve to.
 ///
@@ -1581,6 +1587,7 @@ impl SymbolStore {
         }
 
         let conn = Connection::open(db_path)?;
+        conn.busy_timeout(INDEX_BUSY_TIMEOUT)?;
         configure_index_pragmas(&conn)?;
         let store = Self {
             conn: Mutex::new(conn),
@@ -5163,6 +5170,20 @@ mod tests {
             signature: Some("(param: string): void".to_string()),
             content_hash: "hash".to_string(),
         }
+    }
+
+    #[test]
+    fn new_configures_bounded_busy_timeout() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SymbolStore::new(&directory.path().join("symbols.db")).unwrap();
+        let timeout_ms = store
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("PRAGMA busy_timeout", [], |row| row.get::<_, i64>(0))
+            .unwrap();
+
+        assert_eq!(timeout_ms, INDEX_BUSY_TIMEOUT.as_millis() as i64);
     }
 
     /// The pre-target-driven correlated statements, kept VERBATIM as the
