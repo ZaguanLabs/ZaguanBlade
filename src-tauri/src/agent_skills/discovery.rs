@@ -1,11 +1,15 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use walkdir::{DirEntry, WalkDir};
 
 use super::frontmatter::read_catalog_metadata;
-use super::model::{SkillCatalog, SkillCatalogEntry, SkillDiscoveryDiagnostic, SkillSource};
+use super::model::{
+    SkillCatalog, SkillCatalogEntry, SkillDiagnosticsReport, SkillDiscoveryDiagnostic, SkillSource,
+};
 use super::snapshot::stable_host_skill_id;
 
 const AGENTS_SKILLS_DIR: &str = ".agents/skills";
@@ -15,6 +19,16 @@ const MAX_DIRECTORIES_PER_ROOT: usize = 2_000;
 const MAX_ENTRIES_PER_ROOT: usize = 20_000;
 const MAX_SKILLS_PER_SNAPSHOT: usize = 1_000;
 const MAX_DIAGNOSTICS: usize = 2_000;
+const DISCOVERY_CACHE_TTL: Duration = Duration::from_secs(2);
+const MAX_CACHED_WORKSPACES: usize = 32;
+
+#[derive(Clone)]
+struct CachedCatalog {
+    refreshed_at: Instant,
+    catalog: SkillCatalog,
+}
+
+static DISCOVERY_CACHE: OnceLock<Mutex<HashMap<Option<PathBuf>, CachedCatalog>>> = OnceLock::new();
 
 #[derive(Debug)]
 pub(crate) struct DiscoveryRoots {
@@ -47,7 +61,82 @@ pub fn discover_available_skills(workspace_root: &Path) -> Vec<SkillCatalogEntry
 }
 
 pub fn discover_skill_catalog(workspace_root: Option<&Path>) -> SkillCatalog {
-    discover_catalog_with_roots(DiscoveryRoots::standard(workspace_root))
+    let key = workspace_root.map(|root| {
+        fs::canonicalize(root)
+            .unwrap_or_else(|_| root.to_path_buf())
+            .to_path_buf()
+    });
+    let cache = DISCOVERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    {
+        let cache = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = cache.get(&key) {
+            if cached.refreshed_at.elapsed() < DISCOVERY_CACHE_TTL {
+                return cached.catalog.clone();
+            }
+        }
+    }
+
+    let started_at = Instant::now();
+    let mut catalog = discover_catalog_with_roots(DiscoveryRoots::standard(workspace_root));
+    apply_skill_config(workspace_root, &mut catalog);
+    eprintln!(
+        "[SKILLS][discovery] skill_count={} disabled_count={} diagnostic_count={} truncated={} elapsed_ms={}",
+        catalog.skills.len(),
+        catalog.disabled_count,
+        catalog.diagnostics.len(),
+        catalog.truncated,
+        started_at.elapsed().as_millis()
+    );
+
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if cache.len() >= MAX_CACHED_WORKSPACES && !cache.contains_key(&key) {
+        if let Some(oldest) = cache
+            .iter()
+            .min_by_key(|(_, cached)| cached.refreshed_at)
+            .map(|(key, _)| key.clone())
+        {
+            cache.remove(&oldest);
+        }
+    }
+    cache.insert(
+        key,
+        CachedCatalog {
+            refreshed_at: Instant::now(),
+            catalog: catalog.clone(),
+        },
+    );
+    catalog
+}
+
+pub fn invalidate_skill_cache(workspace_root: Option<&Path>) {
+    let Some(cache) = DISCOVERY_CACHE.get() else {
+        return;
+    };
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(workspace_root) = workspace_root {
+        let key = fs::canonicalize(workspace_root)
+            .unwrap_or_else(|_| workspace_root.to_path_buf())
+            .to_path_buf();
+        cache.remove(&Some(key));
+    } else {
+        cache.clear();
+    }
+}
+
+pub fn skill_diagnostics_report(workspace_root: &Path) -> SkillDiagnosticsReport {
+    let catalog = discover_skill_catalog(Some(workspace_root));
+    SkillDiagnosticsReport {
+        skill_count: catalog.skills.len(),
+        disabled_count: catalog.disabled_count,
+        truncated: catalog.truncated,
+        diagnostics: catalog.diagnostics,
+    }
 }
 
 pub fn authorized_skill_directories(workspace_root: &Path) -> Vec<PathBuf> {
@@ -124,6 +213,95 @@ pub(crate) fn discover_catalog_with_roots(roots: DiscoveryRoots) -> SkillCatalog
         .skills
         .sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
     catalog
+}
+
+fn apply_skill_config(workspace_root: Option<&Path>, catalog: &mut SkillCatalog) {
+    let Some(workspace_root) = workspace_root else {
+        return;
+    };
+    let settings = match crate::project_settings::load_project_settings(workspace_root) {
+        Ok(settings) => settings,
+        Err(error) if error == "Settings file does not exist" => return,
+        Err(error) => {
+            push_diagnostic(
+                catalog,
+                &crate::project_settings::get_settings_path(workspace_root),
+                format!("skills configuration could not be loaded: {error}"),
+            );
+            return;
+        }
+    };
+    if settings.skills.config.is_empty() {
+        return;
+    }
+
+    let config_path = crate::project_settings::get_settings_path(workspace_root);
+    let mut disabled_paths = HashSet::new();
+    for rule in settings.skills.config {
+        let matching_paths: Vec<PathBuf> = match (rule.path.as_deref(), rule.name.as_deref()) {
+            (Some(raw_path), None) => {
+                let selector = Path::new(raw_path.trim());
+                if !selector.is_absolute() {
+                    push_diagnostic(
+                        catalog,
+                        &config_path,
+                        "skill path selectors must be absolute".to_string(),
+                    );
+                    continue;
+                }
+                let selector =
+                    fs::canonicalize(selector).unwrap_or_else(|_| selector.to_path_buf());
+                catalog
+                    .skills
+                    .iter()
+                    .filter(|skill| skill.canonical_path == selector)
+                    .map(|skill| skill.canonical_path.clone())
+                    .collect()
+            }
+            (None, Some(name)) if !name.trim().is_empty() => catalog
+                .skills
+                .iter()
+                .filter(|skill| skill.name.as_deref() == Some(name.trim()))
+                .map(|skill| skill.canonical_path.clone())
+                .collect(),
+            (Some(_), Some(_)) => {
+                push_diagnostic(
+                    catalog,
+                    &config_path,
+                    "skill configuration entries must select by path or name, not both".to_string(),
+                );
+                continue;
+            }
+            _ => {
+                push_diagnostic(
+                    catalog,
+                    &config_path,
+                    "skill configuration entries require a non-empty path or name".to_string(),
+                );
+                continue;
+            }
+        };
+
+        if matching_paths.is_empty() {
+            push_diagnostic(
+                catalog,
+                &config_path,
+                "skill configuration selector matched no discovered skills".to_string(),
+            );
+        }
+        for path in matching_paths {
+            if rule.enabled {
+                disabled_paths.remove(&path);
+            } else {
+                disabled_paths.insert(path);
+            }
+        }
+    }
+
+    catalog.disabled_count = disabled_paths.len();
+    catalog
+        .skills
+        .retain(|skill| !disabled_paths.contains(&skill.canonical_path));
 }
 
 fn discover_root(

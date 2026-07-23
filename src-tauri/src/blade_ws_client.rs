@@ -229,6 +229,8 @@ pub struct HostSkillsSnapshot {
     pub schema_version: u32,
     pub digest: String,
     pub truncated: bool,
+    pub diagnostic_count: usize,
+    pub disabled_count: usize,
     pub skills: Vec<HostSkillCatalogEntry>,
 }
 
@@ -239,6 +241,8 @@ impl HostSkillsSnapshot {
             digest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                 .to_string(),
             truncated: false,
+            diagnostic_count: 0,
+            disabled_count: 0,
             skills: Vec::new(),
         }
     }
@@ -1906,6 +1910,8 @@ mod tests {
                 "schema_version": 1,
                 "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
                 "truncated": false,
+                "diagnostic_count": 0,
+                "disabled_count": 0,
                 "skills": [],
             })
         );

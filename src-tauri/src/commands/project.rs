@@ -103,9 +103,31 @@ pub async fn save_project_settings(
     settings: project_settings::ProjectSettings,
 ) -> Result<(), String> {
     let path = std::path::PathBuf::from(project_path);
-    tokio::task::spawn_blocking(move || project_settings::save_project_settings(&path, &settings))
-        .await
-        .map_err(|e| format!("save project settings task failed: {}", e))?
+    tokio::task::spawn_blocking(move || {
+        project_settings::save_project_settings(&path, &settings)?;
+        crate::agent_skills::invalidate_skill_cache(Some(&path));
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("save project settings task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn get_skill_diagnostics(
+    project_path: String,
+) -> Result<crate::agent_skills::SkillDiagnosticsReport, String> {
+    let path = std::path::PathBuf::from(project_path);
+    tokio::task::spawn_blocking(move || {
+        if !path.is_dir() {
+            return Err(format!(
+                "project path does not exist or is not a directory: {}",
+                path.display()
+            ));
+        }
+        Ok(crate::agent_skills::skill_diagnostics_report(&path))
+    })
+    .await
+    .map_err(|e| format!("skill diagnostics task failed: {}", e))?
 }
 
 #[tauri::command]

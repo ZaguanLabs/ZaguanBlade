@@ -42,6 +42,7 @@ interface SettingsState {
         telemetry: boolean;
     };
     editor: {};
+    skills: BackendSettings['skills'];
     configuration: {
         theme: string;
         markdownView: string;
@@ -89,6 +90,9 @@ const defaultSettings: SettingsState = {
         telemetry: false,
     },
     editor: {},
+    skills: {
+        config: [],
+    },
     configuration: {
         theme: 'zaguan-dark',
         markdownView: 'split',
@@ -201,6 +205,7 @@ function backendToFrontend(backend: BackendSettings): Omit<SettingsState, 'accou
             telemetry: backend.privacy.telemetry,
         },
         editor: {},
+        skills: backend.skills ?? { config: [] },
         allowGitIgnoredFiles: backend.allow_gitignored_files,
         autoApproveRunCommands: backend.auto_approve_run_commands,
         warmupContextPrefetch: backend.warmup_context_prefetch ?? true,
@@ -228,6 +233,7 @@ function frontendToBackend(frontend: SettingsState): BackendSettings {
             telemetry: false,
         },
         editor: {},
+        skills: frontend.skills,
         allow_gitignored_files: frontend.allowGitIgnoredFiles || false,
         auto_approve_run_commands: frontend.autoApproveRunCommands || false,
         warmup_context_prefetch: frontend.warmupContextPrefetch ?? true,

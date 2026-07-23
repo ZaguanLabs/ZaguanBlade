@@ -82,15 +82,24 @@ pub struct LoadedSkill {
     pub note: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SkillDiscoveryDiagnostic {
     pub path: String,
     pub message: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct SkillCatalog {
     pub skills: Vec<SkillCatalogEntry>,
     pub diagnostics: Vec<SkillDiscoveryDiagnostic>,
     pub truncated: bool,
+    pub disabled_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SkillDiagnosticsReport {
+    pub skill_count: usize,
+    pub disabled_count: usize,
+    pub truncated: bool,
+    pub diagnostics: Vec<SkillDiscoveryDiagnostic>,
 }

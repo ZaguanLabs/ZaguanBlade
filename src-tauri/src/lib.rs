@@ -235,6 +235,7 @@ pub fn run() {
             commands::project::get_project_id,
             commands::project::load_project_settings,
             commands::project::save_project_settings,
+            commands::project::get_skill_diagnostics,
             commands::project::init_zblade_directory,
             commands::project::has_zblade_directory,
             // Screenshot

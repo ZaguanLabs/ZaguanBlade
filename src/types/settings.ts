@@ -40,6 +40,13 @@ export interface BackendSettings {
         telemetry: boolean;
     };
     editor: {};
+    skills: {
+        config: Array<{
+            path?: string;
+            name?: string;
+            enabled: boolean;
+        }>;
+    };
     allow_gitignored_files: boolean;
     auto_approve_run_commands: boolean;
     warmup_context_prefetch: boolean;

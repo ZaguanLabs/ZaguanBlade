@@ -22,6 +22,8 @@ pub(crate) fn snapshot_from_catalog(catalog: &SkillCatalog) -> HostSkillsSnapsho
         schema_version: 1,
         digest,
         truncated: catalog.truncated,
+        diagnostic_count: catalog.diagnostics.len(),
+        disabled_count: catalog.disabled_count,
         skills,
     }
 }
@@ -111,5 +113,28 @@ mod tests {
         );
         assert!(snapshot.skills.is_empty());
         assert!(!snapshot.truncated);
+        assert_eq!(snapshot.diagnostic_count, 0);
+        assert_eq!(snapshot.disabled_count, 0);
+    }
+
+    #[test]
+    fn snapshot_surfaces_diagnostic_and_disabled_counts_without_messages() {
+        let catalog = SkillCatalog {
+            diagnostics: vec![super::super::model::SkillDiscoveryDiagnostic {
+                path: "/private/skill/SKILL.md".to_string(),
+                message: "invalid skill".to_string(),
+            }],
+            disabled_count: 2,
+            truncated: true,
+            ..Default::default()
+        };
+
+        let encoded = serde_json::to_value(snapshot_from_catalog(&catalog)).unwrap();
+
+        assert_eq!(encoded["diagnostic_count"], 1);
+        assert_eq!(encoded["disabled_count"], 2);
+        assert_eq!(encoded["truncated"], true);
+        assert!(!encoded.to_string().contains("/private/skill"));
+        assert!(!encoded.to_string().contains("invalid skill"));
     }
 }

@@ -117,6 +117,21 @@ impl Default for EditorSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct SkillsSettings {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config: Vec<SkillConfig>,
+}
+
 /// Per-project settings stored in .zblade/config/settings.json
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectSettings {
@@ -128,6 +143,8 @@ pub struct ProjectSettings {
     pub privacy: PrivacySettings,
     #[serde(default)]
     pub editor: EditorSettings,
+    #[serde(default)]
+    pub skills: SkillsSettings,
     /// Whether to allow access to files matched by .gitignore patterns
     /// Default: false (respect .gitignore for security)
     #[serde(default = "default_false")]
@@ -150,6 +167,7 @@ impl Default for ProjectSettings {
             context: ContextSettings::default(),
             privacy: PrivacySettings::default(),
             editor: EditorSettings::default(),
+            skills: SkillsSettings::default(),
             allow_gitignored_files: false,
             auto_approve_run_commands: false,
             warmup_context_prefetch: true,

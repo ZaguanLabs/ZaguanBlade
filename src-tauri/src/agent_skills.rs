@@ -7,11 +7,13 @@ mod snapshot;
 
 pub use discovery::{
     authorized_skill_directories, discover_available_skills, discover_skill_catalog,
-    discover_workspace_skills, is_path_in_authorized_skill_directory,
+    discover_workspace_skills, invalidate_skill_cache, is_path_in_authorized_skill_directory,
+    skill_diagnostics_report,
 };
 pub use loading::{load_skill, load_skill_chunk, load_workspace_skill};
 pub use model::{
-    LoadedSkill, SkillCatalog, SkillCatalogEntry, SkillDiscoveryDiagnostic, SkillSource,
+    LoadedSkill, SkillCatalog, SkillCatalogEntry, SkillDiagnosticsReport, SkillDiscoveryDiagnostic,
+    SkillSource,
 };
 pub use search::list_skills;
 pub use snapshot::build_host_skills_snapshot;
@@ -307,6 +309,112 @@ mod tests {
         assert!(SKILL_DISCOVERY_PROMPT.contains("load_skill"));
         assert!(!SKILL_DISCOVERY_PROMPT.contains("Helpful workflow"));
         assert!(SKILL_DISCOVERY_PROMPT.split_whitespace().count() <= 60);
+    }
+
+    #[test]
+    fn skill_config_name_disable_can_be_overridden_by_path() {
+        let workspace = TempDir::new().unwrap();
+        let skill_path = workspace.path().join(".agents/skills/example/SKILL.md");
+        write(
+            &skill_path,
+            &skill("example", "Helpful workflow", "Instructions."),
+        );
+        let mut settings = crate::project_settings::ProjectSettings::default();
+        settings.skills.config = vec![
+            crate::project_settings::SkillConfig {
+                path: None,
+                name: Some("example".to_string()),
+                enabled: false,
+            },
+            crate::project_settings::SkillConfig {
+                path: Some(
+                    fs::canonicalize(&skill_path)
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string(),
+                ),
+                name: None,
+                enabled: true,
+            },
+        ];
+        crate::project_settings::save_project_settings(workspace.path(), &settings).unwrap();
+        invalidate_skill_cache(Some(workspace.path()));
+
+        let catalog = discover_skill_catalog(Some(workspace.path()));
+
+        assert!(catalog
+            .skills
+            .iter()
+            .any(|entry| entry.name.as_deref() == Some("example")));
+        assert_eq!(catalog.disabled_count, 0);
+    }
+
+    #[test]
+    fn skill_config_disables_by_name_and_reports_invalid_rules() {
+        let workspace = TempDir::new().unwrap();
+        write(
+            &workspace.path().join(".agents/skills/example/SKILL.md"),
+            &skill("example", "Helpful workflow", "Instructions."),
+        );
+        let mut settings = crate::project_settings::ProjectSettings::default();
+        settings.skills.config = vec![
+            crate::project_settings::SkillConfig {
+                path: None,
+                name: Some("example".to_string()),
+                enabled: false,
+            },
+            crate::project_settings::SkillConfig {
+                path: Some("/tmp/example/SKILL.md".to_string()),
+                name: Some("example".to_string()),
+                enabled: false,
+            },
+        ];
+        crate::project_settings::save_project_settings(workspace.path(), &settings).unwrap();
+        invalidate_skill_cache(Some(workspace.path()));
+
+        let report = skill_diagnostics_report(workspace.path());
+
+        assert!(!discover_skill_catalog(Some(workspace.path()))
+            .skills
+            .iter()
+            .any(|entry| entry.name.as_deref() == Some("example")));
+        assert_eq!(report.disabled_count, 1);
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("not both")));
+    }
+
+    #[test]
+    fn explicit_invalidation_refreshes_the_throttled_catalog_cache() {
+        let workspace = TempDir::new().unwrap();
+        write(
+            &workspace.path().join(".agents/skills/first/SKILL.md"),
+            &skill("first", "First workflow", "Instructions."),
+        );
+        invalidate_skill_cache(Some(workspace.path()));
+        let first = discover_skill_catalog(Some(workspace.path()));
+        assert!(first
+            .skills
+            .iter()
+            .any(|entry| entry.name.as_deref() == Some("first")));
+
+        write(
+            &workspace.path().join(".agents/skills/second/SKILL.md"),
+            &skill("second", "Second workflow", "Instructions."),
+        );
+        let cached = discover_skill_catalog(Some(workspace.path()));
+        assert!(!cached
+            .skills
+            .iter()
+            .any(|entry| entry.name.as_deref() == Some("second")));
+
+        invalidate_skill_cache(Some(workspace.path()));
+        let refreshed = discover_skill_catalog(Some(workspace.path()));
+        assert!(refreshed
+            .skills
+            .iter()
+            .any(|entry| entry.name.as_deref() == Some("second")));
     }
 
     #[test]
