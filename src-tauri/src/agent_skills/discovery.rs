@@ -156,6 +156,7 @@ pub fn is_path_in_authorized_skill_directory(workspace_root: &Path, path: &Path)
         .any(|directory| path.starts_with(directory))
 }
 
+#[cfg(test)]
 pub(crate) fn discover_available_skills_with_global_root(
     workspace_root: &Path,
     global_skills_root: &Path,
@@ -168,6 +169,7 @@ pub(crate) fn discover_available_skills_with_global_root(
     .skills
 }
 
+#[cfg(test)]
 pub(crate) fn discover_global_skills_from_root(skills_root: &Path) -> Vec<SkillCatalogEntry> {
     discover_catalog_with_roots(DiscoveryRoots {
         workspace: None,

@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::Path;
 
-use super::discovery::{discover_available_skills, discover_available_skills_with_global_root};
+use super::discovery::discover_available_skills;
+#[cfg(test)]
+use super::discovery::discover_available_skills_with_global_root;
 use super::model::{LoadedSkill, SkillCatalogEntry};
 
 const MAX_SKILL_FILE_BYTES: usize = 40 * 1024;
@@ -24,6 +26,7 @@ pub fn load_skill_chunk(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn load_skill_with_global_root(
     workspace_root: &Path,
     global_skills_root: &Path,
