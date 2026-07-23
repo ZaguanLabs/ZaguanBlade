@@ -774,6 +774,7 @@ pub struct ContextProjectInfo {
     pub agent_instruction_includes: Vec<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub agent_instructions_truncated: bool,
+    /// Deprecated compatibility field. New clients use list_skills/load_skill.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub local_skills: Vec<ContextSkillSummary>,
 }

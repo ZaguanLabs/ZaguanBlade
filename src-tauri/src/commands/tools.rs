@@ -115,9 +115,14 @@ fn resolve_command_dir(
                 e
             )
         })?;
-        if !candidate.starts_with(&ws) {
+        if !candidate.starts_with(&ws)
+            && !crate::agent_skills::is_path_in_authorized_skill_directory(
+                workspace_root,
+                &candidate,
+            )
+        {
             return Err(format!(
-                "cwd is outside workspace (workspace: {}, cwd: {})",
+                "cwd is outside the workspace and discovered skill directories (workspace: {}, cwd: {})",
                 ws.display(),
                 candidate.display()
             ));

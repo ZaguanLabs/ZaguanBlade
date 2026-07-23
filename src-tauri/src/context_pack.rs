@@ -6,8 +6,8 @@ use crate::blade_protocol::{
     ContextFileEnrichment, ContextFileResult, ContextImpactFile, ContextImpactSummary,
     ContextImpactTargetSymbol, ContextMemoryItem, ContextPackConfidence, ContextPackError,
     ContextPackPayload, ContextProjectInfo, ContextRange, ContextRelatedFile,
-    ContextSemanticAnchorSummary, ContextSkillSummary, ContextSymbolSummary, ContextWorkspace,
-    ProjectDirectorySummary, ProjectLanguageSummary,
+    ContextSemanticAnchorSummary, ContextSymbolSummary, ContextWorkspace, ProjectDirectorySummary,
+    ProjectLanguageSummary,
 };
 use crate::file_lang::{detect_language, is_code_file};
 use crate::language_service::{IndexHealthSnapshot, IndexHealthStatus, LanguageService};
@@ -393,17 +393,9 @@ fn build_project_context(
     agent_candidate_paths.extend(candidate_paths.iter().cloned());
     let agent_instructions =
         crate::agent_instructions::load_agent_instructions(workspace_root, &agent_candidate_paths);
-    let local_skills = crate::agent_skills::discover_available_skills(workspace_root)
-        .into_iter()
-        .map(|skill| ContextSkillSummary {
-            skill_id: skill.skill_id,
-            source: format!("{:?}", skill.source).to_ascii_lowercase(),
-            name: skill.name,
-            description: skill.description,
-            triggers: skill.triggers,
-            short_description: skill.short_description,
-        })
-        .collect();
+    // Kept empty for one wire-compatible release. Skill discovery now uses
+    // list_skills/load_skill rather than repeatedly embedding the catalog.
+    let local_skills = Vec::new();
 
     ContextProjectInfo {
         project_index_min,

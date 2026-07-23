@@ -6,7 +6,7 @@ use change_parser::parse_change_args;
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 // use eframe::egui; // Removed for Tauri migration
@@ -82,7 +82,10 @@ pub struct PendingCommand {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_run_command_args, run_command_spec_in_workspace, CommandSpec};
+    use super::{
+        parse_run_command_args, resolve_authorized_command_directory,
+        run_command_spec_in_workspace, CommandSpec,
+    };
     use crate::protocol::{ToolCall, ToolFunction};
     use crate::tool_execution::ToolExecutionContext;
     use tempfile::tempdir;
@@ -158,6 +161,99 @@ mod tests {
         assert!(result.content.contains("TAIL_MARKER"));
         assert!(!result.content.contains("...truncated..."));
         assert!(result.content.len() > 60_000);
+    }
+
+    #[test]
+    fn command_cwd_rejects_unrelated_external_directory() {
+        let workspace = tempdir().unwrap();
+        let external = tempdir().unwrap();
+
+        assert!(
+            resolve_authorized_command_directory(
+                workspace.path(),
+                external.path().to_str(),
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_cwd_accepts_discovered_linked_skill_directory() {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempdir().unwrap();
+        let external = tempdir().unwrap();
+        let skill_dir = external.path().join("sample");
+        fs::create_dir_all(skill_dir.join("scripts")).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: sample\ndescription: Test workflow\n---\nUse it.",
+        )
+        .unwrap();
+        let skills_root = workspace.path().join(".agents/skills");
+        fs::create_dir_all(&skills_root).unwrap();
+        symlink(&skill_dir, skills_root.join("sample")).unwrap();
+
+        let (_, resolved) = resolve_authorized_command_directory(
+            workspace.path(),
+            skill_dir.join("scripts").to_str(),
+        )
+        .unwrap();
+        assert_eq!(resolved, fs::canonicalize(skill_dir.join("scripts")).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skill_script_command_remains_pending_for_normal_approval() {
+        use std::fs;
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempdir().unwrap();
+        let external = tempdir().unwrap();
+        let skill_dir = external.path().join("sample");
+        let scripts_dir = skill_dir.join("scripts");
+        fs::create_dir_all(&scripts_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: sample\ndescription: Test workflow\n---\nRun scripts/check.sh.",
+        )
+        .unwrap();
+        fs::write(scripts_dir.join("check.sh"), "#!/bin/sh\nexit 0\n").unwrap();
+        let skills_root = workspace.path().join(".agents/skills");
+        fs::create_dir_all(&skills_root).unwrap();
+        symlink(&skill_dir, skills_root.join("sample")).unwrap();
+
+        let context = ToolExecutionContext::<tauri::Wry>::new(
+            Some(workspace.path().to_string_lossy().to_string()),
+            None,
+            Vec::new(),
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let mut workflow = crate::ai_workflow::AiWorkflow::new();
+        let arguments = serde_json::json!({
+            "command": "./scripts/check.sh",
+            "cwd": skill_dir,
+        })
+        .to_string();
+
+        let batch = workflow
+            .handle_tool_calls(
+                workspace.path(),
+                vec![tool_call("skill-script", "run_command", &arguments)],
+                None,
+                &context,
+            )
+            .expect("command should await approval");
+
+        assert_eq!(batch.commands.len(), 1);
+        assert!(batch.file_results.is_empty());
     }
 
     #[test]
@@ -518,6 +614,14 @@ impl AiWorkflow {
                             parsed.cwd.as_deref(),
                         ) {
                             file_results.push((call.clone(), tools::ToolResult::err(err)));
+                            continue;
+                        }
+                        if let Err(error) = resolve_authorized_command_directory(
+                            workspace_root,
+                            parsed.cwd.as_deref(),
+                        )
+                        {
+                            file_results.push((call.clone(), tools::ToolResult::err(error)));
                             continue;
                         }
                         commands.push(PendingCommand {
@@ -1278,62 +1382,57 @@ fn should_block_irrelevant_language_scan(
     None
 }
 
+fn resolve_authorized_command_directory(
+    workspace_root: &Path,
+    cwd: Option<&str>,
+) -> Result<(PathBuf, PathBuf), String> {
+    let workspace = fs::canonicalize(workspace_root)
+        .map_err(|error| format!("cannot canonicalize workspace: {error}"))?;
+    let Some(cwd) = cwd else {
+        return Ok((workspace.clone(), workspace));
+    };
+
+    let requested = Path::new(cwd);
+    let candidate = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        workspace.join(requested)
+    };
+    let candidate = fs::canonicalize(&candidate).map_err(|error| {
+        format!(
+            "cwd does not exist or is inaccessible: {} ({error})",
+            candidate.display()
+        )
+    })?;
+    if candidate.starts_with(&workspace)
+        || crate::agent_skills::is_path_in_authorized_skill_directory(workspace_root, &candidate)
+    {
+        return Ok((workspace, candidate));
+    }
+
+    Err(format!(
+        "cwd is outside the workspace and discovered skill directories (workspace: {}, cwd: {})",
+        workspace.display(),
+        candidate.display()
+    ))
+}
+
 #[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 pub fn run_command_spec_in_workspace(
     workspace_root: &Path,
     command_spec: &CommandSpec,
     cwd: Option<&str>,
 ) -> tools::ToolResult {
-    let ws = match fs::canonicalize(workspace_root) {
-        Ok(p) => p,
-        Err(e) => {
+    let (_, dir) = match resolve_authorized_command_directory(workspace_root, cwd) {
+        Ok(paths) => paths,
+        Err(error) => {
             return tools::ToolResult {
                 success: false,
                 content: String::new(),
-                error: Some(e.to_string()),
+                error: Some(error),
                 skipped: false,
             };
         }
-    };
-
-    let dir = if let Some(cwd) = cwd {
-        let p = Path::new(cwd);
-        // Handle relative paths by joining with workspace root
-        let candidate = if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            ws.join(p)
-        };
-        let candidate = match fs::canonicalize(&candidate) {
-            Ok(p) => p,
-            Err(e) => {
-                return tools::ToolResult {
-                    success: false,
-                    content: String::new(),
-                    error: Some(format!(
-                        "cwd does not exist or is inaccessible: {} ({})",
-                        candidate.display(),
-                        e
-                    )),
-                    skipped: false,
-                };
-            }
-        };
-        if !candidate.starts_with(&ws) {
-            return tools::ToolResult {
-                success: false,
-                content: String::new(),
-                error: Some(format!(
-                    "cwd is outside workspace (workspace: {}, cwd: {})",
-                    ws.display(),
-                    candidate.display()
-                )),
-                skipped: false,
-            };
-        }
-        candidate
-    } else {
-        ws.clone()
     };
 
     let output = if !command_spec.shell {

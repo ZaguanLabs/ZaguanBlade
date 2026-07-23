@@ -353,6 +353,24 @@ pub fn get_tool_definitions() -> Vec<Value> {
         }),
         serde_json::json!({
             "type": "function",
+            "name": "list_skills",
+            "function": {
+                "name": "list_skills",
+                "description": "Find specialized workflows relevant to a focused task.",
+                "strict": false,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Focused task or workflow" },
+                        "limit": { "type": "integer", "description": "Optional result count, maximum 10", "minimum": 1, "maximum": 10 }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "function",
             "name": "load_skill",
             "function": {
                 "name": "load_skill",
@@ -806,7 +824,25 @@ mod tests {
         assert!(!names.contains(&"get_project_index_overview"));
         assert!(!names.contains(&"get_project_index_chunk"));
         assert!(names.contains(&"fast_context"));
+        assert!(names.contains(&"list_skills"));
         assert!(names.contains(&"load_skill"));
+    }
+
+    #[test]
+    fn skill_tool_schemas_remain_token_bounded() {
+        let defs = get_tool_definitions();
+        for tool_name in ["list_skills", "load_skill"] {
+            let definition = defs
+                .iter()
+                .find(|value| value.get("name").and_then(|v| v.as_str()) == Some(tool_name))
+                .expect("skill tool definition");
+            let encoded = serde_json::to_string(&definition["function"]).unwrap();
+            assert!(
+                encoded.len() <= 700,
+                "{tool_name} schema grew beyond the conservative 150-token byte proxy: {} bytes",
+                encoded.len()
+            );
+        }
     }
 
     #[test]

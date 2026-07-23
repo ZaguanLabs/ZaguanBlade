@@ -204,6 +204,7 @@ fn is_batch_read_only_tool(tool_name: &str) -> bool {
         | "symbol_outline"
         | "read_file"
         | "read_file_range"
+        | "list_skills"
         | "load_skill"
         | "read_many_files"
         | "grep_search"
@@ -589,9 +590,9 @@ mod tests {
         symbol_outline_diagnostics, symbol_reference_resolution_json, symbol_reference_to_json,
         symbol_search_connection_json, symbol_to_json, symbol_to_json_full,
         tool_result_byte_budget, transitive_impact_score, truncate_large_content,
-        truncate_large_content_to, EditorState, PatchHunk, SemanticPatchWrite, ToolResult,
-        GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS, GREP_TIMEOUT_MIN_MS,
-        MAX_DISCOVERY_RESULT_BYTES, MAX_TOOL_RESULT_BYTES,
+        truncate_large_content_to, validate_path_under_skill_directories, EditorState, PatchHunk,
+        SemanticPatchWrite, ToolResult, GREP_TIMEOUT_DEFAULT_MS, GREP_TIMEOUT_MAX_MS,
+        GREP_TIMEOUT_MIN_MS, MAX_DISCOVERY_RESULT_BYTES, MAX_TOOL_RESULT_BYTES,
     };
     use crate::semantic_patch::{InsertPosition, PatchOperation, PatchTarget, SemanticPatch};
     use crate::symbol_index::SymbolStore;
@@ -614,6 +615,43 @@ mod tests {
         assert_eq!(normalize_session_input("echo ^Cfoo\n"), "echo ^Cfoo\n");
         assert_eq!(normalize_session_input("hello\n"), "hello\n");
         assert_eq!(normalize_session_input(""), "");
+    }
+
+    #[test]
+    fn skill_resource_reads_are_bounded_to_discovered_directories() {
+        let root = tempdir().unwrap();
+        let skill_dir = root.path().join("skill");
+        let sibling_dir = root.path().join("skill-other");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::create_dir_all(&sibling_dir).unwrap();
+        let resource = skill_dir.join("reference.md");
+        let sibling = sibling_dir.join("secret.md");
+        fs::write(&resource, "allowed").unwrap();
+        fs::write(&sibling, "denied").unwrap();
+
+        let authorized = vec![fs::canonicalize(&skill_dir).unwrap()];
+        assert_eq!(
+            validate_path_under_skill_directories(&resource, &authorized).unwrap(),
+            fs::canonicalize(&resource).unwrap()
+        );
+        assert!(validate_path_under_skill_directories(&sibling, &authorized).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skill_resource_reads_reject_symlink_escapes() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().unwrap();
+        let skill_dir = root.path().join("skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        let secret = root.path().join("secret.md");
+        fs::write(&secret, "denied").unwrap();
+        let link = skill_dir.join("reference.md");
+        symlink(&secret, &link).unwrap();
+
+        let authorized = vec![fs::canonicalize(&skill_dir).unwrap()];
+        assert!(validate_path_under_skill_directories(&link, &authorized).is_err());
     }
 
     fn test_symbol(
@@ -2321,6 +2359,68 @@ mod tests {
     }
 
     #[test]
+    fn list_skills_returns_loadable_catalog_entries() {
+        let workspace = tempdir().expect("tempdir");
+        let skill_path = workspace.path().join(".agents/skills/review/SKILL.md");
+        fs::create_dir_all(skill_path.parent().expect("skill path parent")).unwrap();
+        fs::write(
+            skill_path,
+            "---\nname: review\ndescription: Review Rust changes carefully\n---\nReview the diff.",
+        )
+        .unwrap();
+
+        let listed = execute_tool(
+            workspace.path(),
+            "list_skills",
+            r#"{"query":"Rust review"}"#,
+        );
+        assert!(listed.success, "list_skills should succeed");
+        let payload: serde_json::Value =
+            serde_json::from_str(&listed.content).expect("list_skills json output");
+        let skill_id = payload["skills"][0]["skill_id"]
+            .as_str()
+            .expect("listed skill id");
+
+        let loaded = execute_tool(
+            workspace.path(),
+            "load_skill",
+            &format!(r#"{{"skill_id":"{skill_id}"}}"#),
+        );
+        assert!(loaded.success, "listed skill should load");
+        assert!(loaded.content.contains("Review the diff."));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_file_accepts_a_resource_beneath_a_discovered_linked_skill() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempdir().unwrap();
+        let external = tempdir().unwrap();
+        let skill_dir = external.path().join("sample");
+        let reference = skill_dir.join("references/guide.md");
+        fs::create_dir_all(reference.parent().unwrap()).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: sample\ndescription: Test workflow\n---\nRead references/guide.md.",
+        )
+        .unwrap();
+        fs::write(&reference, "trusted reference").unwrap();
+        let skills_root = workspace.path().join(".agents/skills");
+        fs::create_dir_all(&skills_root).unwrap();
+        symlink(&skill_dir, skills_root.join("sample")).unwrap();
+
+        let result = execute_tool(
+            workspace.path(),
+            "read_file",
+            &serde_json::json!({ "path": reference }).to_string(),
+        );
+
+        assert!(result.success, "discovered skill resource should be readable");
+        assert!(result.content.contains("trusted reference"));
+    }
+
+    #[test]
     fn read_many_files_includes_metrics_in_summary() {
         let workspace = tempdir().expect("tempdir");
         let file_path = workspace.path().join("example.txt");
@@ -3375,6 +3475,7 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
         "symbol_schema" => symbol_schema_tool(&args, app_handle),
         "symbol_outline" => symbol_outline_tool(workspace_root, &args, app_handle),
         "read_file_range" => read_file_range(workspace_root, &args),
+        "list_skills" => list_skills_tool(workspace_root, &args),
         "load_skill" => load_skill_tool(workspace_root, &args),
         "apply_edit"
         | "apply_patch"
@@ -3506,33 +3607,41 @@ fn validate_path_under_workspace(workspace_root: &Path, path: &Path) -> Result<P
 fn validate_read_path(workspace_root: &Path, path: &Path) -> Result<PathBuf, String> {
     match validate_path_under_workspace(workspace_root, path) {
         Ok(path) => Ok(path),
-        Err(workspace_error) => validate_path_under_global_skills(path).map_err(|global_error| {
-            format!("{workspace_error}; not a readable global skill resource: {global_error}")
-        }),
+        Err(workspace_error) => {
+            let skill_directories =
+                crate::agent_skills::authorized_skill_directories(workspace_root);
+            validate_path_under_skill_directories(path, &skill_directories).map_err(|skill_error| {
+                format!("{workspace_error}; not a readable skill resource: {skill_error}")
+            })
+        }
     }
 }
 
-fn validate_path_under_global_skills(path: &Path) -> Result<PathBuf, String> {
+fn validate_path_under_skill_directories(
+    path: &Path,
+    skill_directories: &[PathBuf],
+) -> Result<PathBuf, String> {
     if !path.is_absolute() {
-        return Err("path is not absolute".to_string());
+        return Err("skill resource paths outside the workspace must be absolute".to_string());
     }
 
-    let global_skills_dir = crate::config::global_skills_dir();
-    let candidate = normalize_path(path);
-    let root = normalize_path(&global_skills_dir);
-
-    if !candidate.exists() {
-        return Err(format!("path does not exist: {}", candidate.display()));
-    }
-    if !candidate.starts_with(&root) {
-        return Err(format!(
-            "path is outside global skills directory (global skills: {}, path: {})",
-            root.display(),
-            candidate.display()
-        ));
+    if !path.exists() {
+        return Err(format!("path does not exist: {}", path.display()));
     }
 
-    Ok(candidate)
+    let candidate = fs::canonicalize(path)
+        .map_err(|error| format!("cannot canonicalize {}: {}", path.display(), error))?;
+    if skill_directories
+        .iter()
+        .any(|directory| candidate.starts_with(directory))
+    {
+        return Ok(candidate);
+    }
+
+    Err(format!(
+        "path is outside every currently discovered skill directory: {}",
+        candidate.display()
+    ))
 }
 
 fn read_file(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
@@ -3564,7 +3673,34 @@ fn load_skill_tool(workspace_root: &Path, args: &HashMap<String, serde_json::Val
     };
 
     match crate::agent_skills::load_skill_chunk(workspace_root, &skill_id, offset) {
-        Ok(skill) => ToolResult::ok(serde_json::to_string_pretty(&skill).unwrap_or_default()),
+        Ok(skill) => {
+            eprintln!(
+                "[SKILLS][load] skill_id={} offset={} returned_bytes={} complete={}",
+                skill.skill_id,
+                skill.offset,
+                skill.instructions.len(),
+                skill.complete
+            );
+            ToolResult::ok(serde_json::to_string_pretty(&skill).unwrap_or_default())
+        }
+        Err(error) => ToolResult::err(error),
+    }
+}
+
+fn list_skills_tool(workspace_root: &Path, args: &HashMap<String, serde_json::Value>) -> ToolResult {
+    let Some(query) = get_string_arg(args, &["query"]) else {
+        return ToolResult::err("missing required arg: query");
+    };
+    let limit = match args.get("limit") {
+        Some(value) => match value.as_u64().and_then(|value| usize::try_from(value).ok()) {
+            Some(limit) => limit,
+            None => return ToolResult::err("limit must be a non-negative integer"),
+        },
+        None => 0,
+    };
+
+    match crate::agent_skills::list_skills(workspace_root, &query, limit) {
+        Ok(result) => ToolResult::ok(result),
         Err(error) => ToolResult::err(error),
     }
 }

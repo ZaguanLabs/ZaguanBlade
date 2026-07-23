@@ -2,68 +2,21 @@ mod discovery;
 mod frontmatter;
 mod loading;
 mod model;
+mod search;
 mod snapshot;
 
-use std::path::Path;
-
-pub use discovery::{discover_available_skills, discover_skill_catalog, discover_workspace_skills};
+pub use discovery::{
+    authorized_skill_directories, discover_available_skills, discover_skill_catalog,
+    discover_workspace_skills, is_path_in_authorized_skill_directory,
+};
 pub use loading::{load_skill, load_skill_chunk, load_workspace_skill};
 pub use model::{
     LoadedSkill, SkillCatalog, SkillCatalogEntry, SkillDiscoveryDiagnostic, SkillSource,
 };
+pub use search::list_skills;
 pub use snapshot::build_host_skills_snapshot;
 
-pub fn render_available_skills_for_prompt(workspace_root: &Path) -> Option<String> {
-    let skills = discover_available_skills(workspace_root);
-    if skills.is_empty() {
-        return None;
-    }
-
-    let mut lines = Vec::new();
-    lines.push("# Available Skills".to_string());
-    lines.push(
-        "Skills are optional task-specific instructions. Use `load_skill` when a skill clearly matches the user's request. Do not load all skills; if no skill applies, continue normally."
-            .to_string(),
-    );
-    lines.push("<available_skills>".to_string());
-    for skill in skills {
-        lines.push("  <skill>".to_string());
-        lines.push(format!(
-            "    <skill_id>{}</skill_id>",
-            escape_xml(&skill.skill_id)
-        ));
-        if let Some(name) = skill.name.as_deref() {
-            lines.push(format!("    <name>{}</name>", escape_xml(name)));
-        }
-        if let Some(description) = skill
-            .short_description
-            .as_deref()
-            .or(skill.description.as_deref())
-        {
-            lines.push(format!(
-                "    <description>{}</description>",
-                escape_xml(description)
-            ));
-        }
-        if !skill.triggers.is_empty() {
-            lines.push(format!(
-                "    <triggers>{}</triggers>",
-                escape_xml(&skill.triggers.join(", "))
-            ));
-        }
-        lines.push("  </skill>".to_string());
-    }
-    lines.push("</available_skills>".to_string());
-    lines.push("After loading a skill, follow its instructions for this turn. Referenced files, scripts, and assets are not automatically loaded.".to_string());
-    Some(lines.join("\n"))
-}
-
-fn escape_xml(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
+pub const SKILL_DISCOVERY_PROMPT: &str = "When a specialized workflow could materially help, call `list_skills` with a focused query, then call `load_skill` only for the selected result. Do not list or load skills for ordinary tasks. Skills do not persist across turns.";
 
 #[cfg(test)]
 mod tests {
@@ -75,6 +28,7 @@ mod tests {
     use super::snapshot::snapshot_from_catalog;
     use super::*;
     use std::fs;
+    use std::path::Path;
     use std::thread;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -342,18 +296,17 @@ mod tests {
     }
 
     #[test]
-    fn prompt_renders_metadata_not_body() {
+    fn prompt_uses_a_stable_token_bounded_discovery_instruction() {
         let dir = TempDir::new().unwrap();
         write(
             &dir.path().join(".agents/skills/example/SKILL.md"),
             &skill("example", "Helpful workflow", "Secret body instructions."),
         );
 
-        let prompt = render_available_skills_for_prompt(dir.path()).unwrap();
-
-        assert!(prompt.contains("host:"));
-        assert!(prompt.contains("Helpful workflow"));
-        assert!(!prompt.contains("Secret body instructions"));
+        assert!(SKILL_DISCOVERY_PROMPT.contains("list_skills"));
+        assert!(SKILL_DISCOVERY_PROMPT.contains("load_skill"));
+        assert!(!SKILL_DISCOVERY_PROMPT.contains("Helpful workflow"));
+        assert!(SKILL_DISCOVERY_PROMPT.split_whitespace().count() <= 60);
     }
 
     #[test]

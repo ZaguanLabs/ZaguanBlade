@@ -50,6 +50,23 @@ pub fn discover_skill_catalog(workspace_root: Option<&Path>) -> SkillCatalog {
     discover_catalog_with_roots(DiscoveryRoots::standard(workspace_root))
 }
 
+pub fn authorized_skill_directories(workspace_root: &Path) -> Vec<PathBuf> {
+    let mut directories: Vec<PathBuf> = discover_skill_catalog(Some(workspace_root))
+        .skills
+        .into_iter()
+        .filter_map(|skill| skill.canonical_path.parent().map(Path::to_path_buf))
+        .collect();
+    directories.sort();
+    directories.dedup();
+    directories
+}
+
+pub fn is_path_in_authorized_skill_directory(workspace_root: &Path, path: &Path) -> bool {
+    authorized_skill_directories(workspace_root)
+        .iter()
+        .any(|directory| path.starts_with(directory))
+}
+
 pub(crate) fn discover_available_skills_with_global_root(
     workspace_root: &Path,
     global_skills_root: &Path,
