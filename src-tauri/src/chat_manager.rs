@@ -945,6 +945,7 @@ impl ChatManager {
             active_file,
             cursor_position,
             open_files: open_file_infos,
+            host_skills: crate::blade_ws_client::HostSkillsSnapshot::empty(),
         };
 
         // Get last user message

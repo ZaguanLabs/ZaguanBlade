@@ -1465,6 +1465,7 @@ Do NOT include analysis, reasoning, explanations, or multiple options."#,
         active_file: None,
         cursor_position: None,
         open_files: Vec::new(),
+        host_skills: crate::blade_ws_client::HostSkillsSnapshot::empty(),
     };
 
     let available_models = load_models(&state).await;

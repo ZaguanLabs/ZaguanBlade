@@ -221,6 +221,41 @@ pub struct WorkspaceInfo {
     pub cursor_position: Option<CursorPosition>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub open_files: Vec<OpenFileInfo>,
+    pub host_skills: HostSkillsSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct HostSkillsSnapshot {
+    pub schema_version: u32,
+    pub digest: String,
+    pub truncated: bool,
+    pub skills: Vec<HostSkillCatalogEntry>,
+}
+
+impl HostSkillsSnapshot {
+    pub fn empty() -> Self {
+        Self {
+            schema_version: 1,
+            digest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                .to_string(),
+            truncated: false,
+            skills: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct HostSkillCatalogEntry {
+    pub skill_id: String,
+    pub name: String,
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub short_description: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<String>,
+    pub scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_locator: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -635,6 +670,7 @@ impl BladeWsClient {
                 "background_commands".to_string(),
                 serde_json::Value::Bool(true),
             );
+            capabilities.insert("host_skills_v1".to_string(), serde_json::Value::Bool(true));
 
             let auth_msg = WsBaseMessage {
                 id: "auth-1".to_string(),
@@ -1859,6 +1895,21 @@ impl BladeWsClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_host_skills_snapshot_serializes_for_protocol_v1() {
+        let serialized = serde_json::to_value(HostSkillsSnapshot::empty()).unwrap();
+
+        assert_eq!(
+            serialized,
+            serde_json::json!({
+                "schema_version": 1,
+                "digest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "truncated": false,
+                "skills": [],
+            })
+        );
+    }
 
     #[test]
     fn auth_rejection_detects_401_and_403_but_not_other_errors() {
