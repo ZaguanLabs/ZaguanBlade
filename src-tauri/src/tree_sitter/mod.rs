@@ -21,6 +21,6 @@ pub(crate) use symbol::{
     extract_symbols_with_facts, stable_symbol_id,
 };
 pub use symbol::{
-    extract_symbol_relationships, extract_symbols, Position, Range, Symbol, SymbolExtractor,
-    SymbolRelationship, SymbolRelationshipType, SymbolType,
+    call_form, extract_symbol_relationships, extract_symbols, Position, Range, Symbol,
+    SymbolExtractor, SymbolRelationship, SymbolRelationshipType, SymbolType, unresolved_reason,
 };

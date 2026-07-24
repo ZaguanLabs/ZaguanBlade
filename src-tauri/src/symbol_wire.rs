@@ -88,6 +88,27 @@ pub(crate) struct WireRelationshipEdge {
     pub effective_confidence: Option<f32>,
     pub observation: serde_json::Value,
     pub resolution: serde_json::Value,
+    /// Qualified Rust call: byte offset of the call target for exact call-site
+    /// identity. Omitted when the observation has no byte offset (non-Rust or
+    /// legacy rows).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub byte_offset: Option<u32>,
+    /// Qualified Rust call: normalized qualifier segments before the terminal
+    /// name (e.g. `["crate", "store", "SymbolStore"]`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qualifier_segments: Option<Vec<String>>,
+    /// Qualified Rust call: syntactic call form — `bare`, `receiver`,
+    /// `associated`, `self_path`, `crate_path`, `module_path`, or `ufcs`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_form: Option<String>,
+    /// Qualified Rust call: human-readable observed target reconstructed from
+    /// qualifier segments + terminal (e.g. `crate::store::SymbolStore::new`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed_qualified_target: Option<String>,
+    /// Qualified Rust call: stable unresolved reason category when no target
+    /// was assigned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unresolved_reason: Option<String>,
 }
 
 pub(crate) const fn model_line(zero_based_line: u32) -> u32 {

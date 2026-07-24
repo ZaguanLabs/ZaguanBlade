@@ -1,0 +1,10 @@
+[package]
+name = "qualified-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+core_alias = { package = "store-core", path = "../store-core" }
+
+[build-dependencies]
+core_alias = { package = "store-core", path = "../store-core" }

@@ -169,6 +169,11 @@ WHERE target_symbol_id IS NULL
   AND target_name != ''
   AND NOT (
         relationship_type = 'call'
+        AND lower(source_file_path) GLOB '*.rs'
+        AND metadata_json LIKE '%"qualifier":%'
+      )
+  AND NOT (
+        relationship_type = 'call'
         AND (
             lower(source_file_path) GLOB '*.ts'
             OR lower(source_file_path) GLOB '*.tsx'
@@ -215,6 +220,11 @@ SET target_symbol_id = (
 WHERE target_symbol_id IS NULL
   AND relationship_type != 'import'
   AND target_name != ''
+  AND NOT (
+        relationship_type = 'call'
+        AND lower(source_file_path) GLOB '*.rs'
+        AND metadata_json LIKE '%"qualifier":%'
+      )
   AND EXISTS (
         SELECT 1
         FROM unique_relationship_targets AS candidate
@@ -553,6 +563,19 @@ fn relationship_metadata_json(relationship: &SymbolRelationship) -> Option<Strin
     if let Some(kind) = relationship.receiver_kind.as_ref() {
         map.insert("receiver".into(), serde_json::json!(kind));
     }
+    // Qualified Rust call observation fields.
+    // `byte_offset` is a real column (part of the PK) — not in metadata_json.
+    if let Some(segments) = relationship.qualifier_segments.as_ref() {
+        if !segments.is_empty() {
+            map.insert("qualifier".into(), serde_json::json!(segments));
+        }
+    }
+    if let Some(form) = relationship.call_form.as_ref() {
+        map.insert("call_form".into(), serde_json::json!(form));
+    }
+    if let Some(reason) = relationship.unresolved_reason.as_ref() {
+        map.insert("unresolved_reason".into(), serde_json::json!(reason));
+    }
     if map.is_empty() {
         None
     } else {
@@ -572,6 +595,56 @@ fn recv_meta_from_metadata(metadata_json: &str) -> Option<(String, bool)> {
         .and_then(|flag| flag.as_bool())
         .unwrap_or(false);
     Some((recv_type, recv_self))
+}
+
+/// Qualified Rust call observation fields deserialized from `metadata_json`.
+/// Fields that are absent or malformed default to `None`.
+struct QualifiedCallMeta {
+    byte_offset: Option<u32>,
+    qualifier_segments: Option<Vec<String>>,
+    call_form: Option<String>,
+    unresolved_reason: Option<String>,
+}
+
+fn qualified_call_meta_from_metadata(metadata_json: Option<&str>) -> QualifiedCallMeta {
+    let Some(json) = metadata_json else {
+        return QualifiedCallMeta {
+            byte_offset: None,
+            qualifier_segments: None,
+            call_form: None,
+            unresolved_reason: None,
+        };
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return QualifiedCallMeta {
+            byte_offset: None,
+            qualifier_segments: None,
+            call_form: None,
+            unresolved_reason: None,
+        };
+    };
+    QualifiedCallMeta {
+        byte_offset: value
+            .get("byte_offset")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
+        qualifier_segments: value
+            .get("qualifier")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            }),
+        call_form: value
+            .get("call_form")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        unresolved_reason: value
+            .get("unresolved_reason")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+    }
 }
 
 /// M5.1b: class-like symbol kinds whose methods participate in receiver-type
@@ -1248,6 +1321,32 @@ pub struct SymbolReference {
     pub receiver_is_self: bool,
     pub import_path: Option<String>,
     pub imported_name: Option<String>,
+    /// Qualified Rust call observation: byte offset for exact call-site identity.
+    pub byte_offset: Option<u32>,
+    /// Qualified Rust call observation: normalized qualifier segments.
+    pub qualifier_segments: Option<Vec<String>>,
+    /// Qualified Rust call observation: syntactic call form.
+    pub call_form: Option<String>,
+    /// Qualified Rust call observation: stable unresolved reason category.
+    pub unresolved_reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RustQualifiedCallRecord {
+    pub row_id: i64,
+    pub source_symbol_id: String,
+    pub target_name: String,
+    pub qualifier_segments: Vec<String>,
+    pub call_form: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RustQualifiedCallUpdate {
+    pub row_id: i64,
+    pub target_symbol_id: Option<String>,
+    pub resolution_strategy: Option<&'static str>,
+    pub confidence: Option<f32>,
+    pub unresolved_reason: &'static str,
 }
 
 struct StoredRelationshipReference {
@@ -1256,6 +1355,7 @@ struct StoredRelationshipReference {
     target_name: String,
     target_symbol_id: Option<String>,
     line: u32,
+    byte_offset: u32,
     resolution_strategy: Option<String>,
     resolution_confidence: Option<f32>,
     metadata_json: Option<String>,
@@ -1695,7 +1795,8 @@ impl SymbolStore {
                 target_symbol_id TEXT,
                 relationship_type TEXT NOT NULL,
                 line INTEGER NOT NULL,
-                PRIMARY KEY (source_symbol_id, target_name, relationship_type, line)
+                byte_offset INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (source_symbol_id, target_name, relationship_type, line, byte_offset)
             );
 
 
@@ -1745,6 +1846,7 @@ impl SymbolStore {
         )?;
         ensure_column(&conn, "symbols", "content_hash", "TEXT NOT NULL DEFAULT ''")?;
         ensure_column(&conn, "symbol_relationships", "target_symbol_id", "TEXT")?;
+        ensure_column(&conn, "symbol_relationships", "byte_offset", "INTEGER NOT NULL DEFAULT 0")?;
         ensure_column(&conn, "indexed_files", "file_size", "INTEGER")?;
         ensure_column(&conn, "indexed_files", "line_count", "INTEGER")?;
         ensure_column(&conn, "indexed_files", "modified_at", "INTEGER")?;
@@ -2130,8 +2232,8 @@ impl SymbolStore {
             tx.execute(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
-                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, import_path, imported_name, resolution_strategy, confidence, metadata_json)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, byte_offset, import_path, imported_name, resolution_strategy, confidence, metadata_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                 "#,
                 params![
                     &relationship.source_symbol_id,
@@ -2140,6 +2242,7 @@ impl SymbolStore {
                     relationship.target_symbol_id.as_deref(),
                     relationship.relationship_type.to_string(),
                     relationship.line,
+                    relationship.byte_offset.unwrap_or(0),
                     relationship.import_path.as_deref(),
                     relationship.imported_name.as_deref(),
                     relationship.resolution_strategy.as_deref(),
@@ -2248,8 +2351,8 @@ impl SymbolStore {
             tx.execute(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
-                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, import_path, imported_name, resolution_strategy, confidence, metadata_json)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, byte_offset, import_path, imported_name, resolution_strategy, confidence, metadata_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                 "#,
                 params![
                     &relationship.source_symbol_id,
@@ -2258,6 +2361,7 @@ impl SymbolStore {
                     relationship.target_symbol_id.as_deref(),
                     relationship.relationship_type.to_string(),
                     relationship.line,
+                    relationship.byte_offset.unwrap_or(0),
                     relationship.import_path.as_deref(),
                     relationship.imported_name.as_deref(),
                     relationship.resolution_strategy.as_deref(),
@@ -2389,8 +2493,8 @@ impl SymbolStore {
             let mut insert_relationship = tx.prepare_cached(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
-                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, import_path, imported_name, resolution_strategy, confidence, metadata_json)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, byte_offset, import_path, imported_name, resolution_strategy, confidence, metadata_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                 "#,
             )?;
 
@@ -2403,6 +2507,7 @@ impl SymbolStore {
                         relationship.target_symbol_id.as_deref(),
                         relationship.relationship_type.to_string(),
                         relationship.line,
+                        relationship.byte_offset.unwrap_or(0),
                         relationship.import_path.as_deref(),
                         relationship.imported_name.as_deref(),
                         relationship.resolution_strategy.as_deref(),
@@ -2463,8 +2568,8 @@ impl SymbolStore {
             let mut insert_relationship = tx.prepare_cached(
                 r#"
                 INSERT OR REPLACE INTO symbol_relationships
-                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, import_path, imported_name, resolution_strategy, confidence, metadata_json)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                (source_symbol_id, source_file_path, target_name, target_symbol_id, relationship_type, line, byte_offset, import_path, imported_name, resolution_strategy, confidence, metadata_json)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                 "#,
             )?;
 
@@ -2477,6 +2582,7 @@ impl SymbolStore {
                         relationship.target_symbol_id.as_deref(),
                         relationship.relationship_type.to_string(),
                         relationship.line,
+                        relationship.byte_offset.unwrap_or(0),
                         relationship.import_path.as_deref(),
                         relationship.imported_name.as_deref(),
                         relationship.resolution_strategy.as_deref(),
@@ -2524,6 +2630,112 @@ impl SymbolStore {
         tx.execute_batch(DROP_UNIQUE_RELATIONSHIP_TARGETS_SQL)?;
         tx.commit()?;
         Ok(import_resolved.saturating_add(resolved))
+    }
+
+    pub(crate) fn rust_qualified_call_records(
+        &self,
+    ) -> Result<Vec<RustQualifiedCallRecord>, SymbolStoreError> {
+        let conn = self.conn.lock().unwrap();
+        let mut statement = conn.prepare(
+            r#"
+            SELECT rowid, source_symbol_id, target_name, metadata_json
+            FROM symbol_relationships
+            WHERE relationship_type = 'call'
+              AND lower(source_file_path) GLOB '*.rs'
+              AND metadata_json LIKE '%"qualifier":%'
+            ORDER BY source_file_path, line, byte_offset
+            "#,
+        )?;
+        let rows = statement.query_map([], |row| {
+            let metadata_json = row.get::<_, Option<String>>(3)?;
+            let metadata = qualified_call_meta_from_metadata(metadata_json.as_deref());
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                metadata,
+            ))
+        })?;
+
+        let rows = rows.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter_map(
+                |(
+                    row_id,
+                    source_symbol_id,
+                    target_name,
+                    metadata,
+                )| {
+                    Some(RustQualifiedCallRecord {
+                        row_id,
+                        source_symbol_id,
+                        target_name,
+                        qualifier_segments: metadata.qualifier_segments?,
+                        call_form: metadata.call_form?,
+                    })
+                },
+            )
+            .collect())
+    }
+
+    pub(crate) fn apply_rust_qualified_call_updates(
+        &self,
+        updates: &[RustQualifiedCallUpdate],
+    ) -> Result<usize, SymbolStoreError> {
+        if updates.is_empty() {
+            return Ok(0);
+        }
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let mut count = 0usize;
+        {
+            let mut read_metadata =
+                tx.prepare_cached("SELECT metadata_json FROM symbol_relationships WHERE rowid = ?1")?;
+            let mut update = tx.prepare_cached(
+                r#"
+                UPDATE symbol_relationships
+                SET target_symbol_id = ?1,
+                    resolution_strategy = ?2,
+                    confidence = ?3,
+                    metadata_json = ?4
+                WHERE rowid = ?5
+                "#,
+            )?;
+
+            for item in updates {
+                let current = read_metadata
+                    .query_row(params![item.row_id], |row| row.get::<_, Option<String>>(0))
+                    .optional()?
+                    .flatten();
+                let mut metadata = current
+                    .as_deref()
+                    .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+                    .and_then(|value| value.as_object().cloned())
+                    .unwrap_or_default();
+                if item.target_symbol_id.is_some() {
+                    metadata.remove("unresolved_reason");
+                } else {
+                    metadata.insert(
+                        "unresolved_reason".to_string(),
+                        serde_json::Value::String(item.unresolved_reason.to_string()),
+                    );
+                }
+                let metadata_json = (!metadata.is_empty())
+                    .then(|| serde_json::Value::Object(metadata).to_string());
+
+                count += update.execute(params![
+                    item.target_symbol_id.as_deref(),
+                    item.resolution_strategy,
+                    item.confidence,
+                    metadata_json,
+                    item.row_id,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(count)
     }
 
     /// Resolve deterministic semantic-anchor targets after their candidate
@@ -3476,7 +3688,7 @@ impl SymbolStore {
                 SELECT s.id, s.name, s.qualified_name, s.symbol_type, s.file_path, s.start_line, s.start_char,
                        s.end_line, s.end_char, s.byte_offset, s.byte_length, s.parent_id, s.docstring, s.signature,
                        s.content_hash, r.relationship_type, r.target_name, r.target_symbol_id, r.line,
-                       r.resolution_strategy, r.confidence, r.metadata_json,
+                       r.byte_offset, r.resolution_strategy, r.confidence, r.metadata_json,
                        r.import_path, r.imported_name
                 FROM symbol_relationships r
                 JOIN symbols s ON s.id = r.source_symbol_id
@@ -3496,11 +3708,12 @@ impl SymbolStore {
                             target_name: row.get(16)?,
                             target_symbol_id: row.get(17)?,
                             line: row.get::<_, i64>(18)? as u32,
-                            resolution_strategy: row.get(19)?,
-                            resolution_confidence: row.get(20)?,
-                            metadata_json: row.get(21)?,
-                            import_path: row.get(22)?,
-                            imported_name: row.get(23)?,
+                            byte_offset: row.get::<_, i64>(19)? as u32,
+                            resolution_strategy: row.get(20)?,
+                            resolution_confidence: row.get(21)?,
+                            metadata_json: row.get(22)?,
+                            import_path: row.get(23)?,
+                            imported_name: row.get(24)?,
                         })
                     },
                 )?
@@ -3525,7 +3738,7 @@ impl SymbolStore {
                 SELECT s.id, s.name, s.qualified_name, s.symbol_type, s.file_path, s.start_line, s.start_char,
                        s.end_line, s.end_char, s.byte_offset, s.byte_length, s.parent_id, s.docstring, s.signature,
                        s.content_hash, r.relationship_type, r.target_name, r.target_symbol_id, r.line,
-                       r.resolution_strategy, r.confidence, r.metadata_json,
+                       r.byte_offset, r.resolution_strategy, r.confidence, r.metadata_json,
                        r.import_path, r.imported_name
                 FROM symbol_relationships r
                 JOIN symbols s ON s.id = r.source_symbol_id
@@ -3549,11 +3762,12 @@ impl SymbolStore {
                             target_name: row.get(16)?,
                             target_symbol_id: row.get(17)?,
                             line: row.get::<_, i64>(18)? as u32,
-                            resolution_strategy: row.get(19)?,
-                            resolution_confidence: row.get(20)?,
-                            metadata_json: row.get(21)?,
-                            import_path: row.get(22)?,
-                            imported_name: row.get(23)?,
+                            byte_offset: row.get::<_, i64>(19)? as u32,
+                            resolution_strategy: row.get(20)?,
+                            resolution_confidence: row.get(21)?,
+                            metadata_json: row.get(22)?,
+                            import_path: row.get(23)?,
+                            imported_name: row.get(24)?,
                         })
                     },
                 )?
@@ -3580,7 +3794,7 @@ impl SymbolStore {
             let mut stmt = conn.prepare(
                 r#"
                 SELECT relationship_type, target_name, target_symbol_id, line,
-                       resolution_strategy, confidence, metadata_json,
+                       byte_offset, resolution_strategy, confidence, metadata_json,
                        import_path, imported_name
                 FROM symbol_relationships
                 WHERE source_symbol_id = ?1 AND relationship_type = ?2
@@ -3603,11 +3817,12 @@ impl SymbolStore {
                             target_name: row.get(1)?,
                             target_symbol_id: row.get(2)?,
                             line: row.get::<_, i64>(3)? as u32,
-                            resolution_strategy: row.get(4)?,
-                            resolution_confidence: row.get(5)?,
-                            metadata_json: row.get(6)?,
-                            import_path: row.get(7)?,
-                            imported_name: row.get(8)?,
+                            byte_offset: row.get::<_, i64>(4)? as u32,
+                            resolution_strategy: row.get(5)?,
+                            resolution_confidence: row.get(6)?,
+                            metadata_json: row.get(7)?,
+                            import_path: row.get(8)?,
+                            imported_name: row.get(9)?,
                         })
                     },
                 )?
@@ -4632,6 +4847,7 @@ impl SymbolStore {
                 .and_then(recv_meta_from_metadata)
                 .map(|(receiver_type, receiver_is_self)| (Some(receiver_type), receiver_is_self))
                 .unwrap_or((None, false));
+            let qmeta = qualified_call_meta_from_metadata(row.metadata_json.as_deref());
 
             references.push(SymbolReference {
                 source_symbol: row.source_symbol,
@@ -4647,6 +4863,17 @@ impl SymbolStore {
                 receiver_is_self,
                 import_path: row.import_path,
                 imported_name: row.imported_name,
+                // byte_offset is a real column (part of the PK), not in
+                // metadata_json. Use the column value; fall back to 0 only
+                // for legacy rows that predate the column.
+                byte_offset: if row.byte_offset > 0 {
+                    Some(row.byte_offset)
+                } else {
+                    qmeta.byte_offset
+                },
+                qualifier_segments: qmeta.qualifier_segments,
+                call_form: qmeta.call_form,
+                unresolved_reason: qmeta.unresolved_reason,
             });
         }
 
@@ -4914,10 +5141,10 @@ fn ensure_column(
 ///
 /// Equal to `MIGRATIONS.len()`. A freshly-migrated database ends with
 /// `PRAGMA user_version` set to this value.
-// Currently only asserted by the migration tests; the next column-adding
-// milestone (M2.4) will read it from production code.
-#[cfg_attr(not(test), allow(dead_code))]
-const LATEST_SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
+pub(crate) const SYMBOL_STORE_SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
+
+#[cfg(test)]
+const LATEST_SCHEMA_VERSION: i64 = SYMBOL_STORE_SCHEMA_VERSION;
 
 /// Ordered, **append-only** schema migrations keyed on `PRAGMA user_version`.
 ///
@@ -4945,6 +5172,7 @@ const MIGRATIONS: &[fn(&Connection) -> Result<(), SymbolStoreError>] = &[
     migration_v3_drop_redundant_relationship_source_index,
     migration_v4_import_binding_provenance,
     migration_v5_expand_symbol_fts,
+    migration_v6_relationship_byte_offset_pk,
 ];
 
 /// Apply every pending migration step, advancing `PRAGMA user_version`.
@@ -4956,6 +5184,12 @@ const MIGRATIONS: &[fn(&Connection) -> Result<(), SymbolStoreError>] = &[
 /// repeatedly (e.g. on every `SymbolStore::new`) is safe.
 fn run_migrations(conn: &Connection) -> Result<(), SymbolStoreError> {
     let mut version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > SYMBOL_STORE_SCHEMA_VERSION {
+        return Err(SymbolStoreError::IncompatibleSchema {
+            found: version,
+            supported: SYMBOL_STORE_SCHEMA_VERSION,
+        });
+    }
 
     while (version as usize) < MIGRATIONS.len() {
         let step = MIGRATIONS[version as usize];
@@ -5090,6 +5324,117 @@ fn migration_v5_expand_symbol_fts(conn: &Connection) -> Result<(), SymbolStoreEr
     Ok(())
 }
 
+/// Migration v6: add `byte_offset` to `symbol_relationships` and make it part
+/// of the PRIMARY KEY so that two distinct call sites on the same line
+/// (same source_symbol_id, target_name, relationship_type, line but different
+/// byte_offset) can coexist. Old databases have a 4-column PK
+/// `(source_symbol_id, target_name, relationship_type, line)`; SQLite cannot
+/// ALTER a PRIMARY KEY in place, so the table is recreated with the new 5-column
+/// PK. Existing rows get `byte_offset = 0` (the column DEFAULT).
+///
+/// Idempotent: if the column already exists with the correct PK (fresh DB
+/// created by `create_schema`), the pragma check skips the recreation.
+fn migration_v6_relationship_byte_offset_pk(conn: &Connection) -> Result<(), SymbolStoreError> {
+    // Check whether byte_offset is already a column. If not, the table predates
+    // this migration and must be recreated with the new PK.
+    let has_byte_offset: bool = {
+        let mut stmt = conn.prepare("PRAGMA table_info(symbol_relationships)")?;
+        let cols: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .collect();
+        cols.iter().any(|c| c == "byte_offset")
+    };
+
+    if has_byte_offset {
+        // Column already present (fresh DB from create_schema). Verify the PK
+        // includes it; if not, still recreate. Check the PK columns.
+        let mut stmt = conn.prepare("PRAGMA table_info(symbol_relationships)")?;
+        let pk_has_byte_offset: bool = stmt
+            .query_map([], |row| {
+                let name: String = row.get(1)?;
+                let pk: i64 = row.get::<_, i64>(5)?;
+                Ok((name, pk > 0))
+            })?
+            .filter_map(|r| r.ok())
+            .any(|(name, is_pk)| is_pk && name == "byte_offset");
+        if pk_has_byte_offset {
+            return Ok(());
+        }
+    }
+
+    // Recreate the table with the new schema. The autoindex from the old PK
+    // is dropped with the old table. Indexes are recreated after.
+    //
+    // SQLite resolves column references at compile time, so we cannot use
+    // `CASE WHEN EXISTS(... ) THEN col ELSE NULL END` for columns that may
+    // not exist in the source table. Instead, inspect the old schema and
+    // build the SELECT column list dynamically.
+    let old_cols: Vec<String> = {
+        let mut stmt = conn.prepare("PRAGMA table_info(symbol_relationships)")?;
+        let rows: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(|r| r.ok())
+            .collect();
+        rows
+    };
+    let has = |name: &str| old_cols.iter().any(|c| c == name);
+
+    let byte_offset_expr = if has("byte_offset") { "byte_offset" } else { "0" };
+    let import_path_expr = if has("import_path") { "import_path" } else { "NULL" };
+    let imported_name_expr = if has("imported_name") { "imported_name" } else { "NULL" };
+    let resolution_strategy_expr = if has("resolution_strategy") { "resolution_strategy" } else { "NULL" };
+    let confidence_expr = if has("confidence") { "confidence" } else { "NULL" };
+    let metadata_json_expr = if has("metadata_json") { "metadata_json" } else { "NULL" };
+
+    let sql = format!(
+        r#"
+        CREATE TABLE IF NOT EXISTS symbol_relationships_new (
+            source_symbol_id TEXT NOT NULL,
+            source_file_path TEXT NOT NULL,
+            target_name TEXT NOT NULL,
+            target_symbol_id TEXT,
+            relationship_type TEXT NOT NULL,
+            line INTEGER NOT NULL,
+            byte_offset INTEGER NOT NULL DEFAULT 0,
+            import_path TEXT,
+            imported_name TEXT,
+            resolution_strategy TEXT,
+            confidence REAL,
+            metadata_json TEXT,
+            PRIMARY KEY (source_symbol_id, target_name, relationship_type, line, byte_offset)
+        );
+
+        INSERT INTO symbol_relationships_new
+            (source_symbol_id, source_file_path, target_name, target_symbol_id,
+             relationship_type, line, byte_offset, import_path, imported_name,
+             resolution_strategy, confidence, metadata_json)
+        SELECT
+            source_symbol_id, source_file_path, target_name, target_symbol_id,
+            relationship_type, line,
+            {byte_offset_expr},
+            {import_path_expr},
+            {imported_name_expr},
+            {resolution_strategy_expr},
+            {confidence_expr},
+            {metadata_json_expr}
+        FROM symbol_relationships;
+
+        DROP TABLE symbol_relationships;
+        ALTER TABLE symbol_relationships_new RENAME TO symbol_relationships;
+
+        CREATE INDEX IF NOT EXISTS idx_symbol_relationships_file
+            ON symbol_relationships(source_file_path);
+        CREATE INDEX IF NOT EXISTS idx_symbol_relationships_target
+            ON symbol_relationships(target_name);
+        CREATE INDEX IF NOT EXISTS idx_symbol_relationships_target_symbol_id
+            ON symbol_relationships(target_symbol_id);
+        "#,
+    );
+    conn.execute_batch(&sql)?;
+    Ok(())
+}
+
 fn symbol_search_terms(query: &str) -> Vec<String> {
     query
         .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
@@ -5116,6 +5461,7 @@ fn symbol_search_fts_query(query: &str) -> String {
 pub enum SymbolStoreError {
     Sqlite(rusqlite::Error),
     Io(std::io::Error),
+    IncompatibleSchema { found: i64, supported: i64 },
 }
 
 impl std::fmt::Display for SymbolStoreError {
@@ -5123,6 +5469,10 @@ impl std::fmt::Display for SymbolStoreError {
         match self {
             SymbolStoreError::Sqlite(e) => write!(f, "SQLite error: {}", e),
             SymbolStoreError::Io(e) => write!(f, "IO error: {}", e),
+            SymbolStoreError::IncompatibleSchema { found, supported } => write!(
+                f,
+                "symbol index schema version {found} is newer than supported version {supported}"
+            ),
         }
     }
 }
@@ -6610,12 +6960,13 @@ WHERE anchor.target_file_path IS NULL
             .unwrap()
     }
 
-    const NEW_RELATIONSHIP_COLUMNS: [&str; 5] = [
+    const NEW_RELATIONSHIP_COLUMNS: [&str; 6] = [
         "resolution_strategy",
         "confidence",
         "metadata_json",
         "import_path",
         "imported_name",
+        "byte_offset",
     ];
     const NEW_SEMANTIC_ANCHOR_COLUMNS: [&str; 4] = [
         "owner_symbol_id",
@@ -6771,6 +7122,141 @@ WHERE anchor.target_file_path IS NULL
     }
 
     #[test]
+    fn migration_rejects_future_schema_without_modifying_it() {
+        let conn = Connection::open_in_memory().unwrap();
+        let future_version = LATEST_SCHEMA_VERSION + 1;
+        conn.execute_batch(&format!("PRAGMA user_version = {future_version}"))
+            .unwrap();
+
+        let error = run_migrations(&conn).unwrap_err();
+        assert!(matches!(
+            error,
+            SymbolStoreError::IncompatibleSchema {
+                found,
+                supported,
+            } if found == future_version && supported == LATEST_SCHEMA_VERSION
+        ));
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, future_version);
+    }
+
+    #[test]
+    fn migration_v6_preserves_rows_and_accepts_distinct_same_line_observations() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE symbol_relationships (
+                source_symbol_id TEXT NOT NULL,
+                source_file_path TEXT NOT NULL,
+                target_name TEXT NOT NULL,
+                target_symbol_id TEXT,
+                relationship_type TEXT NOT NULL,
+                line INTEGER NOT NULL,
+                import_path TEXT,
+                imported_name TEXT,
+                resolution_strategy TEXT,
+                confidence REAL,
+                metadata_json TEXT,
+                PRIMARY KEY (source_symbol_id, target_name, relationship_type, line)
+            );
+            INSERT INTO symbol_relationships VALUES (
+                'caller', 'src/lib.rs', 'new', 'target', 'call', 7,
+                'crate::Store', 'Store', 'rust_use_binding', 1.0,
+                '{\"qualifier\":[\"Store\"]}'
+            );
+            PRAGMA user_version = 5;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let preserved: (String, String, i64, String, f64) = conn
+            .query_row(
+                "SELECT target_symbol_id, resolution_strategy, byte_offset,
+                        metadata_json, confidence
+                 FROM symbol_relationships
+                 WHERE source_symbol_id = 'caller'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            preserved,
+            (
+                "target".to_string(),
+                "rust_use_binding".to_string(),
+                0,
+                "{\"qualifier\":[\"Store\"]}".to_string(),
+                1.0,
+            )
+        );
+
+        for byte_offset in [41_i64, 59] {
+            conn.execute(
+                "INSERT INTO symbol_relationships
+                 (source_symbol_id, source_file_path, target_name,
+                  relationship_type, line, byte_offset)
+                 VALUES ('same-line', 'src/lib.rs', 'new', 'call', 9, ?1)",
+                [byte_offset],
+            )
+            .unwrap();
+        }
+        let same_line_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM symbol_relationships
+                 WHERE source_symbol_id = 'same-line' AND line = 9",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(same_line_count, 2);
+    }
+
+    #[test]
+    fn failed_migration_step_rolls_back_schema_and_version() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE symbol_relationships (
+                source_symbol_id TEXT NOT NULL,
+                source_file_path TEXT NOT NULL,
+                target_name TEXT NOT NULL,
+                target_symbol_id TEXT,
+                relationship_type TEXT NOT NULL,
+                line INTEGER NOT NULL,
+                PRIMARY KEY (source_symbol_id, target_name, relationship_type, line)
+            );
+            INSERT INTO symbol_relationships VALUES
+                ('caller', 'src/lib.rs', 'new', NULL, 'call', 7);
+            CREATE TABLE symbol_relationships_new (unexpected TEXT);
+            PRAGMA user_version = 5;",
+        )
+        .unwrap();
+
+        assert!(run_migrations(&conn).is_err());
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        let original_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM symbol_relationships", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 5);
+        assert_eq!(original_rows, 1);
+        assert!(!table_columns(&conn, "symbol_relationships").contains(&"byte_offset".to_string()));
+    }
+
+    #[test]
     fn test_replace_and_get_relationship_targets() {
         let store = SymbolStore::in_memory().unwrap();
         let symbol = create_test_symbol("caller", "test.ts");
@@ -6850,6 +7336,10 @@ WHERE anchor.target_file_path IS NULL
                     resolution_strategy: Some("receiver_type".to_string()),
                     confidence: Some(0.8),
                     receiver_kind: None,
+                    byte_offset: None,
+                    qualifier_segments: None,
+                    call_form: None,
+                    unresolved_reason: None,
                 }],
             )
             .unwrap();

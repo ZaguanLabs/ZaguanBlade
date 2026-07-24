@@ -520,6 +520,66 @@ pub struct SymbolRelationship {
     /// semantics instead of assuming them away.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receiver_kind: Option<String>,
+    /// Qualified Rust call observation: absolute byte offset of the call
+    /// expression in the source file. Essential for exact call-site identity —
+    /// two calls on the same line (`A::new(); B::new();`) share source ID,
+    /// target name, relationship kind, and line, so byte offset is the only
+    /// discriminator. Persisted to `metadata_json` as `{"byte_offset":<u32>}`.
+    /// `None` for legacy relationships that predate qualified-call extraction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_offset: Option<u32>,
+    /// Qualified Rust call observation: the normalized qualifier segments
+    /// before the terminal callable name, in source order. For
+    /// `crate::store::SymbolStore::new()` this is `["crate", "store",
+    /// "SymbolStore"]`. For `Self::open()` this is `["Self"]`. For a bare
+    /// `new()` call this is `None`. Retains `crate`, `self`, `super`, and
+    /// `Self` keywords. Generic arguments and turbofish are stripped from
+    /// lookup identity. Persisted to `metadata_json` as
+    /// `{"qualifier":["seg1","seg2",...]}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualifier_segments: Option<Vec<String>>,
+    /// Qualified Rust call observation: the syntactic form of the call.
+    /// `"bare"` for `new()`, `"associated"` for `Type::method()`,
+    /// `"self_path"` for `Self::method()`, `"crate_path"` for
+    /// `crate::…::method()`, `"module_path"` for `self::…` or `super::…`,
+    /// `"ufcs"` for `<Type as Trait>::method()`, `"receiver"` for
+    /// `value.method()`. `None` for non-call relationships or legacy edges.
+    /// Persisted to `metadata_json` as `{"call_form":"<form>"}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_form: Option<String>,
+    /// Qualified Rust call observation: a stable category explaining why a
+    /// qualified call could not be resolved. One of: `"missing_project_context"`,
+    /// `"unresolved_owner"`, `"unresolved_method"`, `"ambiguous"`,
+    /// `"unsupported"`, `"ambiguous_import"`, `"glob_only_visibility"`,
+    /// `"self_without_owner"`, `"external_crate_not_indexed"`.
+    /// `None` for resolved or legacy relationships. Persisted to
+    /// `metadata_json` as `{"unresolved_reason":"<reason>"}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unresolved_reason: Option<String>,
+}
+
+/// Call form identifiers for qualified Rust call observations.
+pub mod call_form {
+    pub const BARE: &str = "bare";
+    pub const ASSOCIATED: &str = "associated";
+    pub const SELF_PATH: &str = "self_path";
+    pub const CRATE_PATH: &str = "crate_path";
+    pub const MODULE_PATH: &str = "module_path";
+    pub const UFCS: &str = "ufcs";
+    pub const RECEIVER: &str = "receiver";
+}
+
+/// Unresolved reason categories for qualified Rust call observations.
+pub mod unresolved_reason {
+    pub const MISSING_PROJECT_CONTEXT: &str = "missing_project_context";
+    pub const UNRESOLVED_OWNER: &str = "unresolved_owner";
+    pub const UNRESOLVED_METHOD: &str = "unresolved_method";
+    pub const AMBIGUOUS: &str = "ambiguous";
+    pub const UNSUPPORTED: &str = "unsupported";
+    pub const AMBIGUOUS_IMPORT: &str = "ambiguous_import";
+    pub const GLOB_ONLY_VISIBILITY: &str = "glob_only_visibility";
+    pub const SELF_WITHOUT_OWNER: &str = "self_without_owner";
+    pub const EXTERNAL_CRATE_NOT_INDEXED: &str = "external_crate_not_indexed";
 }
 
 impl Default for SymbolRelationship {
@@ -538,6 +598,10 @@ impl Default for SymbolRelationship {
             resolution_strategy: None,
             confidence: None,
             receiver_kind: None,
+            byte_offset: None,
+            qualifier_segments: None,
+            call_form: None,
+            unresolved_reason: None,
         }
     }
 }
@@ -689,6 +753,10 @@ struct RelState<'a> {
     /// De-dup key shared across the call, import, and structural concerns
     /// (matching the original single shared `seen` set).
     seen: HashSet<(String, String, SymbolRelationshipType, u32)>,
+    /// Qualified Rust call dedup: includes byte_offset to keep same-line
+    /// calls distinct (`A::new(); B::new();` share source, target name,
+    /// relationship kind, and line — only byte offset differs).
+    call_seen: HashSet<(String, String, u32, u32)>,
     /// The full, already-computed symbol set for the file. Needed for the
     /// forward-reference structural lookups (Rust `impl` / Go receiver +
     /// embedding via `find_symbol_by_name`), which may target a type declared
@@ -849,9 +917,26 @@ impl SymbolExtractor {
                     })
                     .map(|symbol| Arc::from(symbol.id.as_str()))
                     .unwrap_or_else(|| self_id.clone());
+                let owner_qualified_name = node
+                    .child_by_field_name("trait")
+                    .and_then(|trait_node| trait_node.safe_text(source).ok())
+                    .and_then(normalize_reference_name)
+                    .map(|trait_name| {
+                        format!(
+                            "{} as {}",
+                            type_name.strip_prefix("r#").unwrap_or(&type_name),
+                            trait_name.strip_prefix("r#").unwrap_or(&trait_name)
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        type_name
+                            .strip_prefix("r#")
+                            .unwrap_or(&type_name)
+                            .to_string()
+                    });
                 return ChildCtx {
                     id,
-                    qn: Arc::from(type_name.as_str()),
+                    qn: Arc::from(owner_qualified_name),
                     sep: "::",
                 };
             }
@@ -1027,13 +1112,60 @@ impl SymbolExtractor {
             return;
         };
         let line = node.start_position().row as u32;
+
+        // Qualified Rust call observation: extract qualifier segments, call
+        // form, and byte offset for precise same-line dedup. Non-Rust paths
+        // and Rust macro invocations fall through to the original shared
+        // `seen` set.
+        let qualified = if language == Language::Rust {
+            extract_rust_qualified_call_from_node(node, source)
+        } else {
+            None
+        };
+        let target_name = qualified
+            .as_ref()
+            .map(|call| call.terminal.clone())
+            .unwrap_or(target_name);
+
+        let (byte_offset, qualifier_segments, call_form) = match &qualified {
+            Some(q) => {
+                let offset = q.byte_offset;
+                let dedup_key = (
+                    source_id.clone(),
+                    q.terminal.clone(),
+                    line,
+                    offset,
+                );
+                if !rel.call_seen.insert(dedup_key) {
+                    return;
+                }
+                (
+                    Some(offset),
+                    if q.qualifier.is_empty() {
+                        None
+                    } else {
+                        Some(q.qualifier.clone())
+                    },
+                    Some(q.call_form.clone()),
+                )
+            }
+            None => (None, None, None),
+        };
+
         let key = (
             source_id.clone(),
             target_name.clone(),
             SymbolRelationshipType::Call,
             line,
         );
-        if rel.seen.insert(key) {
+        // For qualified Rust calls, the `call_seen` set already handles
+        // dedup. For everything else, use the shared `seen` set.
+        let is_new = if qualified.is_some() {
+            true
+        } else {
+            rel.seen.insert(key)
+        };
+        if is_new {
             // M5.1: evaluate the receiver's type (self/this → enclosing class;
             // constructor-bound / typed local → its type). `None` for bare calls
             // and unknown receivers → downstream resolution unchanged. M5.1b: the
@@ -1056,6 +1188,10 @@ impl SymbolExtractor {
                 recv_self,
                 import_path: import_binding.map(|binding| binding.module_path.clone()),
                 imported_name: import_binding.map(|binding| binding.imported_name.clone()),
+                byte_offset,
+                qualifier_segments,
+                call_form,
+                unresolved_reason: None,
                 ..Default::default()
             });
         }
@@ -1777,7 +1913,13 @@ impl SymbolExtractor {
             "impl_item" => {
                 // Get the type being implemented
                 if let Some(type_node) = node.child_by_field_name("type") {
-                    let name = type_node.safe_text(source).ok()?;
+                    let implemented_type = type_node.safe_text(source).ok()?;
+                    let name = if let Some(trait_node) = node.child_by_field_name("trait") {
+                        let implemented_trait = trait_node.safe_text(source).ok()?;
+                        format!("{} for {}", implemented_trait, implemented_type)
+                    } else {
+                        implemented_type.to_string()
+                    };
                     Some(Symbol::new(
                         format!("impl {}", name),
                         SymbolType::Impl,
@@ -2444,7 +2586,103 @@ pub(crate) fn extract_symbols_with_facts(
     // Each is named with its canonical `"<METHOD> <path>"`; the matching `Handles`
     // edge to the handler is emitted later by the relationship pass.
     append_route_symbols(&facts.routes, file_path, &mut symbols);
+    // Source-order-independent impl ownership: re-parent methods whose parent
+    // is an `Impl` symbol to the actual type symbol when the type was declared
+    // after its impl. The single-pass extractor cannot see forward declarations,
+    // so this post-pass closes the gap (feature contract: source-order-
+    // independent impl ownership).
+    reparent_rust_impl_methods(file_path, &mut symbols);
     symbols
+}
+
+/// Re-parent Rust impl methods to their actual type symbol when the type was
+/// declared after the impl block.
+///
+/// During the single pre-order extraction pass, `child_ctx` scans
+/// `symbols-so-far` for the implemented type. When the `struct`/`enum`/`trait`
+/// appears *after* the `impl`, the type is not yet in `symbols`, so methods
+/// are incorrectly parented to the `Impl` block itself. This post-pass:
+///
+/// 1. builds a name → type-symbol map from all extracted symbols;
+/// 2. finds `Impl` symbols whose implemented type now matches a real type;
+/// 3. re-parents the children of those `Impl` symbols to the type symbol,
+///    updating `parent_id`, `qualified_name`, and `id`.
+///
+/// `impl Trait for Type` methods are parented to `Type` (the implementing
+/// type), consistent with the extractor's `child_ctx` behavior when the type
+/// is found.
+fn reparent_rust_impl_methods(file_path: &str, symbols: &mut Vec<Symbol>) {
+    // Build a map of type name → type symbol ID.
+    let mut type_ids: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for sym in symbols.iter() {
+        if is_rust_type_symbol(sym.symbol_type) {
+            type_ids.entry(sym.name.as_str()).or_insert(sym.id.as_str());
+        }
+    }
+    if type_ids.is_empty() {
+        return;
+    }
+
+    // Find Impl symbols whose implemented type matches a real type.
+    // Collect (impl_id, type_id, type_name) triples.
+    let mut reparents: Vec<(String, String, String)> = Vec::new();
+    for sym in symbols.iter() {
+        if sym.symbol_type != SymbolType::Impl {
+            continue;
+        }
+        // `impl Foo` → `Foo`; `impl Trait for Foo` → (`Foo`, `Trait`).
+        let (type_name, trait_name) = match sym.name.strip_prefix("impl ") {
+            Some(rest) => {
+                if let Some(pos) = rest.find(" for ") {
+                    (rest[pos + 5..].trim(), Some(rest[..pos].trim()))
+                } else {
+                    (rest.trim(), None)
+                }
+            }
+            None => continue,
+        };
+        if let Some(&type_id) = type_ids.get(type_name) {
+            // Only reparent if the impl's children are currently parented to
+            // the impl block (i.e. the type wasn't found during extraction).
+            let normalized_type_name = type_name.strip_prefix("r#").unwrap_or(type_name);
+            let owner_qualified_name = trait_name
+                .map(|trait_name| {
+                    format!(
+                        "{normalized_type_name} as {}",
+                        trait_name.strip_prefix("r#").unwrap_or(trait_name)
+                    )
+                })
+                .unwrap_or_else(|| normalized_type_name.to_string());
+            reparents.push((
+                sym.id.clone(),
+                type_id.to_string(),
+                owner_qualified_name,
+            ));
+        }
+    }
+    if reparents.is_empty() {
+        return;
+    }
+
+    // Re-parent children of each impl block to the actual type symbol.
+    for sym in symbols.iter_mut() {
+        let Some(ref parent_id) = sym.parent_id else {
+            continue;
+        };
+        // Find a matching reparent entry.
+        let Some((_, new_parent_id, owner_qualified_name)) =
+            reparents.iter().find(|(impl_id, _, _)| impl_id == parent_id)
+        else {
+            continue;
+        };
+        // Update parent_id, qualified_name, and id.
+        let new_parent_id = new_parent_id.clone();
+        let new_qn = format!("{}::{}", owner_qualified_name, sym.name);
+        let new_id = stable_symbol_id(file_path, &new_qn, sym.symbol_type);
+        sym.parent_id = Some(new_parent_id);
+        sym.qualified_name = new_qn;
+        sym.id = new_id;
+    }
 }
 
 /// Detect HTTP route registrations and append one `Route` symbol per route
@@ -2648,6 +2886,7 @@ pub(crate) fn extract_symbol_relationships_with_facts(
     let mut rel = RelState {
         relationships: Vec::new(),
         seen: HashSet::new(),
+        call_seen: HashSet::new(),
         all_symbols: symbols,
         const_map: &facts.constants,
         const_targets,
@@ -4787,6 +5026,264 @@ fn last_named_child<'tree>(node: &Node<'tree>) -> Option<Node<'tree>> {
         None
     } else {
         node.named_child((count - 1) as u32)
+    }
+}
+
+/// Qualified Rust call observation: the terminal callable name and the
+/// normalized qualifier segments before it, plus the call form.
+///
+/// For `SymbolStore::new()` → terminal `new`, qualifier `["SymbolStore"]`,
+/// form `associated`. For `Self::open()` → terminal `open`, qualifier
+/// `["Self"]`, form `self_path`. For `crate::store::Store::new()` →
+/// terminal `new`, qualifier `["crate", "store", "Store"]`, form
+/// `crate_path`. For `value.method()` → terminal `method`, no qualifier,
+/// form `receiver` (kept in the receiver-method lane, not reinterpreted as
+/// an associated path). For a bare `new()` → terminal `new`, no qualifier,
+/// form `bare`.
+///
+/// Generic arguments and turbofish are stripped from the qualifier segments:
+/// `Type::<T>::new()` → terminal `new`, qualifier `["Type"]`, form
+/// `associated`. UFCS `<Type as Trait>::make()` → terminal `make`, qualifier
+/// `["Type", "Trait"]`, form `ufcs` (the `as` keyword is dropped, and the
+/// type and trait are both retained in order).
+///
+/// Returns `None` when the node is not a recognized Rust call target.
+pub(crate) struct QualifiedRustCall {
+    pub terminal: String,
+    pub qualifier: Vec<String>,
+    pub call_form: String,
+    /// Byte offset of the call target (the `function` field start byte),
+    /// not the entire call expression. Used for same-line dedup.
+    pub byte_offset: u32,
+}
+
+/// Extract a qualified Rust call observation from a `call_expression` or
+/// `macro_invocation` node. Returns `None` if the node is not a Rust call or
+/// the function/macro child cannot be parsed.
+///
+/// This is the entry point from `process_call_relationship`: it resolves the
+/// `function` field of a `call_expression` (or `macro` field of a
+/// `macro_invocation`) and delegates to `extract_qualified_rust_call`.
+fn extract_rust_qualified_call_from_node(node: &Node, source: &str) -> Option<QualifiedRustCall> {
+    if node.is_error() || node.is_missing() || node.has_error() {
+        return None;
+    }
+    match node.kind() {
+        "call_expression" => {
+            let callee = node.child_by_field_name("function")?;
+            if callee.is_error() || callee.is_missing() || callee.has_error() {
+                return None;
+            }
+            extract_qualified_rust_call(&callee, source)
+        }
+        "macro_invocation" => {
+            // Preserve the existing terminal-name macro observation without
+            // treating a qualified macro path as a resolvable Rust call path.
+            // Macro expansion and qualified macro resolution are explicitly
+            // outside the advertised Rust call-resolution subset.
+            let macro_node = node.child_by_field_name("macro")?;
+            let mut call = extract_qualified_rust_call(&macro_node, source)?;
+            call.qualifier.clear();
+            call.call_form = call_form::BARE.to_string();
+            Some(call)
+        }
+        _ => None,
+    }
+}
+
+/// Extract a qualified Rust call observation from the `function` child of a
+/// `call_expression` node (or the `macro` child of a `macro_invocation`).
+///
+/// The terminal name is always the last segment. The qualifier is the ordered
+/// list of segments before it. Keywords `crate`, `self`, `super`, and `Self`
+/// are retained. Raw identifiers (`r#name`) are normalized to `name`.
+fn extract_qualified_rust_call(node: &Node, source: &str) -> Option<QualifiedRustCall> {
+    let byte_offset = node.start_byte() as u32;
+    match node.kind() {
+        // Bare call: `new()` — identifier is the function itself.
+        "identifier" | "field_identifier" | "raw_identifier" => {
+            let name = normalize_rust_identifier(&node.safe_text(source).ok()?)?;
+            Some(QualifiedRustCall {
+                terminal: name,
+                qualifier: Vec::new(),
+                call_form: call_form::BARE.to_string(),
+                byte_offset,
+            })
+        }
+
+        // Associated path: `Type::method()`, `Self::method()`,
+        // `crate::a::b::Type::method()`, `self::a::Type::method()`,
+        // `super::a::Type::method()`.
+        // tree-sitter-rust represents these as `scoped_identifier` with
+        // a `path` field (the left side) and a `name` field (the terminal).
+        "scoped_identifier" | "qualified_identifier" => {
+            let terminal = normalize_rust_identifier(
+                &node.child_by_field_name("name")?.safe_text(source).ok()?,
+            )?;
+            let path = node.child_by_field_name("path")?;
+            let mut segments = Vec::new();
+            let form = if path.kind() == "bracketed_type" {
+                let qualified = path
+                    .named_child(0)
+                    .filter(|child| child.kind() == "qualified_type")?;
+                let concrete = qualified.child_by_field_name("type")?;
+                let trait_alias = qualified.child_by_field_name("alias")?;
+                collect_scoped_path_segments(&concrete, source, &mut segments);
+                collect_scoped_path_segments(&trait_alias, source, &mut segments);
+                if segments.len() < 2 {
+                    return None;
+                }
+                call_form::UFCS.to_string()
+            } else {
+                collect_scoped_path_segments(&path, source, &mut segments);
+                classify_rust_call_form(&segments)
+            };
+            Some(QualifiedRustCall {
+                terminal,
+                qualifier: segments,
+                call_form: form,
+                byte_offset,
+            })
+        }
+
+        // Receiver call: `value.method()` — kept in the receiver lane.
+        // We extract the terminal method name but set form to `receiver` and
+        // produce no qualifier (the receiver is handled by recv_type).
+        "field_expression" => {
+            let field = node.child_by_field_name("field")?;
+            let terminal = normalize_rust_identifier(&field.safe_text(source).ok()?)?;
+            Some(QualifiedRustCall {
+                terminal,
+                qualifier: Vec::new(),
+                call_form: call_form::RECEIVER.to_string(),
+                byte_offset,
+            })
+        }
+
+        // UFCS: `<Type as Trait>::make()` — tree-sitter-rust uses
+        // `generic_type` or `qualified_type` with a `as`-style path.
+        // The call_expression's function field may be a `scoped_identifier`
+        // whose path is a `bracketed_type` or similar. We try to extract the
+        // type and trait from the angle-bracketed form.
+        _ => {
+            // Fallback: try extracting from scoped_identifier pattern in case
+            // the grammar wraps it differently.
+            None
+        }
+    }
+}
+
+/// Classify the call form from the qualifier segments.
+fn classify_rust_call_form(segments: &[String]) -> String {
+    if segments.is_empty() {
+        return call_form::BARE.to_string();
+    }
+    match segments[0].as_str() {
+        "Self" => call_form::SELF_PATH.to_string(),
+        "crate" => call_form::CRATE_PATH.to_string(),
+        "self" | "super" => call_form::MODULE_PATH.to_string(),
+        _ => call_form::ASSOCIATED.to_string(),
+    }
+}
+
+/// Extract a leading `crate`/`self`/`super`/`Self` keyword from a path
+/// segment when tree-sitter-rust does not emit it as a named child.
+/// Returns the keyword (`crate`, `self`, `super`, or `Self`) if the text
+/// starts with it followed by `::`, otherwise `None`.
+fn extract_path_keyword_prefix(text: &str) -> Option<&'static str> {
+    for keyword in &["crate", "self", "super", "Self"] {
+        let prefix = format!("{}::", keyword);
+        if text.starts_with(&prefix) {
+            return Some(keyword);
+        }
+    }
+    None
+}
+
+/// Collect scoped identifier path segments recursively, in source order.
+/// For `crate::store::Store`, this produces `["crate", "store", "Store"]`.
+/// Generic arguments (`<T>`) and turbofish (`::<T>`) are stripped.
+fn collect_scoped_path_segments(node: &Node, source: &str, out: &mut Vec<String>) {
+    match node.kind() {
+        "identifier" | "field_identifier" | "type_identifier" | "raw_identifier" => {
+            if let Ok(text) = node.safe_text(source) {
+                if let Some(name) = normalize_rust_identifier(&text) {
+                    out.push(name);
+                }
+            }
+        }
+        // tree-sitter-rust emits `crate`, `self`, and `super` as keyword
+        // nodes (not `identifier`) when they appear as the root of a
+        // `scoped_identifier` path. `Self` is a `type_identifier`.
+        "crate" => out.push("crate".to_string()),
+        "self" => out.push("self".to_string()),
+        "super" => out.push("super".to_string()),
+        "scoped_identifier" | "scoped_type_identifier" | "qualified_identifier" => {
+            if let Some(path) = node.child_by_field_name("path") {
+                collect_scoped_path_segments(&path, source, out);
+            } else if let Ok(text) = node.safe_text(source) {
+                // tree-sitter-rust 0.24.x parses `crate::Config` as a
+                // `scoped_identifier` with only a `name` field — the `crate`/
+                // `self`/`super` keyword is an anonymous token with no named
+                // child. Recover it from the source text prefix.
+                if let Some(keyword) = extract_path_keyword_prefix(&text) {
+                    out.push(keyword.to_string());
+                }
+            }
+            if let Some(name) = node.child_by_field_name("name") {
+                if let Ok(text) = name.safe_text(source) {
+                    if let Some(name) = normalize_rust_identifier(&text) {
+                        out.push(name);
+                    }
+                }
+            }
+        }
+        // `self` as a standalone identifier in paths.
+        "self_parameter" => {
+            out.push("self".to_string());
+        }
+        // Skip generic_type / type_arguments / turbofish — they carry no
+        // lookup-identity segments.
+        "generic_type" => {
+            if let Some(ty) = node.child_by_field_name("type") {
+                collect_scoped_path_segments(&ty, source, out);
+            }
+        }
+        _ => {
+            // Best-effort: collect named children that are identifiers.
+            let count = node.named_child_count();
+            for i in 0..count {
+                if let Some(child) = node.named_child(i as u32) {
+                    if matches!(
+                        child.kind(),
+                        "identifier" | "field_identifier" | "type_identifier" | "raw_identifier"
+                    ) {
+                        if let Ok(text) = child.safe_text(source) {
+                            if let Some(name) = normalize_rust_identifier(&text) {
+                                out.push(name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Normalize a Rust identifier: strip raw-identifier prefix (`r#name` → `name`).
+/// Returns `None` for empty strings.
+fn normalize_rust_identifier(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix("r#") {
+        if rest.is_empty() {
+            return None;
+        }
+        Some(rest.to_string())
+    } else {
+        Some(trimmed.to_string())
     }
 }
 
@@ -7074,6 +7571,270 @@ fn pick(v: Option<u32>) -> u32 {
             usages.is_empty(),
             "mod-nested constants must never be usage targets, got: {:?}",
             usage_triples(&symbols, &usages)
+        );
+    }
+
+    // ---- Qualified Rust call extraction tests ---------------------------
+
+    /// Helper: extract a Rust source's symbols and relationships.
+    fn rust_extract(code: &str) -> (Vec<Symbol>, Vec<SymbolRelationship>) {
+        let mut parser = TreeSitterParser::new().unwrap();
+        let tree = parser.parse(code, Language::Rust).unwrap();
+        let symbols = extract_symbols(&tree, code, Language::Rust, "lib.rs");
+        let relationships =
+            extract_symbol_relationships(&tree, code, Language::Rust, "lib.rs", &symbols);
+        (symbols, relationships)
+    }
+
+    /// Helper: find a call relationship by terminal name.
+    fn rust_call_rel<'a>(
+        rels: &'a [SymbolRelationship],
+        terminal: &str,
+    ) -> &'a SymbolRelationship {
+        rels.iter()
+            .find(|r| {
+                r.relationship_type == SymbolRelationshipType::Call && r.target_name == terminal
+            })
+            .unwrap_or_else(|| panic!("no Call relationship with terminal `{terminal}`"))
+    }
+
+    #[test]
+    fn test_rust_bare_call_form_and_no_qualifier() {
+        let code = "fn foo() {}\nfn caller() { foo() }\n";
+        let (_symbols, rels) = rust_extract(code);
+        let rel = rust_call_rel(&rels, "foo");
+        assert_eq!(rel.call_form.as_deref(), Some(call_form::BARE));
+        assert!(rel.qualifier_segments.is_none());
+        assert!(rel.byte_offset.is_some(), "bare call must have byte_offset");
+    }
+
+    #[test]
+    fn test_rust_associated_call_form_and_qualifier() {
+        let code = "\
+struct Store;
+impl Store { fn new() -> Store { Store } }
+fn caller() { Store::new() }
+";
+        let (_symbols, rels) = rust_extract(code);
+        let rel = rust_call_rel(&rels, "new");
+        assert_eq!(rel.call_form.as_deref(), Some(call_form::ASSOCIATED));
+        assert_eq!(
+            rel.qualifier_segments.as_deref(),
+            Some(&["Store".to_string()][..]),
+        );
+        assert!(rel.byte_offset.is_some());
+    }
+
+    #[test]
+    fn test_rust_self_path_call_form() {
+        let code = "\
+struct Store;
+impl Store {
+    fn new() -> Store { Store }
+    fn open(&self) { Self::new() }
+}
+";
+        let (_symbols, rels) = rust_extract(code);
+        let rel = rust_call_rel(&rels, "new");
+        assert_eq!(rel.call_form.as_deref(), Some(call_form::SELF_PATH));
+        assert_eq!(
+            rel.qualifier_segments.as_deref(),
+            Some(&["Self".to_string()][..]),
+        );
+    }
+
+    #[test]
+    fn test_rust_crate_path_call_form() {
+        let code = "\
+pub struct Config;
+impl Config { pub fn load() -> Config { Config } }
+fn init() { crate::Config::load() }
+";
+        let (_symbols, rels) = rust_extract(code);
+        let rel = rust_call_rel(&rels, "load");
+        assert_eq!(rel.call_form.as_deref(), Some(call_form::CRATE_PATH));
+        assert_eq!(
+            rel.qualifier_segments.as_deref(),
+            Some(&["crate".to_string(), "Config".to_string()][..]),
+        );
+    }
+
+    #[test]
+    fn test_rust_module_path_self_form() {
+        let code = "\
+pub struct Store;
+impl Store { pub fn open() -> Store { Store } }
+fn use_store() { self::Store::open() }
+";
+        let (_symbols, rels) = rust_extract(code);
+        let rel = rust_call_rel(&rels, "open");
+        assert_eq!(rel.call_form.as_deref(), Some(call_form::MODULE_PATH));
+        assert_eq!(
+            rel.qualifier_segments.as_deref(),
+            Some(&["self".to_string(), "Store".to_string()][..]),
+        );
+    }
+
+    #[test]
+    fn test_rust_module_path_super_form() {
+        let code = "\
+pub struct Store;
+impl Store { pub fn open() -> Store { Store } }
+mod child {
+    use super::Store;
+    fn use_store() { super::Store::open() }
+}
+";
+        let (_symbols, rels) = rust_extract(code);
+        let rel = rust_call_rel(&rels, "open");
+        assert_eq!(rel.call_form.as_deref(), Some(call_form::MODULE_PATH));
+        assert_eq!(
+            rel.qualifier_segments.as_deref(),
+            Some(&["super".to_string(), "Store".to_string()][..]),
+        );
+    }
+
+    #[test]
+    fn test_rust_receiver_call_form_no_qualifier() {
+        let code = "\
+struct Store;
+impl Store { fn get(&self) -> i32 { 0 } }
+fn use_store(s: &Store) { s.get() }
+";
+        let (_symbols, rels) = rust_extract(code);
+        let rel = rust_call_rel(&rels, "get");
+        assert_eq!(rel.call_form.as_deref(), Some(call_form::RECEIVER));
+        assert!(rel.qualifier_segments.is_none());
+    }
+
+    #[test]
+    fn test_rust_turbofish_stripped_from_qualifier() {
+        let code = "\
+struct Store<T>(T);
+impl<T> Store<T> {
+    fn new() -> Store<T> { Store(Default::default()) }
+}
+fn caller() { Store::<u32>::new() }
+";
+        let (_symbols, rels) = rust_extract(code);
+        let rel = rust_call_rel(&rels, "new");
+        // turbofish `::<u32>` must be stripped — qualifier is just `["Store"]`.
+        assert_eq!(rel.call_form.as_deref(), Some(call_form::ASSOCIATED));
+        let qualifier = rel.qualifier_segments.as_ref().expect("qualifier");
+        assert!(
+            !qualifier.iter().any(|s| s.contains("u32") || s.contains("<")),
+            "turbofish must be stripped from qualifier, got {qualifier:?}"
+        );
+    }
+
+    #[test]
+    fn test_rust_same_line_calls_have_distinct_byte_offsets() {
+        let code = "\
+struct A; struct B;
+impl A { fn new() -> A { A } }
+impl B { fn new() -> B { B } }
+fn make() { A::new(); B::new() }
+";
+        let (_symbols, rels) = rust_extract(code);
+        let new_calls: Vec<_> = rels
+            .iter()
+            .filter(|r| {
+                r.relationship_type == SymbolRelationshipType::Call && r.target_name == "new"
+            })
+            .collect();
+        assert_eq!(new_calls.len(), 2, "two same-line calls must both be extracted");
+        let offsets: Vec<_> = new_calls.iter().filter_map(|r| r.byte_offset).collect();
+        assert_eq!(offsets.len(), 2, "both calls must have byte offsets");
+        assert_ne!(offsets[0], offsets[1], "same-line calls must have distinct byte offsets");
+    }
+
+    #[test]
+    fn test_rust_raw_identifier_normalized() {
+        let code = "\
+struct r#Type;
+impl r#Type { fn new() -> r#Type { r#Type } }
+fn caller() { r#Type::new() }
+";
+        let (_symbols, rels) = rust_extract(code);
+        let rel = rust_call_rel(&rels, "new");
+        let qualifier = rel.qualifier_segments.as_ref().expect("qualifier");
+        assert!(
+            !qualifier.iter().any(|s| s.contains("r#")),
+            "raw identifier prefix must be normalized, got {qualifier:?}"
+        );
+        assert!(qualifier.iter().any(|s| s == "Type"), "normalized name must be present");
+    }
+
+    #[test]
+    fn test_rust_ufcs_call_preserves_type_and_trait() {
+        let code = "\
+struct Store;
+trait Maker { fn make() -> Self; }
+impl Maker for Store { fn make() -> Self { Store } }
+fn caller() { <Store as Maker>::make(); }
+";
+        let (_symbols, rels) = rust_extract(code);
+        let rel = rust_call_rel(&rels, "make");
+        assert_eq!(rel.call_form.as_deref(), Some(call_form::UFCS));
+        assert_eq!(
+            rel.qualifier_segments.as_deref(),
+            Some(&["Store".to_string(), "Maker".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn test_rust_trait_impl_method_identity_does_not_collapse_inherent_method() {
+        let code = "\
+struct Store;
+trait Maker { fn make() -> Self; }
+impl Store { fn make() -> Self { Store } }
+impl Maker for Store { fn make() -> Self { Store } }
+";
+        let (symbols, _) = rust_extract(code);
+        let methods = symbols
+            .iter()
+            .filter(|symbol| symbol.symbol_type == SymbolType::Method && symbol.name == "make")
+            .collect::<Vec<_>>();
+        assert_eq!(methods.len(), 2, "both impl methods survive");
+        assert_eq!(
+            methods
+                .iter()
+                .map(|symbol| symbol.id.as_str())
+                .collect::<HashSet<_>>()
+                .len(),
+            2,
+            "trait-impl and inherent method stable IDs must remain distinct"
+        );
+        assert!(methods
+            .iter()
+            .any(|symbol| symbol.qualified_name == "Store::make"));
+        assert!(methods
+            .iter()
+            .any(|symbol| symbol.qualified_name == "Store as Maker::make"));
+    }
+
+    #[test]
+    fn test_qualified_rust_macro_stays_in_bare_lane() {
+        let code = "fn caller() { tracing::info!(\"hello\"); }\n";
+        let (_symbols, rels) = rust_extract(code);
+        let rel = rust_call_rel(&rels, "info");
+        assert_eq!(rel.call_form.as_deref(), Some(call_form::BARE));
+        assert!(rel.qualifier_segments.is_none());
+    }
+
+    #[test]
+    fn test_rust_parse_recovery_does_not_manufacture_qualified_call() {
+        let code = "fn caller() { Store::::new(); }\n";
+        let (_symbols, rels) = rust_extract(code);
+        assert!(
+            !rels.iter().any(|relationship| {
+                relationship.relationship_type == SymbolRelationshipType::Call
+                    && relationship
+                        .qualifier_segments
+                        .as_ref()
+                        .is_some_and(|segments| !segments.is_empty())
+            }),
+            "malformed recovered call paths must not become qualified observations"
         );
     }
 

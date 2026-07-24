@@ -12,7 +12,9 @@ use std::sync::{mpsc, Arc, RwLock};
 use crate::buffer_snapshot::{BufferSnapshot, BufferSnapshotSource, BufferSnapshotStore};
 use crate::gitignore_filter::GitignoreFilter;
 use crate::project_settings;
-use crate::symbol_index::store::{AnchorQueryMode, SemanticAnchorSearchOutcome};
+use crate::symbol_index::store::{
+    AnchorQueryMode, SemanticAnchorSearchOutcome, SYMBOL_STORE_SCHEMA_VERSION,
+};
 use crate::symbol_index::{
     FileIndexRecord, FileRelationshipRecord, ModuleRelationshipAggregate,
     RelationshipIntegrityStats, RelationshipObservationKind, SearchQuery, SearchResult,
@@ -20,12 +22,14 @@ use crate::symbol_index::{
     UnresolvedRelationshipTarget,
 };
 use crate::tree_sitter::{
-    collect_extraction_facts, extract_symbol_relationships_with_facts,
+    call_form, collect_extraction_facts, extract_symbol_relationships_with_facts,
     extract_symbols_with_facts, stable_symbol_id, Language, Position, Range, Symbol,
-    SymbolRelationship, SymbolRelationshipType, SymbolType, TreeSitterParser,
+    SymbolRelationship, SymbolRelationshipType, SymbolType, TreeSitterParser, unresolved_reason,
 };
 use crate::worktree::{normalize_path, WorktreeStore};
 use serde::{Deserialize, Serialize};
+
+use super::rust_project;
 
 thread_local! {
     static INDEXING_PARSER: RefCell<Option<TreeSitterParser>> = RefCell::new(None);
@@ -1454,6 +1458,7 @@ impl LanguageService {
         let total_queued = queued_files.len();
         let mut files_indexed = 0usize;
         let mut suppressed_external_relationships = 0usize;
+        let mut derived_relationships_refreshed = false;
         if total_queued > 0 || files_removed > 0 {
             health.status = IndexHealthStatus::Indexing;
             health.queued_files = total_queued;
@@ -1712,6 +1717,27 @@ impl LanguageService {
                 self.set_index_health(health.clone());
                 progress(&health);
 
+                let rust_stats =
+                    rust_project::resolve_qualified_calls(&self.workspace_root, &self.symbol_store)?;
+                if rust_stats.observations > 0 {
+                    eprintln!(
+                        "[SYMBOLS][RUST_QUALIFIED] observations={} resolved={} unresolved={} candidates_examined={} candidate_p50={} candidate_p95={} candidate_p99={} max_candidates={} comparisons_avoided={} duration_ms={} forms={:?} strategies={:?} unresolved_reasons={:?}",
+                        rust_stats.observations,
+                        rust_stats.resolved,
+                        rust_stats.unresolved,
+                        rust_stats.candidates_examined,
+                        rust_stats.candidate_p50,
+                        rust_stats.candidate_p95,
+                        rust_stats.candidate_p99,
+                        rust_stats.max_candidates,
+                        rust_stats.estimated_comparisons_avoided,
+                        rust_stats.duration_ms,
+                        rust_stats.by_form,
+                        rust_stats.by_strategy,
+                        rust_stats.by_unresolved_reason,
+                    );
+                }
+
                 // M2.4 — run the global-unique back-fill exactly once, after EVERY
                 // batch has committed. Only now is COUNT(*) truly global; running it
                 // per-batch would resolve against an incomplete symbol set
@@ -1740,7 +1766,41 @@ impl LanguageService {
                 // the only source of those edges.
                 self.symbol_store.mine_go_interface_implementations()?;
                 self.symbol_store.resolve_semantic_anchor_targets(None)?;
+                derived_relationships_refreshed = true;
             }
+        }
+
+        // Reaching this point means the no-change checkpoint was not trusted.
+        // Refresh derived relationships even when every source row itself was
+        // fresh: resolver/store projection upgrades and removed Cargo/module
+        // files can change targets without making an individual Rust file stale.
+        if !derived_relationships_refreshed {
+            let rust_stats =
+                rust_project::resolve_qualified_calls(&self.workspace_root, &self.symbol_store)?;
+            if rust_stats.observations > 0 {
+                eprintln!(
+                    "[SYMBOLS][RUST_QUALIFIED] observations={} resolved={} unresolved={} candidates_examined={} candidate_p50={} candidate_p95={} candidate_p99={} max_candidates={} comparisons_avoided={} duration_ms={} forms={:?} strategies={:?} unresolved_reasons={:?}",
+                    rust_stats.observations,
+                    rust_stats.resolved,
+                    rust_stats.unresolved,
+                    rust_stats.candidates_examined,
+                    rust_stats.candidate_p50,
+                    rust_stats.candidate_p95,
+                    rust_stats.candidate_p99,
+                    rust_stats.max_candidates,
+                    rust_stats.estimated_comparisons_avoided,
+                    rust_stats.duration_ms,
+                    rust_stats.by_form,
+                    rust_stats.by_strategy,
+                    rust_stats.by_unresolved_reason,
+                );
+            }
+            self.symbol_store
+                .backfill_unresolved_relationship_targets()?;
+            self.symbol_store
+                .mine_receiver_type_relationship_targets()?;
+            self.symbol_store.mine_go_interface_implementations()?;
+            self.symbol_store.resolve_semantic_anchor_targets(None)?;
         }
 
         if total_queued > 0 {
@@ -1875,7 +1935,12 @@ impl LanguageService {
         }
         // `supported_language_files` order is not guaranteed → sort for determinism.
         entries.sort();
-        let mut canonical = String::with_capacity(entries.len() * 56);
+        let mut canonical = String::with_capacity(entries.len() * 56 + 48);
+        canonical.push_str("store_schema\u{1f}");
+        canonical.push_str(&SYMBOL_STORE_SCHEMA_VERSION.to_string());
+        canonical.push_str("\u{1f}rust_qualified_resolver\u{1f}");
+        canonical.push_str(&rust_project::RUST_QUALIFIED_RESOLVER_VERSION.to_string());
+        canonical.push('\n');
         canonical.push_str(&entries.len().to_string());
         for (path, size, mtime, extractor_version) in &entries {
             canonical.push('\n');
@@ -2517,6 +2582,9 @@ impl LanguageService {
         )?;
         self.symbol_store
             .resolve_semantic_anchor_targets(Some(file_path))?;
+        if is_rust_project_resolution_input(file_path) {
+            rust_project::resolve_qualified_calls(&self.workspace_root, &self.symbol_store)?;
+        }
         // M2.4 — incremental single-file reindex resolves edges same-file/imported
         // only; the global-unique back-fill is deferred to the next full reindex
         // so its COUNT(*) stays truly global (not "unique among files seen so far").
@@ -2580,6 +2648,9 @@ impl LanguageService {
             &anchors,
             &[],
         )?;
+        if is_rust_project_resolution_input(file_path) {
+            rust_project::resolve_qualified_calls(&self.workspace_root, &self.symbol_store)?;
+        }
         metrics.db_write_ms = db_write_start.elapsed().as_millis() as u64;
 
         let cache_start = std::time::Instant::now();
@@ -3024,6 +3095,23 @@ impl LanguageService {
         }
 
         if committed_any {
+            let rust_stats =
+                rust_project::resolve_qualified_calls(&self.workspace_root, &self.symbol_store)?;
+            if rust_stats.observations > 0 {
+                eprintln!(
+                    "[SYMBOLS][RUST_QUALIFIED] observations={} resolved={} unresolved={} candidates_examined={} candidate_p50={} candidate_p95={} candidate_p99={} max_candidates={} comparisons_avoided={} duration_ms={}",
+                    rust_stats.observations,
+                    rust_stats.resolved,
+                    rust_stats.unresolved,
+                    rust_stats.candidates_examined,
+                    rust_stats.candidate_p50,
+                    rust_stats.candidate_p95,
+                    rust_stats.candidate_p99,
+                    rust_stats.max_candidates,
+                    rust_stats.estimated_comparisons_avoided,
+                    rust_stats.duration_ms,
+                );
+            }
             // M2.4 — run the global-unique back-fill exactly once, after EVERY
             // batch has committed (true global COUNT(*)).
             self.symbol_store
@@ -3598,6 +3686,10 @@ impl LanguageService {
                     receiver_is_self: relationship.recv_self,
                     import_path: relationship.import_path.clone(),
                     imported_name: relationship.imported_name.clone(),
+                    byte_offset: relationship.byte_offset,
+                    qualifier_segments: relationship.qualifier_segments.clone(),
+                    call_form: relationship.call_form.clone(),
+                    unresolved_reason: relationship.unresolved_reason.clone(),
                 });
             }
         }
@@ -3653,6 +3745,7 @@ impl LanguageService {
                     reference.source_symbol.id.clone(),
                     reference.relationship_type,
                     reference.line,
+                    reference.byte_offset,
                 )
             })
             .collect::<HashSet<_>>();
@@ -3667,6 +3760,7 @@ impl LanguageService {
                     reference.source_symbol.id.clone(),
                     reference.relationship_type,
                     reference.line,
+                    reference.byte_offset,
                 );
 
                 if seen.insert(key) {
@@ -4555,6 +4649,7 @@ impl LanguageService {
                     reference.source_symbol.id.clone(),
                     reference.relationship_type,
                     reference.line,
+                    reference.byte_offset,
                 )
             })
             .collect::<HashSet<_>>();
@@ -4580,6 +4675,7 @@ impl LanguageService {
                 reference.source_symbol.id.clone(),
                 reference.relationship_type,
                 reference.line,
+                reference.byte_offset,
             );
 
             if seen.insert(key) {
@@ -4611,6 +4707,7 @@ impl LanguageService {
                 reference.source_symbol.id.clone(),
                 reference.relationship_type,
                 reference.line,
+                reference.byte_offset,
             );
 
             if seen.insert(key) {
@@ -4648,6 +4745,21 @@ impl LanguageService {
 
             if relationship.target_symbol_id.is_some() {
                 continue;
+            }
+
+            // Qualified Rust call resolution: run the precision-first lanes
+            // before the generic terminal-name resolver. A qualified call
+            // (`Type::method`, `Self::method`, `crate::…::method`) carries
+            // stronger evidence than a bare terminal name, so it gets its own
+            // resolution path. If the qualified resolver cannot prove a
+            // unique target, it sets `unresolved_reason` and the relationship
+            // is NOT retried by the generic resolver — fail-closed per the
+            // feature contract.
+            if let Some(form) = relationship.call_form.as_deref() {
+                if form != call_form::BARE && form != call_form::RECEIVER {
+                    self.resolve_qualified_rust_call(relationship, file_symbols);
+                    continue;
+                }
             }
 
             // Named JS/TS imports carry the original module specifier and
@@ -4786,6 +4898,374 @@ impl LanguageService {
         Ok(None)
     }
 
+    /// Precision-first qualified Rust call resolver.
+    ///
+    /// Runs the strongest semantic lanes before weaker ones, per the feature
+    /// contract:
+    ///
+    /// 1. `Self` owner — derive the enclosing impl/trait owner and match the
+    ///    terminal method only below that owner.
+    /// 2. Crate-rooted path — interpret `crate::…` from the source crate root
+    ///    through the indexed module graph (best-effort same-file match).
+    /// 3. Module-relative path — interpret `self::…` and `super::…` from the
+    ///    source module (best-effort same-file match).
+    /// 4. Visible unqualified owner — for `Type::method`, consider types
+    ///    declared in the source file and match the method under that owner.
+    ///
+    /// The resolver is fail-closed: if no unique target is proven, the
+    /// relationship stays unresolved and an `unresolved_reason` is set.
+    fn resolve_qualified_rust_call(
+        &self,
+        relationship: &mut SymbolRelationship,
+        file_symbols: &[Symbol],
+    ) {
+        let Some(form) = relationship.call_form.clone() else {
+            return;
+        };
+        let Some(qualifier) = relationship.qualifier_segments.clone() else {
+            return;
+        };
+        let terminal = relationship.target_name.clone();
+
+        match form.as_str() {
+            call_form::SELF_PATH => {
+                self.resolve_qualified_self_call(relationship, &terminal, file_symbols);
+            }
+            call_form::ASSOCIATED => {
+                self.resolve_qualified_associated_call(
+                    relationship,
+                    &qualifier,
+                    &terminal,
+                    file_symbols,
+                );
+            }
+            call_form::CRATE_PATH | call_form::MODULE_PATH => {
+                self.resolve_qualified_path_call(
+                    relationship,
+                    &qualifier,
+                    &terminal,
+                    file_symbols,
+                );
+            }
+            call_form::UFCS => {
+                // UFCS requires type, trait, impl, and callable all
+                // unambiguous — not yet supported without a Cargo module graph.
+                relationship.unresolved_reason =
+                    Some(unresolved_reason::UNSUPPORTED.to_string());
+            }
+            _ => {
+                // Bare and receiver calls fall through to the generic resolver.
+            }
+        }
+    }
+
+    /// Lane 1: `Self::method()` — resolve only from a proven enclosing
+    /// impl or trait owner.
+    ///
+    /// Blade's extractor parents methods to the type (struct/trait), not to
+    /// the impl block, so `Self` resolution walks to the source method's
+    /// parent type and matches the terminal method among that type's children.
+    fn resolve_qualified_self_call(
+        &self,
+        relationship: &mut SymbolRelationship,
+        terminal: &str,
+        file_symbols: &[Symbol],
+    ) {
+        // Find the source symbol (the enclosing function/method).
+        let source = file_symbols.iter().find(|s| s.id == relationship.source_symbol_id);
+        let Some(source) = source else {
+            relationship.unresolved_reason =
+                Some(unresolved_reason::SELF_WITHOUT_OWNER.to_string());
+            return;
+        };
+
+        // Walk up the parent chain to find an owner type (struct, trait,
+        // class, enum, type alias). The extractor parents methods to the
+        // type definition, not to the impl block.
+        let owner_id = self.find_enclosing_owner_type(source, file_symbols);
+        let Some(owner_id) = owner_id else {
+            relationship.unresolved_reason =
+                Some(unresolved_reason::SELF_WITHOUT_OWNER.to_string());
+            return;
+        };
+
+        // Match the terminal method among children of the owner type.
+        let candidates: Vec<&Symbol> = file_symbols
+            .iter()
+            .filter(|s| s.parent_id.as_deref() == Some(owner_id.as_str()))
+            .filter(|s| s.name == terminal)
+            .collect();
+
+        match candidates.as_slice() {
+            [single] => {
+                relationship.target_symbol_id = Some(single.id.clone());
+                relationship.resolution_strategy =
+                    Some("rust_self_owner".to_string());
+                relationship.confidence = Some(1.0);
+            }
+            [] => {
+                relationship.unresolved_reason =
+                    Some(unresolved_reason::UNRESOLVED_METHOD.to_string());
+            }
+            _ => {
+                relationship.unresolved_reason =
+                    Some(unresolved_reason::AMBIGUOUS.to_string());
+            }
+        }
+    }
+
+    /// Lane 5: `Type::method()` — consider types declared in the source file
+    /// and match the method under that owner type.
+    ///
+    /// Blade's extractor parents methods to the type definition (struct/trait),
+    /// not to individual impl blocks, so we resolve by finding the named type
+    /// and then matching the terminal method among its children.
+    fn resolve_qualified_associated_call(
+        &self,
+        relationship: &mut SymbolRelationship,
+        qualifier: &[String],
+        terminal: &str,
+        file_symbols: &[Symbol],
+    ) {
+        // The owner type name is the last qualifier segment.
+        // For `SymbolStore::new`, qualifier is `["SymbolStore"]`.
+        let owner_name = qualifier.last().cloned().unwrap_or_default();
+        if owner_name.is_empty() {
+            relationship.unresolved_reason =
+                Some(unresolved_reason::UNSUPPORTED.to_string());
+            return;
+        }
+
+        // Find the type definition (struct, trait, class, enum, type alias)
+        // matching the owner name. The extractor deduplicates impl blocks,
+        // so there is at most one type symbol per name per file.
+        let owner_candidates: Vec<&Symbol> = file_symbols
+            .iter()
+            .filter(|s| {
+                s.name == owner_name
+                    && matches!(
+                        s.symbol_type,
+                        SymbolType::Struct
+                            | SymbolType::Class
+                            | SymbolType::Trait
+                            | SymbolType::Type
+                            | SymbolType::Enum
+                    )
+            })
+            .collect();
+
+        if owner_candidates.is_empty() {
+            relationship.unresolved_reason =
+                Some(unresolved_reason::UNRESOLVED_OWNER.to_string());
+            return;
+        }
+
+        // Find methods matching the terminal name under any candidate owner.
+        let mut candidates: Vec<&Symbol> = Vec::new();
+        for owner in &owner_candidates {
+            for sym in file_symbols {
+                if sym.parent_id.as_deref() == Some(owner.id.as_str())
+                    && sym.name == terminal
+                {
+                    candidates.push(sym);
+                }
+            }
+        }
+
+        // Deduplicate by symbol ID. If the raw count exceeds the deduplicated
+        // count, multiple definitions share the same qualified name (e.g.
+        // inherent method + trait impl method) — that is ambiguity.
+        let raw_count = candidates.len();
+        let mut seen_ids = HashSet::new();
+        candidates.retain(|s| seen_ids.insert(s.id.clone()));
+
+        if raw_count > candidates.len() {
+            relationship.unresolved_reason =
+                Some(unresolved_reason::AMBIGUOUS.to_string());
+            return;
+        }
+
+        match candidates.as_slice() {
+            [single] => {
+                relationship.target_symbol_id = Some(single.id.clone());
+                relationship.resolution_strategy =
+                    Some("rust_visible_owner".to_string());
+                relationship.confidence = Some(1.0);
+            }
+            [] => {
+                relationship.unresolved_reason =
+                    Some(unresolved_reason::UNRESOLVED_METHOD.to_string());
+            }
+            _ => {
+                relationship.unresolved_reason =
+                    Some(unresolved_reason::AMBIGUOUS.to_string());
+            }
+        }
+    }
+
+    /// Lanes 2-3: `crate::…::Type::method()` and `self::…::Type::method()` —
+    /// best-effort same-file resolution by matching the full qualifier path
+    /// against symbol qualified names. Without a full Cargo module graph,
+    /// we can only resolve when the owner and method are in the same file.
+    fn resolve_qualified_path_call(
+        &self,
+        relationship: &mut SymbolRelationship,
+        qualifier: &[String],
+        terminal: &str,
+        file_symbols: &[Symbol],
+    ) {
+        // The owner type is the segment before the terminal.
+        // For `crate::store::SymbolStore::new`, qualifier is
+        // `["crate", "store", "SymbolStore"]` and terminal is `new`.
+        // The owner name is the last qualifier segment.
+        let owner_name = qualifier.last().cloned().unwrap_or_default();
+        if owner_name.is_empty() {
+            relationship.unresolved_reason =
+                Some(unresolved_reason::UNSUPPORTED.to_string());
+            return;
+        }
+
+        // Build the expected path suffix from the qualifier (excluding
+        // keyword prefixes like `crate`, `self`, `super`).
+        let path_segments: Vec<&str> = qualifier
+            .iter()
+            .filter(|s| !matches!(s.as_str(), "crate" | "self" | "super" | "Self"))
+            .map(String::as_str)
+            .collect();
+
+        // Find type/trait/struct symbols matching the owner name.
+        let owner_candidates: Vec<&Symbol> = file_symbols
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s.symbol_type,
+                    SymbolType::Struct
+                        | SymbolType::Class
+                        | SymbolType::Trait
+                        | SymbolType::Type
+                        | SymbolType::Enum
+                ) && s.name == owner_name
+            })
+            .filter(|s| {
+                // If we have intermediate path segments, check that the
+                // qualified_name contains them as a suffix.
+                if path_segments.len() <= 1 {
+                    return true;
+                }
+                // Check qualified_name ends with the path segments joined by ::
+                let expected_suffix = path_segments.join("::");
+                s.qualified_name.ends_with(&expected_suffix)
+                    || s.qualified_name.contains(&expected_suffix)
+            })
+            .collect();
+
+        if owner_candidates.is_empty() {
+            // Without a Cargo module graph, we can't resolve cross-file
+            // crate/module paths. Mark as missing project context.
+            relationship.unresolved_reason =
+                Some(unresolved_reason::MISSING_PROJECT_CONTEXT.to_string());
+            return;
+        }
+
+        // Find methods matching the terminal name under any candidate owner.
+        let mut candidates: Vec<&Symbol> = Vec::new();
+        for owner in &owner_candidates {
+            for sym in file_symbols {
+                if sym.parent_id.as_deref() == Some(owner.id.as_str())
+                    && sym.name == terminal
+                {
+                    candidates.push(sym);
+                }
+            }
+        }
+
+        // Deduplicate by symbol ID.
+        let mut seen_ids = HashSet::new();
+        candidates.retain(|s| seen_ids.insert(s.id.clone()));
+
+        match candidates.as_slice() {
+            [single] => {
+                relationship.target_symbol_id = Some(single.id.clone());
+                let strategy = if relationship.call_form.as_deref() == Some(call_form::CRATE_PATH) {
+                    "rust_crate_path"
+                } else {
+                    "rust_module_path"
+                };
+                relationship.resolution_strategy = Some(strategy.to_string());
+                relationship.confidence = Some(1.0);
+            }
+            [] => {
+                relationship.unresolved_reason =
+                    Some(unresolved_reason::UNRESOLVED_METHOD.to_string());
+            }
+            _ => {
+                relationship.unresolved_reason =
+                    Some(unresolved_reason::AMBIGUOUS.to_string());
+            }
+        }
+    }
+
+    /// Find the enclosing owner type (struct, trait, class, enum, type)
+    /// for a source symbol by walking up its `parent_id` chain.
+    /// The extractor parents methods to the type definition, not to the
+    /// impl block, so we look for a type symbol rather than an impl.
+    fn find_enclosing_owner_type(
+        &self,
+        source: &Symbol,
+        file_symbols: &[Symbol],
+    ) -> Option<String> {
+        let mut current_id = source.parent_id.as_ref()?;
+        loop {
+            let current = file_symbols.iter().find(|s| s.id == *current_id)?;
+            if matches!(
+                current.symbol_type,
+                SymbolType::Struct
+                    | SymbolType::Class
+                    | SymbolType::Trait
+                    | SymbolType::Type
+                    | SymbolType::Enum
+            ) {
+                return Some(current.id.clone());
+            }
+            // If we hit an impl, dig into its name to find the type name,
+            // then look for the corresponding type symbol.
+            if current.symbol_type == SymbolType::Impl {
+                // `impl Foo` → look for a symbol named `Foo`.
+                let type_name = current
+                    .name
+                    .strip_prefix("impl ")
+                    .map(|rest| {
+                        // `impl Trait for Type` → take the last type name.
+                        if let Some(pos) = rest.find(" for ") {
+                            &rest[pos + 5..]
+                        } else {
+                            rest
+                        }
+                        .trim()
+                    })
+                    .unwrap_or(&current.name);
+                let type_sym = file_symbols.iter().find(|s| {
+                    s.name == type_name
+                        && matches!(
+                            s.symbol_type,
+                            SymbolType::Struct
+                                | SymbolType::Class
+                                | SymbolType::Trait
+                                | SymbolType::Type
+                                | SymbolType::Enum
+                        )
+                });
+                if let Some(ts) = type_sym {
+                    return Some(ts.id.clone());
+                }
+            }
+            current_id = match current.parent_id.as_ref() {
+                Some(id) => id,
+                None => return None,
+            };
+        }
+    }
+
     fn collect_matching_symbols(
         &self,
         symbols: &[Symbol],
@@ -4823,6 +5303,16 @@ impl LanguageService {
         relationship: &SymbolRelationship,
         translation_call_aliases: &HashSet<String>,
     ) -> bool {
+        // Qualified Rust calls with an `unresolved_reason` are intentionally
+        // fail-closed observations — they must survive suppression so they
+        // remain queryable for diagnostics (feature contract invariant 9).
+        // Only bare/receiver calls that fell through to the generic resolver
+        // and remained unresolved are eligible for known-external suppression.
+        if relationship.call_form.is_some()
+            && relationship.unresolved_reason.is_some()
+        {
+            return false;
+        }
         // A known external/library/builtin call name is always suppressed when it
         // is still unresolved after same-file/imported resolution — regardless of
         // whether its bare name happens to be a globally-unique project symbol.
@@ -5940,6 +6430,7 @@ impl LanguageService {
                             symbol.id.clone(),
                             reference.relationship_type,
                             reference.line,
+                            reference.byte_offset,
                         );
                         if seen_edges.insert(edge_key) {
                             edges.push(SymbolTraceEdge {
@@ -5956,6 +6447,10 @@ impl LanguageService {
                                 resolution_confidence: reference.resolution_confidence,
                                 receiver_type: reference.receiver_type.clone(),
                                 receiver_is_self: reference.receiver_is_self,
+                                byte_offset: reference.byte_offset,
+                                qualifier_segments: reference.qualifier_segments.clone(),
+                                call_form: reference.call_form.clone(),
+                                unresolved_reason: reference.unresolved_reason.clone(),
                             });
                         }
 
@@ -5998,6 +6493,7 @@ impl LanguageService {
                             target_key,
                             reference.relationship_type,
                             reference.line,
+                            reference.byte_offset,
                         );
                         if seen_edges.insert(edge_key) {
                             edges.push(SymbolTraceEdge {
@@ -6014,6 +6510,10 @@ impl LanguageService {
                                 resolution_confidence: reference.resolution_confidence,
                                 receiver_type: reference.receiver_type.clone(),
                                 receiver_is_self: reference.receiver_is_self,
+                                byte_offset: reference.byte_offset,
+                                qualifier_segments: reference.qualifier_segments.clone(),
+                                call_form: reference.call_form.clone(),
+                                unresolved_reason: reference.unresolved_reason.clone(),
                             });
                         }
 
@@ -6127,6 +6627,7 @@ impl LanguageService {
                             candidate.symbol.id.clone(),
                             reference.relationship_type,
                             reference.line,
+                            reference.byte_offset,
                         );
                         if !seen_edges.insert(edge_key) {
                             continue;
@@ -6178,6 +6679,7 @@ impl LanguageService {
                             neighbor.id.clone(),
                             reference.relationship_type,
                             reference.line,
+                            reference.byte_offset,
                         );
                         if !seen_edges.insert(edge_key) {
                             continue;
@@ -6284,6 +6786,10 @@ impl LanguageService {
             receiver_is_self: false,
             import_path: None,
             imported_name: None,
+            byte_offset: None,
+            qualifier_segments: None,
+            call_form: None,
+            unresolved_reason: None,
         }])
     }
 
@@ -6315,6 +6821,10 @@ impl LanguageService {
                 receiver_is_self: false,
                 import_path: None,
                 imported_name: None,
+                byte_offset: None,
+                qualifier_segments: None,
+                call_form: None,
+                unresolved_reason: None,
             })
             .collect())
     }
@@ -7194,6 +7704,14 @@ pub struct SymbolTraceEdge {
     pub resolution_confidence: Option<f32>,
     pub receiver_type: Option<String>,
     pub receiver_is_self: bool,
+    /// Qualified Rust call observation: byte offset for exact call-site identity.
+    pub byte_offset: Option<u32>,
+    /// Qualified Rust call observation: normalized qualifier segments.
+    pub qualifier_segments: Option<Vec<String>>,
+    /// Qualified Rust call observation: syntactic call form.
+    pub call_form: Option<String>,
+    /// Qualified Rust call observation: stable unresolved reason category.
+    pub unresolved_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -7382,6 +7900,14 @@ pub struct SymbolPathEdge {
     pub receiver_is_self: bool,
     pub effective_confidence: f32,
     pub cost: u32,
+    /// Qualified Rust call observation: byte offset for exact call-site identity.
+    pub byte_offset: Option<u32>,
+    /// Qualified Rust call observation: normalized qualifier segments.
+    pub qualifier_segments: Option<Vec<String>>,
+    /// Qualified Rust call observation: syntactic call form.
+    pub call_form: Option<String>,
+    /// Qualified Rust call observation: stable unresolved reason category.
+    pub unresolved_reason: Option<String>,
 }
 
 impl SymbolPathEdge {
@@ -7406,6 +7932,10 @@ impl SymbolPathEdge {
             receiver_is_self: reference.receiver_is_self,
             effective_confidence,
             cost,
+            byte_offset: reference.byte_offset,
+            qualifier_segments: reference.qualifier_segments.clone(),
+            call_form: reference.call_form.clone(),
+            unresolved_reason: reference.unresolved_reason.clone(),
         }
     }
 }
@@ -9046,6 +9576,13 @@ fn read_file_leading_bytes(path: &Path, max_bytes: usize) -> Option<Vec<u8>> {
 
 fn is_anchor_only_index_file(file_path: &str) -> bool {
     Language::capability_for_path(file_path).is_none() && is_translation_resource_path(file_path)
+}
+
+fn is_rust_project_resolution_input(file_path: &str) -> bool {
+    file_path.to_ascii_lowercase().ends_with(".rs")
+        || Path::new(file_path)
+            .file_name()
+            .is_some_and(|name| name == "Cargo.toml")
 }
 
 fn is_translation_resource_path(file_path: &str) -> bool {
@@ -14100,7 +14637,19 @@ mod tests {
         fn index_source(file: &str, source: &str) -> (LanguageService, TempDir, Vec<Symbol>) {
             let (service, temp_dir) = create_test_service();
             fs::write(temp_dir.path().join(file), source).unwrap();
-            let symbols = service.index_file(file).unwrap();
+            let symbols = if file.ends_with(".rs") {
+                fs::write(
+                    temp_dir.path().join("Cargo.toml"),
+                    format!(
+                        "[package]\nname = \"qualified-test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"{file}\"\n"
+                    ),
+                )
+                .unwrap();
+                service.index_directory("").unwrap();
+                service.get_file_symbols(file).unwrap()
+            } else {
+                service.index_file(file).unwrap()
+            };
             (service, temp_dir, symbols)
         }
 
@@ -14661,6 +15210,478 @@ class B {
                 recv_types,
                 vec![None],
                 "this inside a nested non-arrow function must not be typed as the class"
+            );
+        }
+
+        // ---- Qualified Rust call resolution tests ---------------------------
+
+        /// Helper: get all call edges from `source_qn` targeting `target_name`,
+        /// returning (resolved_id, strategy, unresolved_reason) tuples.
+        fn call_edge_metadata(
+            service: &LanguageService,
+            source: &Symbol,
+            target_name: &str,
+        ) -> Vec<(Option<String>, Option<String>, Option<String>)> {
+            let graph = service
+                .get_symbol_graph(source, SymbolRelationshipType::Call, 50)
+                .unwrap();
+            graph
+                .outgoing
+                .iter()
+                .filter(|edge| {
+                    edge.relationship_type == SymbolRelationshipType::Call
+                        && edge.target_name == target_name
+                })
+                .map(|edge| {
+                    (
+                        edge.target_symbol_id.clone(),
+                        edge.resolution_strategy.clone(),
+                        edge.unresolved_reason.clone(),
+                    )
+                })
+                .collect()
+        }
+
+        /// `Self::method()` inside an inherent impl resolves to the method on
+        /// that same impl block (lane 1: rust_self_owner).
+        #[test]
+        fn qualified_self_call_resolves_to_enclosing_impl_method() {
+            const RS: &str = "\
+struct Store;
+
+impl Store {
+    fn new() -> Store { Store }
+    fn open(&self) -> Store {
+        Self::new()
+    }
+}
+";
+            let (service, _tmp, symbols) = index_source("self_call.rs", RS);
+            let open = sym(&symbols, "Store::open");
+            let new = sym(&symbols, "Store::new");
+
+            let edges = call_edge_metadata(&service, open, "new");
+            assert_eq!(
+                edges.len(),
+                1,
+                "expected one call edge for `new` from `open`"
+            );
+            let (resolved, strategy, reason) = &edges[0];
+            assert_eq!(
+                resolved.as_deref(),
+                Some(new.id.as_str()),
+                "Self::new() must resolve to Store::new"
+            );
+            assert_eq!(
+                strategy.as_deref(),
+                Some("rust_self_owner"),
+                "strategy must be rust_self_owner"
+            );
+            assert!(reason.is_none(), "resolved edges must have no unresolved_reason");
+        }
+
+        /// `Type::method()` — associated path resolves to the method under the
+        /// matching impl block (lane 5: rust_visible_owner).
+        #[test]
+        fn qualified_associated_call_resolves_to_impl_method() {
+            const RS: &str = "\
+struct Store;
+struct Other;
+
+impl Store {
+    fn build() -> Store { Store }
+}
+
+impl Other {
+    fn build() -> Other { Other }
+    fn use_store() -> Store {
+        Store::build()
+    }
+}
+";
+            let (service, _tmp, symbols) = index_source("assoc.rs", RS);
+            let use_store = sym(&symbols, "Other::use_store");
+            let store_build = sym(&symbols, "Store::build");
+
+            let edges = call_edge_metadata(&service, use_store, "build");
+            assert_eq!(edges.len(), 1);
+            let (resolved, strategy, reason) = &edges[0];
+            assert_eq!(
+                resolved.as_deref(),
+                Some(store_build.id.as_str()),
+                "Store::build() must resolve to Store::build, not Other::build"
+            );
+            assert_eq!(
+                strategy.as_deref(),
+                Some("rust_visible_owner"),
+            );
+            assert!(reason.is_none());
+        }
+
+        /// Inherent associated methods take precedence over same-named trait
+        /// impl methods. Trait methods require explicit trait evidence (UFCS).
+        #[test]
+        fn qualified_associated_call_prefers_inherent_over_trait_impl() {
+            const RS: &str = "\
+struct Foo;
+
+impl Foo {
+    fn run(&self) -> i32 { 1 }
+}
+
+trait Runner {
+    fn run(&self) -> i32;
+}
+
+impl Runner for Foo {
+    fn run(&self) -> i32 { 2 }
+}
+
+impl Foo {
+    fn go(&self) -> i32 {
+        Foo::run()
+    }
+}
+";
+            let (service, _tmp, symbols) = index_source("ambig.rs", RS);
+            let go = sym(&symbols, "Foo::go");
+            let inherent_run = sym(&symbols, "Foo::run");
+            let edges = call_edge_metadata(&service, go, "run");
+            assert_eq!(edges.len(), 1);
+            let (resolved, strategy, reason) = &edges[0];
+            assert_eq!(
+                resolved.as_deref(),
+                Some(inherent_run.id.as_str()),
+                "Foo::run must select the inherent method without guessing a trait"
+            );
+            assert_eq!(strategy.as_deref(), Some("rust_visible_owner"));
+            assert!(reason.is_none());
+        }
+
+        /// `Self::method()` without an enclosing impl must stay unresolved
+        /// with reason `self_without_owner`.
+        #[test]
+        fn qualified_self_call_without_owner_stays_unresolved() {
+            // `Self::new()` inside a free function — no enclosing impl.
+            const RS: &str = "\
+struct Store;
+
+impl Store {
+    fn new() -> Store { Store }
+}
+
+fn make_store() -> Store {
+    Self::new()
+}
+";
+            let (service, _tmp, symbols) = index_source("no_owner.rs", RS);
+            let make_store = sym(&symbols, "make_store");
+
+            let edges = call_edge_metadata(&service, make_store, "new");
+            assert_eq!(edges.len(), 1);
+            let (resolved, _strategy, reason) = &edges[0];
+            assert!(
+                resolved.is_none(),
+                "Self::new() in a free function must not resolve; got {resolved:?}"
+            );
+            assert_eq!(
+                reason.as_deref(),
+                Some("self_without_owner"),
+            );
+        }
+
+        /// `crate::module::Type::method()` — crate-rooted path resolves when
+        /// the owner and method are in the same file.
+        #[test]
+        fn qualified_crate_path_resolves_same_file() {
+            const RS: &str = "\
+pub struct Config;
+
+impl Config {
+    pub fn load() -> Config { Config }
+}
+
+pub fn init() -> Config {
+    crate::Config::load()
+}
+";
+            let (service, _tmp, symbols) = index_source("crate_path.rs", RS);
+            let init = sym(&symbols, "init");
+            let load = sym(&symbols, "Config::load");
+
+            let edges = call_edge_metadata(&service, init, "load");
+            assert_eq!(edges.len(), 1);
+            let (resolved, strategy, reason) = &edges[0];
+            assert_eq!(
+                resolved.as_deref(),
+                Some(load.id.as_str()),
+                "crate::Config::load() must resolve to Config::load"
+            );
+            assert_eq!(
+                strategy.as_deref(),
+                Some("rust_crate_path"),
+            );
+            assert!(reason.is_none());
+        }
+
+        /// Two qualified calls on the same source line must survive as distinct
+        /// observations with different byte offsets (feature contract:
+        /// exact call-site identity).
+        #[test]
+        fn qualified_same_line_distinct_byte_offsets() {
+            const RS: &str = "\
+struct A;
+struct B;
+
+impl A {
+    fn new() -> A { A }
+}
+
+impl B {
+    fn new() -> B { B }
+}
+
+fn make_both() {
+    A::new(); B::new()
+}
+";
+            let (service, _tmp, symbols) = index_source("same_line.rs", RS);
+            let make_both = sym(&symbols, "make_both");
+
+            let graph = service
+                .get_symbol_graph(make_both, SymbolRelationshipType::Call, 50)
+                .unwrap();
+            let new_edges: Vec<_> = graph
+                .outgoing
+                .iter()
+                .filter(|e| {
+                    e.relationship_type == SymbolRelationshipType::Call
+                        && e.target_name == "new"
+                })
+                .collect();
+            assert_eq!(
+                new_edges.len(),
+                2,
+                "two same-line calls must produce two distinct edges; got {}",
+                new_edges.len()
+            );
+            // Verify they have distinct byte offsets.
+            let offsets: Vec<_> = new_edges.iter().map(|e| e.byte_offset).collect();
+            assert_ne!(
+                offsets[0], offsets[1],
+                "same-line calls must have distinct byte offsets"
+            );
+            // Both should resolve to their respective owners.
+            let a_new = sym(&symbols, "A::new");
+            let b_new = sym(&symbols, "B::new");
+            let resolved_ids: Vec<_> = new_edges
+                .iter()
+                .map(|e| e.target_symbol_id.clone())
+                .collect();
+            assert!(
+                resolved_ids.contains(&Some(a_new.id.clone())),
+                "A::new() must resolve to A::new"
+            );
+            assert!(
+                resolved_ids.contains(&Some(b_new.id.clone())),
+                "B::new() must resolve to B::new"
+            );
+        }
+
+        /// `self::Type::method()` module-relative path resolves to the same-file
+        /// owner (lane 3: rust_module_path).
+        #[test]
+        fn qualified_module_path_resolves_same_file() {
+            const RS: &str = "\
+pub struct Store;
+
+impl Store {
+    pub fn open() -> Store { Store }
+}
+
+pub fn use_store() {
+    self::Store::open()
+}
+";
+            let (service, _tmp, symbols) = index_source("mod_path.rs", RS);
+            let use_store = sym(&symbols, "use_store");
+            let open = sym(&symbols, "Store::open");
+
+            let edges = call_edge_metadata(&service, use_store, "open");
+            assert_eq!(edges.len(), 1);
+            let (resolved, strategy, reason) = &edges[0];
+            assert_eq!(
+                resolved.as_deref(),
+                Some(open.id.as_str()),
+                "self::Store::open() must resolve to Store::open"
+            );
+            assert_eq!(
+                strategy.as_deref(),
+                Some("rust_module_path"),
+            );
+            assert!(reason.is_none());
+        }
+
+        /// A failed qualifier must never fall back to repository-wide
+        /// terminal-name uniqueness (fail-closed invariant 1).
+        #[test]
+        fn failed_qualifier_does_not_fall_back_to_global_name() {
+            // `Unknown::new()` — no type named `Unknown` in the file.
+            // But there IS a globally unique `new` method on `Store`.
+            // The resolver must NOT fall back to resolving `new` globally.
+            const RS: &str = "\
+struct Store;
+
+impl Store {
+    fn new() -> Store { Store }
+}
+
+fn caller() {
+    Unknown::new()
+}
+";
+            let (service, _tmp, symbols) = index_source("no_fallback.rs", RS);
+            let caller = sym(&symbols, "caller");
+
+            let edges = call_edge_metadata(&service, caller, "new");
+            assert_eq!(edges.len(), 1);
+            let (resolved, _strategy, reason) = &edges[0];
+            assert!(
+                resolved.is_none(),
+                "Unknown::new() must not resolve by falling back to global name; got {resolved:?}"
+            );
+            assert_eq!(
+                reason.as_deref(),
+                Some("unresolved_owner"),
+                "unresolved reason must be `unresolved_owner`, not a global fallback"
+            );
+        }
+
+        /// Source-order independence: a type declared *after* its impl
+        /// must produce the same owner/member relationship as a type
+        /// declared before it (feature contract: source-order-independent
+        /// impl ownership).
+        #[test]
+        fn qualified_call_type_declared_after_impl_resolves() {
+            const RS: &str = "\
+impl Late {
+    fn new() -> Late { Late }
+}
+
+struct Late;
+
+fn caller() {
+    Late::new()
+}
+";
+            let (service, _tmp, symbols) = index_source("late.rs", RS);
+            let caller = sym(&symbols, "caller");
+            let new = sym(&symbols, "Late::new");
+
+            let edges = call_edge_metadata(&service, caller, "new");
+            assert_eq!(edges.len(), 1);
+            let (resolved, strategy, reason) = &edges[0];
+            assert_eq!(
+                resolved.as_deref(),
+                Some(new.id.as_str()),
+                "Late::new() must resolve even when impl precedes the struct"
+            );
+            assert_eq!(strategy.as_deref(), Some("rust_visible_owner"));
+            assert!(reason.is_none());
+        }
+
+        /// `Self::method()` inside a trait impl must resolve to the method
+        /// on the implementing type (lane 1: rust_self_owner via trait impl).
+        #[test]
+        fn qualified_self_call_in_trait_impl_resolves() {
+            const RS: &str = "\
+struct Widget;
+
+trait Maker {
+    fn make() -> Self;
+    fn reuse(&self) -> Self;
+}
+
+impl Maker for Widget {
+    fn make() -> Widget { Widget }
+    fn reuse(&self) -> Widget {
+        Self::make()
+    }
+}
+";
+            let (service, _tmp, symbols) = index_source("trait_self.rs", RS);
+            let reuse = sym(&symbols, "Widget as Maker::reuse");
+            let make = sym(&symbols, "Widget as Maker::make");
+
+            let edges = call_edge_metadata(&service, reuse, "make");
+            assert_eq!(edges.len(), 1);
+            let (resolved, strategy, reason) = &edges[0];
+            assert_eq!(
+                resolved.as_deref(),
+                Some(make.id.as_str()),
+                "Self::make() inside trait impl must resolve to Widget::make"
+            );
+            assert_eq!(strategy.as_deref(), Some("rust_self_owner"));
+            assert!(reason.is_none());
+        }
+
+        /// `super::Type::method()` — parent-relative path resolves when
+        /// the owner and method are in the same file (lane 3: rust_module_path).
+        #[test]
+        fn qualified_super_path_resolves_same_file() {
+            const RS: &str = "\
+pub struct Config;
+
+impl Config {
+    pub fn load() -> Config { Config }
+}
+
+mod inner {
+    use super::Config;
+    pub fn init() -> Config {
+        super::Config::load()
+    }
+}
+";
+            let (service, _tmp, symbols) = index_source("super_path.rs", RS);
+            let init = symbols
+                .iter()
+                .find(|symbol| symbol.name == "init")
+                .expect("inner init function");
+            let load = sym(&symbols, "Config::load");
+
+            let edges = call_edge_metadata(&service, init, "load");
+            assert_eq!(edges.len(), 1);
+            let (resolved, strategy, reason) = &edges[0];
+            assert_eq!(
+                resolved.as_deref(),
+                Some(load.id.as_str()),
+                "super::Config::load() must resolve to Config::load"
+            );
+            assert_eq!(strategy.as_deref(), Some("rust_module_path"));
+            assert!(reason.is_none());
+        }
+
+        /// An unresolved method under a valid owner must carry reason
+        /// `unresolved_method`, not `unresolved_owner`.
+        #[test]
+        fn qualified_call_valid_owner_missing_method() {
+            const RS: &str = "\
+struct Store;
+impl Store { fn new() -> Store { Store } }
+fn caller() { Store::nonexistent() }
+";
+            let (service, _tmp, symbols) = index_source("no_method.rs", RS);
+            let caller = sym(&symbols, "caller");
+
+            let edges = call_edge_metadata(&service, caller, "nonexistent");
+            assert_eq!(edges.len(), 1);
+            let (resolved, _strategy, reason) = &edges[0];
+            assert!(resolved.is_none());
+            assert_eq!(
+                reason.as_deref(),
+                Some("unresolved_method"),
+                "valid owner but missing method must be `unresolved_method`"
             );
         }
     }
@@ -21022,7 +22043,9 @@ func helper() {}
         let py_version = LanguageService::extractor_version_for_index_file("b.py").unwrap();
 
         let canonical_current = format!(
-            "2\na.ts\u{1f}{}\u{1f}{}\u{1f}{}\nb.py\u{1f}{}\u{1f}{}\u{1f}{}",
+            "store_schema\u{1f}{}\u{1f}rust_qualified_resolver\u{1f}{}\n2\na.ts\u{1f}{}\u{1f}{}\u{1f}{}\nb.py\u{1f}{}\u{1f}{}\u{1f}{}",
+            SYMBOL_STORE_SCHEMA_VERSION,
+            rust_project::RUST_QUALIFIED_RESOLVER_VERSION,
             ts_meta.file_size,
             ts_meta.modified_at,
             ts_version,
@@ -21040,8 +22063,14 @@ func helper() {}
         // DIFFERENT fingerprint — an extractor upgrade invalidates the
         // no-change fast path even with byte-identical files.
         let canonical_stale = format!(
-            "2\na.ts\u{1f}{}\u{1f}{}\u{1f}0\nb.py\u{1f}{}\u{1f}{}\u{1f}{}",
-            ts_meta.file_size, ts_meta.modified_at, py_meta.file_size, py_meta.modified_at, py_version
+            "store_schema\u{1f}{}\u{1f}rust_qualified_resolver\u{1f}{}\n2\na.ts\u{1f}{}\u{1f}{}\u{1f}0\nb.py\u{1f}{}\u{1f}{}\u{1f}{}",
+            SYMBOL_STORE_SCHEMA_VERSION,
+            rust_project::RUST_QUALIFIED_RESOLVER_VERSION,
+            ts_meta.file_size,
+            ts_meta.modified_at,
+            py_meta.file_size,
+            py_meta.modified_at,
+            py_version
         );
         assert_ne!(
             fingerprint,

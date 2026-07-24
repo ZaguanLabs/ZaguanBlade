@@ -9,6 +9,7 @@
 //! - Symbol Index: Persistent SQLite storage with FTS5 search
 
 pub mod handler;
+mod rust_project;
 mod service;
 
 pub use handler::LanguageHandler;

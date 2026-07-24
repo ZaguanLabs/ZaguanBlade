@@ -1119,6 +1119,10 @@ mod tests {
             resolution_confidence: Some(1.0),
             receiver_type: None,
             receiver_is_self: false,
+            byte_offset: None,
+            qualifier_segments: None,
+            call_form: None,
+            unresolved_reason: None,
         };
         let mut transitive = direct.clone();
         transitive.depth = 2;
@@ -1149,6 +1153,10 @@ mod tests {
             resolution_confidence: Some(1.0),
             receiver_type: None,
             receiver_is_self: false,
+            byte_offset: None,
+            qualifier_segments: None,
+            call_form: None,
+            unresolved_reason: None,
         };
         let caller_edge = make_edge(caller.clone(), middle.clone(), 2);
         let middle_edge = make_edge(middle.clone(), seed.clone(), 1);
@@ -1186,6 +1194,10 @@ mod tests {
             receiver_is_self: false,
             import_path: None,
             imported_name: None,
+            byte_offset: None,
+            qualifier_segments: None,
+            call_form: None,
+            unresolved_reason: None,
         }
     }
 
@@ -1713,6 +1725,10 @@ mod tests {
             receiver_is_self: false,
             import_path: None,
             imported_name: None,
+            byte_offset: None,
+            qualifier_segments: None,
+            call_form: None,
+            unresolved_reason: None,
         };
         let fallback = crate::symbol_index::SymbolReference {
             source_symbol: source,
@@ -1728,6 +1744,10 @@ mod tests {
             receiver_is_self: false,
             import_path: None,
             imported_name: None,
+            byte_offset: None,
+            qualifier_segments: None,
+            call_form: None,
+            unresolved_reason: None,
         };
 
         assert_eq!(
@@ -1772,6 +1792,10 @@ mod tests {
             receiver_is_self: false,
             import_path: Some("./helper".to_string()),
             imported_name: Some("helper".to_string()),
+            byte_offset: None,
+            qualifier_segments: None,
+            call_form: None,
+            unresolved_reason: None,
         };
 
         let connection = symbol_search_connection_json(&reference, "outgoing");
@@ -1784,6 +1808,39 @@ mod tests {
         assert_eq!(connection["resolution"]["imported_name"], "helper");
         assert_eq!(connection["resolution"]["resolved"], true);
         assert_eq!(connection["observation"]["kind"], "syntax_extracted");
+    }
+
+    #[test]
+    fn qualified_rust_reference_wire_preserves_exact_observation_identity() {
+        let source = test_symbol("caller", "caller", SymbolType::Function, 1, None);
+        let target = test_symbol("new", "Store::new", SymbolType::Method, 3, None);
+        let reference = crate::symbol_index::SymbolReference {
+            source_symbol: source,
+            relationship_type: crate::tree_sitter::SymbolRelationshipType::Call,
+            target_name: "new".to_string(),
+            target_symbol_id: Some(target.id.clone()),
+            target_symbol: Some(target),
+            line: 2,
+            observation_kind: crate::symbol_index::RelationshipObservationKind::SyntaxExtracted,
+            resolution_strategy: Some("rust_use_binding".to_string()),
+            resolution_confidence: Some(1.0),
+            receiver_type: None,
+            receiver_is_self: false,
+            import_path: None,
+            imported_name: None,
+            byte_offset: Some(137),
+            qualifier_segments: Some(vec!["ImportedStore".to_string()]),
+            call_form: Some("associated".to_string()),
+            unresolved_reason: None,
+        };
+
+        let edge = symbol_reference_to_json(&reference);
+        assert_eq!(edge["byte_offset"], 137);
+        assert_eq!(edge["qualifier_segments"], serde_json::json!(["ImportedStore"]));
+        assert_eq!(edge["call_form"], "associated");
+        assert_eq!(edge["observed_qualified_target"], "ImportedStore::new");
+        assert_eq!(edge["resolution"]["strategy"], "rust_use_binding");
+        assert_eq!(edge["resolution"]["confidence_score"], 1.0);
     }
 
     #[test]
@@ -5721,7 +5778,28 @@ fn register_reference_symbols(
     }
 }
 
+/// Reconstruct a human-readable observed qualified target from qualifier
+/// segments and the terminal name, e.g. `["crate", "store", "SymbolStore"]` +
+/// `"new"` → `"crate::store::SymbolStore::new"`. Returns `None` when there are
+/// no qualifier segments (bare or receiver calls — the terminal name alone is
+/// already in `target_name`).
+fn build_observed_qualified_target(
+    qualifier_segments: &Option<Vec<String>>,
+    terminal: &str,
+) -> Option<String> {
+    let segments = qualifier_segments.as_ref()?;
+    if segments.is_empty() {
+        return None;
+    }
+    let mut joined = segments.join("::");
+    joined.push_str("::");
+    joined.push_str(terminal);
+    Some(joined)
+}
+
 fn symbol_reference_to_json(reference: &crate::symbol_index::SymbolReference) -> serde_json::Value {
+    let observed_qualified_target =
+        build_observed_qualified_target(&reference.qualifier_segments, &reference.target_name);
     serde_json::to_value(crate::symbol_wire::WireRelationshipEdge {
         source_symbol_id: reference.source_symbol.id.clone(),
         target_symbol_id: reference.target_symbol_id.clone(),
@@ -5740,6 +5818,11 @@ fn symbol_reference_to_json(reference: &crate::symbol_index::SymbolReference) ->
             reference.line,
         ),
         resolution: symbol_reference_resolution_json(reference),
+        byte_offset: reference.byte_offset,
+        qualifier_segments: reference.qualifier_segments.clone(),
+        call_form: reference.call_form.clone(),
+        observed_qualified_target,
+        unresolved_reason: reference.unresolved_reason.clone(),
     })
     .expect("wire relationship edge must serialize")
 }
@@ -5753,6 +5836,8 @@ fn symbol_trace_edge_to_json(edge: &crate::language_service::SymbolTraceEdge) ->
         edge.receiver_type.as_deref(),
         edge.receiver_is_self,
     );
+    let observed_qualified_target =
+        build_observed_qualified_target(&edge.qualifier_segments, &edge.target_name);
     serde_json::to_value(crate::symbol_wire::WireRelationshipEdge {
         source_symbol_id: edge.source_symbol.id.clone(),
         target_symbol_id: edge.target_symbol.as_ref().map(|symbol| symbol.id.clone()),
@@ -5771,6 +5856,11 @@ fn symbol_trace_edge_to_json(edge: &crate::language_service::SymbolTraceEdge) ->
             edge.line,
         ),
         resolution,
+        byte_offset: edge.byte_offset,
+        qualifier_segments: edge.qualifier_segments.clone(),
+        call_form: edge.call_form.clone(),
+        observed_qualified_target,
+        unresolved_reason: edge.unresolved_reason.clone(),
     })
     .expect("wire trace edge must serialize")
 }
@@ -5801,6 +5891,14 @@ fn symbol_path_edge_to_json(edge: &crate::language_service::SymbolPathEdge) -> s
             edge.receiver_type.as_deref(),
             edge.receiver_is_self,
         ),
+        byte_offset: edge.byte_offset,
+        qualifier_segments: edge.qualifier_segments.clone(),
+        call_form: edge.call_form.clone(),
+        observed_qualified_target: build_observed_qualified_target(
+            &edge.qualifier_segments,
+            &edge.target_name,
+        ),
+        unresolved_reason: edge.unresolved_reason.clone(),
     })
     .expect("wire path edge must serialize")
 }
@@ -5809,29 +5907,48 @@ fn symbol_query_edge_to_json(
     edge: &crate::language_service::SymbolTraceEdge,
     seed_id: &str,
 ) -> serde_json::Value {
-    serde_json::json!({
-        "seed_id": seed_id,
-        "source_symbol_id": edge.source_symbol.id,
-        "target_symbol_id": edge.target_symbol.as_ref().map(|symbol| symbol.id.as_str()),
-        "target_name": edge.target_name,
-        "relationship_type": edge.relationship_type.to_string(),
-        "traversal_direction": edge.direction.as_str(),
-        "depth": edge.depth,
-        "line": model_line(edge.line),
-        "observation": relationship_observation_json(
-            edge.observation_kind,
-            &edge.source_symbol.file_path,
-            edge.line,
-        ),
-        "resolution": relationship_resolution_json(
-            edge.resolution_strategy.as_deref(),
-            edge.resolution_confidence,
-            edge.resolved,
-            edge.relationship_type,
-            edge.receiver_type.as_deref(),
-            edge.receiver_is_self,
-        ),
-    })
+    let observed_qualified_target =
+        build_observed_qualified_target(&edge.qualifier_segments, &edge.target_name);
+    let mut value =
+        serde_json::to_value(crate::symbol_wire::WireRelationshipEdge {
+            source_symbol_id: edge.source_symbol.id.clone(),
+            target_symbol_id: edge.target_symbol.as_ref().map(|symbol| symbol.id.clone()),
+            target_name: edge.target_name.clone(),
+            relationship_type: edge.relationship_type.to_string(),
+            direction: None,
+            traversal_direction: Some(edge.direction.as_str().to_string()),
+            depth: Some(edge.depth),
+            line: model_line(edge.line),
+            resolved: Some(edge.resolved),
+            cost: None,
+            effective_confidence: None,
+            observation: relationship_observation_json(
+                edge.observation_kind,
+                &edge.source_symbol.file_path,
+                edge.line,
+            ),
+            resolution: relationship_resolution_json(
+                edge.resolution_strategy.as_deref(),
+                edge.resolution_confidence,
+                edge.resolved,
+                edge.relationship_type,
+                edge.receiver_type.as_deref(),
+                edge.receiver_is_self,
+            ),
+            byte_offset: edge.byte_offset,
+            qualifier_segments: edge.qualifier_segments.clone(),
+            call_form: edge.call_form.clone(),
+            observed_qualified_target,
+            unresolved_reason: edge.unresolved_reason.clone(),
+        })
+        .expect("wire query edge must serialize");
+    if let Some(map) = value.as_object_mut() {
+        map.insert(
+            "seed_id".to_string(),
+            serde_json::Value::String(seed_id.to_string()),
+        );
+    }
+    value
 }
 
 fn trace_edge_effective_confidence(edge: &crate::language_service::SymbolTraceEdge) -> f32 {
@@ -6496,7 +6613,7 @@ fn symbol_search_connection_json(
         reference.target_symbol.as_ref()
     };
 
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "direction": direction,
         "relationship_type": reference.relationship_type.to_string(),
         "target_name": &reference.target_name,
@@ -6516,7 +6633,30 @@ fn symbol_search_connection_json(
             "file_path": &symbol.file_path,
             "line": model_line(symbol.range.start.line),
         })),
-    })
+    });
+
+    // Qualified Rust call observation fields.
+    if let Some(offset) = reference.byte_offset {
+        value["byte_offset"] = serde_json::json!(offset);
+    }
+    if let Some(segments) = &reference.qualifier_segments {
+        if !segments.is_empty() {
+            value["qualifier_segments"] = serde_json::json!(segments);
+        }
+    }
+    if let Some(form) = &reference.call_form {
+        value["call_form"] = serde_json::json!(form);
+    }
+    if let Some(observed) =
+        build_observed_qualified_target(&reference.qualifier_segments, &reference.target_name)
+    {
+        value["observed_qualified_target"] = serde_json::json!(observed);
+    }
+    if let Some(reason) = &reference.unresolved_reason {
+        value["unresolved_reason"] = serde_json::json!(reason);
+    }
+
+    value
 }
 
 fn symbol_search_tool<R: tauri::Runtime>(

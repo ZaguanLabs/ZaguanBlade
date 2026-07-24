@@ -214,8 +214,9 @@ const LANGUAGE_CAPABILITIES: &[LanguageCapability] = &[
         extensions: &["rs"],
         parser: ParserKind::TreeSitter(TreeSitterGrammar::Rust),
         support: SupportLevel::Full,
-        // v3: Track B file-local constant `usage` edges.
-        extractor_version: 3,
+        // v5: Preserve qualified Rust call observations and distinct inherent
+        // versus trait impl provenance for project-aware resolution.
+        extractor_version: 5,
         extracts: ExtractionCapabilities::code(true, true, true),
     },
     LanguageCapability {
