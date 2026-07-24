@@ -125,6 +125,8 @@
     "imageNotSupported": "GLM models do not support image attachments. Please select a different model.",
     "referencedPaths": "Referenced paths",
     "assistantResponding": "Assistant is responding",
+    "loadOlderMessages": "Load earlier messages",
+    "loadingOlderMessages": "Loading earlier messages…",
     "mentionSuggestions": "Mention suggestions",
     "pendingResponse": {
       "working": "Working...",

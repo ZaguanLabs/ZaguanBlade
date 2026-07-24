@@ -292,19 +292,24 @@ pre::selection,
  * Chat long-conversation containment (WebKit CPU/RAM guard).
  *
  * content-visibility lets the engine skip layout and paint for off-screen
- * chat rows and completed tool-call entries entirely — the difference between
- * a bounded working set and gigabytes of live render tree on long agentic
- * runs. contain-intrinsic-size `auto <estimate>` keeps scroll geometry sane:
+ * completed tool-call entries entirely — the difference between a bounded
+ * working set and gigabytes of live render tree on long agentic runs.
+ * contain-intrinsic-size `auto <estimate>` keeps scroll geometry sane:
  * the estimate is used until a row has rendered once, after which the engine
  * remembers its real size. Engines without content-visibility ignore both
  * declarations harmlessly.
+ *
+ * NOTE: content-visibility is intentionally NOT applied to chat-offscreen-row.
+ * On WebKitGTK with software compositing (WEBKIT_DISABLE_COMPOSITING_MODE=1,
+ * the default on NVIDIA/X11), content-visibility:auto causes visible flashing
+ * when rows toggle between skipped and rendered states during rapid
+ * scroll-to-bottom updates (streaming). The JS virtualization logic already
+ * limits which rows are in the DOM, so content-visibility is redundant for
+ * rows and actively harmful in software rendering mode.
  */
 .chat-offscreen-tool {
     content-visibility: auto;
     contain-intrinsic-size: auto 44px;
 }
 
-.chat-offscreen-row {
-    content-visibility: auto;
-    contain-intrinsic-size: auto 160px;
-}
+/* chat-offscreen-row intentionally has no content-visibility — see comment above */

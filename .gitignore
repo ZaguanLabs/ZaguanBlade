@@ -24,6 +24,12 @@
 /.zblade/
 /.windsurf/
 
+# bundle visualizer output
+/bundle-stats.html
+
+# benchmark results
+/benchmark-results/
+
 # misc
 .DS_Store
 *.pem

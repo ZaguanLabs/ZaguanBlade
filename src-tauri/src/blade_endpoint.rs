@@ -1,5 +1,5 @@
-use lazy_static::lazy_static;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
@@ -22,10 +22,8 @@ pub struct BladeEndpoint {
     pub role: BladeEndpointRole,
 }
 
-lazy_static! {
-    static ref PREFERRED_MANAGED_ROLE: RwLock<BladeEndpointRole> =
-        RwLock::new(BladeEndpointRole::Primary);
-}
+static PREFERRED_MANAGED_ROLE: LazyLock<RwLock<BladeEndpointRole>> =
+    LazyLock::new(|| RwLock::new(BladeEndpointRole::Primary));
 
 static PRIMARY_MONITOR_RUNNING: AtomicBool = AtomicBool::new(false);
 

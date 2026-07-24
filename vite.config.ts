@@ -11,7 +11,18 @@ const isNodeModulePackage = (id: string, packageName: string): boolean => {
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
-    plugins: [react()],
+    plugins: [
+        react(),
+        ...(process.env.BUNDLE_ANALYZE === '1'
+            ? [(await import("rollup-plugin-visualizer")).visualizer({
+                filename: 'benchmarks/bundle-stats.html',
+                template: 'treemap',
+                gzipSize: true,
+                brotliSize: false,
+                emitFile: false,
+            })]
+            : []),
+    ],
 
     // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
     //
@@ -72,9 +83,12 @@ export default defineConfig(async () => ({
                         ) {
                             return 'vendor-react';
                         }
-                        // CodeMirror (Editor)
+                        // CodeMirror language packages: no manual chunk — each
+                        // @codemirror/lang-* stays independently loadable via its
+                        // own dynamic import, avoiding the all-languages chunk.
+                        // CodeMirror core (state/view/language) is grouped together.
                         if (id.includes('@codemirror/lang-')) {
-                            return 'vendor-codemirror-lang';
+                            return undefined;
                         }
                         if (id.includes('@codemirror') || id.includes('codemirror') || id.includes('@lezer')) {
                             return 'vendor-codemirror';
@@ -87,9 +101,11 @@ export default defineConfig(async () => ({
                         if (id.includes('@headless-tree')) {
                             return 'vendor-tree';
                         }
-                        // PDF.js (PDF Viewer)
+                        // PDF.js (PDF Viewer) — no manual chunk; let it remain
+                        // behind the dynamic import of PdfViewer so it is absent
+                        // from the initial preload graph.
                         if (id.includes('pdfjs-dist')) {
-                            return 'vendor-pdf';
+                            return undefined;
                         }
                         if (
                             id.includes('/react-router') ||

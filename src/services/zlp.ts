@@ -1,4 +1,3 @@
-import { v4 as uuidv4 } from 'uuid';
 import i18n from '../i18n';
 import { BladeDispatcher } from './blade';
 import { subscribeBladeNestedEventType } from './bladeEvents';
@@ -63,7 +62,7 @@ export class ZLPService {
      * Send a raw ZLP request and await the response.
      */
     static async send<T = any>(method: string, params: any): Promise<T> {
-        const id = uuidv4();
+        const id = crypto.randomUUID();
         let unsubscribe: (() => void) | undefined;
 
         // Create the promise that will resolve when the event arrives

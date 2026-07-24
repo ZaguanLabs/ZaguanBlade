@@ -153,17 +153,11 @@ impl AppState {
         };
 
         // Initialize warmup client with config values
-        let warmup_client = warmup::WarmupClient::new(
-            blade_url.clone(),
-            config.api_key.clone(),
-            user_id.clone(),
-        );
+        let warmup_client =
+            warmup::WarmupClient::new(blade_url.clone(), config.api_key.clone(), user_id.clone());
 
         // Initialize WebSocket connection manager before config is moved
-        let ws_connection = Arc::new(WsConnectionManager::new(
-            blade_url,
-            config.api_key.clone(),
-        ));
+        let ws_connection = Arc::new(WsConnectionManager::new(blade_url, config.api_key.clone()));
 
         Self {
             chat_manager: Mutex::new(ChatManager::new(50)),
@@ -226,13 +220,10 @@ impl AppState {
     fn create_conversation_store(
         project_data_dir: &Path,
     ) -> Result<conversation_store::ConversationStore, String> {
-        let storage_path = project_data_dir.join("artifacts").join("conversations");
-        conversation_store::ConversationStore::new(storage_path).or_else(|e| {
-            eprintln!("Failed to initialize conversation store: {}", e);
-            conversation_store::ConversationStore::new(
-                std::env::temp_dir().join("zblade_conversations"),
-            )
-        })
+        // Canonical UI conversations must never share files with searchable
+        // local artifacts: the schemas and write lifecycles are different.
+        let storage_path = project_data_dir.join("conversations");
+        conversation_store::ConversationStore::new(storage_path)
     }
 
     pub fn with_conversation_store<T, F>(&self, f: F) -> Result<T, String>

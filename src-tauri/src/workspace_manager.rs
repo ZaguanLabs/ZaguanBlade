@@ -15,7 +15,8 @@ pub struct WorkspaceManager {
 
 impl WorkspaceManager {
     pub fn new() -> Self {
-        let state_path = dirs::data_dir()
+        let state_path = directories::BaseDirs::new()
+            .map(|b| b.data_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."))
             .join("zaguan")
             .join("workspace_state.json");

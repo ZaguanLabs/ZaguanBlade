@@ -747,14 +747,12 @@ pub async fn handle_send_message<R: Runtime>(
                 // This fixes the bug where the loop would break after continue_tool_batch
                 // because streaming=false but rx=Some(channel) - we're still waiting for events!
                 if !is_streaming && !has_rx {
-                    // Auto-save conversation before emitting done
+                    // Auto-save conversation before emitting done.
                     {
-                        let mut stored = {
-                            let conversation = state.conversation.lock().unwrap();
-                            conversation.to_stored()
-                        };
-                        // Persist the current session ID to the stored metadata
-                        stored.metadata.session_id = session_id.clone();
+                        {
+                            let mut conversation = state.conversation.lock().unwrap();
+                            conversation.metadata.session_id = session_id.clone();
+                        }
                         let workspace_path = {
                             let workspace = state.workspace.lock().unwrap();
                             workspace.workspace.clone()
@@ -764,12 +762,29 @@ pub async fn handle_send_message<R: Runtime>(
                         let autosave_result = tokio::task::spawn_blocking(move || {
                             let state = blocking_app_handle.state::<AppState>();
 
-                            if let Err(e) =
-                                state.with_conversation_store(|store| store.save_conversation(&stored))
-                            {
+                            let saved_id = state.with_conversation_store(|store| {
+                                // Capture only the changed tail while the live
+                                // history is locked; perform disk I/O afterward.
+                                let delta = {
+                                    let conversation = state.conversation.lock().unwrap();
+                                    let start = store.changed_tail_start(
+                                        &conversation.metadata.id,
+                                        conversation.absolute_len(),
+                                    );
+                                    crate::conversation_store::ConversationDelta::from_history(
+                                        &conversation,
+                                        start,
+                                    )
+                                };
+                                let id = delta.conversation_id().to_string();
+                                store.save_delta(delta)?;
+                                Ok(id)
+                            });
+
+                            if let Err(e) = &saved_id {
                                 eprintln!("Failed to auto-save conversation: {}", e);
-                            } else {
-                                println!("Auto-saved conversation: {}", stored.metadata.id);
+                            } else if let Ok(id) = &saved_id {
+                                println!("Auto-saved conversation: {}", id);
                             }
 
                             // RFC-002: Also save to local artifacts if in local storage mode
@@ -777,48 +792,63 @@ pub async fn handle_send_message<R: Runtime>(
                                 let settings =
                                     project_settings::load_project_settings_or_default(&ws_path);
                                 if settings.storage.mode == project_settings::StorageMode::Local || is_local_model_clone {
-                                    // Convert to local artifact format
+                                    // Build the searchable artifact while the
+                                    // history lock is held, then release it
+                                    // before JSON and SQLite I/O.
                                     let project_id = crate::project::get_or_create_project_id(&ws_path)
                                         .unwrap_or_else(|_| "unknown".to_string());
-
-                                    let title = if stored.metadata.title.is_empty() {
-                                        "Untitled".to_string()
-                                    } else {
-                                        stored.metadata.title.clone()
-                                    };
-                                    let mut artifact = local_artifacts::ConversationArtifact::new(
-                                        stored.metadata.id.clone(),
-                                        project_id,
-                                        title,
-                                    );
-
-                                    // Convert messages, extracting file:line
-                                    // references from each body (reference-only).
-                                    for (idx, msg) in stored.messages.iter().enumerate() {
-                                        let local_msg = local_artifacts::Message {
-                                            id: format!("msg_{}", idx),
-                                            role: msg.role.clone(),
-                                            content: msg.content.clone(),
-                                            timestamp: chrono::Utc::now().to_rfc3339(),
-                                            code_references:
-                                                crate::conversation_memory::extract_code_references(
-                                                    &msg.content,
-                                                ),
+                                    let artifact = {
+                                        let conversation = state.conversation.lock().unwrap();
+                                        let title = if conversation.metadata.title.is_empty() {
+                                            "Untitled".to_string()
+                                        } else {
+                                            conversation.metadata.title.clone()
                                         };
-                                        artifact.messages.push(local_msg);
-                                    }
-                                    artifact.metadata.total_messages = artifact.messages.len() as i32;
-                                    // Reason-gated decision moments feed future
-                                    // context packs via search_moments.
-                                    artifact.moments =
-                                        crate::conversation_memory::extract_moments(&artifact.messages);
+                                        let mut artifact = local_artifacts::ConversationArtifact::new(
+                                            conversation.metadata.id.clone(),
+                                            project_id,
+                                            title,
+                                        );
+                                        for (index, message) in conversation.iter().enumerate() {
+                                            let role = match message.role {
+                                                crate::protocol::ChatRole::User => "user",
+                                                crate::protocol::ChatRole::Assistant => "assistant",
+                                                crate::protocol::ChatRole::System => "system",
+                                                crate::protocol::ChatRole::Tool => "tool",
+                                            };
+                                            artifact.messages.push(local_artifacts::Message {
+                                                id: message
+                                                    .id
+                                                    .clone()
+                                                    .unwrap_or_else(|| format!("msg_{index}")),
+                                                role: role.to_string(),
+                                                content: message.content.clone(),
+                                                timestamp: chrono::Utc::now().to_rfc3339(),
+                                                code_references:
+                                                    crate::conversation_memory::extract_code_references(
+                                                        &message.content,
+                                                    ),
+                                            });
+                                        }
+                                        artifact.metadata.total_messages =
+                                            i32::try_from(conversation.metadata.message_count)
+                                                .unwrap_or(i32::MAX);
+                                        artifact.metadata.message_offset =
+                                            i32::try_from(conversation.storage_offset())
+                                                .unwrap_or(i32::MAX);
+                                        artifact.moments =
+                                            crate::conversation_memory::extract_moments(
+                                                &artifact.messages,
+                                            );
+                                        artifact
+                                    };
 
                                     let artifact_store =
                                         local_artifacts::LocalArtifactStore::new(&ws_path);
                                     if let Err(e) = artifact_store.save_conversation(&artifact) {
                                         eprintln!("[LOCAL] Failed to save local artifact: {}", e);
                                     } else {
-                                        eprintln!("[LOCAL] Saved conversation to .zblade/artifacts/conversations/{}.json", stored.metadata.id);
+                                        eprintln!("[LOCAL] Saved conversation to .zblade/artifacts/conversations/{}.json", artifact.conversation_id);
                                     }
                                 }
                             }

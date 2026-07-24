@@ -41,6 +41,7 @@ interface ChatPanelProps {
     skipSingleCommand: (callId: string) => void;
     projectId: string;
     onLoadConversation: (messages: ChatMessageType[]) => void;
+    onPrependConversation: (messages: ChatMessageType[]) => void;
     researchProgress?: ResearchProgress | null;
     onNewConversation: () => void;
     onUndoTool: (toolCallId: string) => void;
@@ -154,6 +155,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     respondToApprovalRequest,
     projectId,
     onLoadConversation,
+    onPrependConversation,
     researchProgress,
     onNewConversation,
     onUndoTool,
@@ -173,7 +175,12 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const { t } = useTranslation();
     const [activeTab, setActiveTab] = useState<'chat' | 'history'>('chat');
     const [composerPrefill, setComposerPrefill] = useState<QueuedRequest | null>(null);
-    const { loadConversation } = useHistory();
+    const {
+        loadConversation,
+        loadOlderMessages,
+        hasOlderMessages,
+        loadingOlderMessages,
+    } = useHistory();
     const { stopCommandExecution } = useCommandExecution();
     const canUseAi = models.length > 0;
     const cloudErrorRecovery = useMemo(() => classifyCloudError(error), [error]);
@@ -251,6 +258,14 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                     onOpenFile={onOpenFile}
                     workspaceRoot={workspaceRoot}
                     onEditLastUserMessage={handleEditLastUserMessage}
+                    hasOlderMessages={hasOlderMessages}
+                    loadingOlderMessages={loadingOlderMessages}
+                    onLoadOlderMessages={async () => {
+                        const olderMessages = await loadOlderMessages();
+                        if (olderMessages.length > 0) {
+                            onPrependConversation(olderMessages);
+                        }
+                    }}
                 />
             ) : (
                 <HistoryTab

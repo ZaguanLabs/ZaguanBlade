@@ -1177,7 +1177,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
                 }
 
                 const [history, isStreaming] = await Promise.all([
-                    invoke<ChatMessage[]>('get_conversation'),
+                invoke<ChatMessage[]>('get_conversation_tail', { limit: 100 }),
                     invoke<boolean>('get_chat_status'),
                 ]);
 
@@ -2211,7 +2211,11 @@ export function useChatV2(options: UseChatV2Options = {}) {
         };
 
         try {
-            await invoke('truncate_conversation', { len: messageIndex, resetSession: true });
+            await invoke('truncate_conversation', {
+                len: messageIndex,
+                messageId: message.id,
+                resetSession: true,
+            });
         } catch (error) {
             console.error('[useChatV2] Failed to truncate conversation for message edit:', error);
             dispatch({ type: 'error/set', error: error instanceof Error ? error.message : String(error) });

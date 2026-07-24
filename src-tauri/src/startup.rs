@@ -48,6 +48,7 @@ pub fn ensure_post_ui_startup<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
         return;
     }
 
+    crate::startup_marks::record("post_ui_service_start");
     crate::fs_watcher::restart_fs_watcher(app_handle);
 
     let app_handle = app_handle.clone();

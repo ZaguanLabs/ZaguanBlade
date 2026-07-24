@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 const CACHE_TTL: Duration = Duration::from_secs(300); // 5 minutes
@@ -50,10 +50,9 @@ struct ModelCache {
     last_fetch: Instant,
 }
 
-lazy_static::lazy_static! {
-    static ref MODEL_CACHE: Arc<Mutex<Option<ModelCache>>> = Arc::new(Mutex::new(None));
-    static ref FETCH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
-}
+static MODEL_CACHE: LazyLock<Arc<Mutex<Option<ModelCache>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(None)));
+static FETCH_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 async fn fetch_models_from_server(
     blade_url: &str,

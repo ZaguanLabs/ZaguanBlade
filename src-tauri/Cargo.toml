@@ -22,7 +22,6 @@ tauri = { version = "2.11.5", features = [] }
 tauri-plugin-opener = "2.5.4"
 tauri-plugin-fs = "2.5.1"
 tauri-plugin-dialog = "2.7.1"
-tauri-plugin-shell = "2.3.5"
 tauri-plugin-notification = "2.3.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -32,15 +31,14 @@ serde_yaml = "0.9"
 # per-node line/col markers; tolerates duplicate keys.
 marked-yaml = "0.8"
 reqwest = { version = "0.13.3", features = ["json", "stream"] }
-tokio = { version = "1.52.3", features = ["full"] }
+tokio = { version = "1.52.3", features = ["rt", "rt-multi-thread", "fs", "process", "net", "sync", "time", "macros", "io-util"] }
 chrono = { version = "0.4", features = ["clock", "serde"] }
 regex = "1.12.2"
 walkdir = "2.5.0"
 directories = "6.0.0"
 futures-util = "0.3"
 portable-pty = "0.9.0"
-lazy_static = "1.4"
-dirs = "6.0.0"
+
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 uuid = { version = "1.23.4", features = ["v4", "serde"] }
 clap = { version = "4.6.1", features = ["derive"] }
@@ -76,7 +74,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 base64 = "0.22.1"
 xcap = "0.9.4"
-image = "0.25"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [features]
 default = []
@@ -87,7 +85,14 @@ panic = "abort" # Strip expensive panic clean-up logic
 codegen-units = 1 # Compile more slowly, but better optimization
 lto = true # Enable Link Time Optimization
 opt-level = 3 # Optimize for speed
-strip = false # Do not strip symbols (required for Tauri bundler type injection)
+strip = "symbols" # Strip debug symbols and symbol tables from the shipped binary
+
+# Profiling build: release-equivalent optimization with symbols for perf/flamegraph.
+# Use `cargo build --profile profiling` to produce a symbol-rich binary.
+[profile.profiling]
+inherits = "release"
+strip = false
+debug = true
 
 [dev-dependencies]
 tempfile = "3.24.0"
@@ -138,7 +143,6 @@ type_complexity = "allow"
 unnecessary_map_or = "allow"
 unnecessary_sort_by = "allow"
 unnecessary_unwrap = "allow"
-useless_borrows_in_formatting = "allow"
 useless_conversion = "allow"
 useless_format = "allow"
 while_let_loop = "allow"

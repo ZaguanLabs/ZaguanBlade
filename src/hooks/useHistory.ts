@@ -26,22 +26,41 @@ function mapHistoryMessage(msg: HistoryMessage | any): ChatMessage {
     }));
 
     return {
-        id: crypto.randomUUID(),
+        id: msg.id ?? crypto.randomUUID(),
         role: mapHistoryRole(msg.role),
         content: msg.content,
+        images: msg.images,
+        mentions: msg.mentions,
         reasoning: msg.reasoning,
         tool_call_id: msg.tool_call_id,
         tool_calls: msg.tool_calls,
+        progress: msg.progress,
         content_before_tools: msg.content_before_tools,
         content_after_tools: msg.content_after_tools,
         commandExecutions,
     };
 }
 
+interface LocalConversationPage {
+    messages: unknown[];
+    offset: number;
+    total: number;
+}
+
+interface LocalPageCursor {
+    conversationId: string;
+    offset: number;
+    total: number;
+}
+
+const LOCAL_HISTORY_PAGE_SIZE = 100;
+
 export function useHistory() {
     const [conversations, setConversations] = useState<ConversationSummary[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [localPageCursor, setLocalPageCursor] = useState<LocalPageCursor | null>(null);
+    const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
 
     // Listen for History Events from backend
     useEffect(() => {
@@ -175,9 +194,17 @@ export function useHistory() {
             setError(null);
             try {
                 await invoke('load_conversation', { id: sessionId });
-                const messages = await invoke<any[]>('get_conversation');
-
-                const chatMessages: ChatMessage[] = messages.map(mapHistoryMessage);
+                const page = await invoke<LocalConversationPage>('load_conversation_page', {
+                    id: sessionId,
+                    before: null,
+                    limit: LOCAL_HISTORY_PAGE_SIZE,
+                });
+                const chatMessages = page.messages.map(mapHistoryMessage);
+                setLocalPageCursor({
+                    conversationId: sessionId,
+                    offset: page.offset,
+                    total: page.total,
+                });
 
                 setLoading(false);
                 return ensureMessagesHaveBlocks(chatMessages);
@@ -188,6 +215,7 @@ export function useHistory() {
                 throw e;
             }
         } else {
+            setLocalPageCursor(null);
             return new Promise((resolve, reject) => {
                 setLoading(true);
                 setError(null);
@@ -240,11 +268,40 @@ export function useHistory() {
         }
     }, []);
 
+    const loadOlderMessages = useCallback(async (): Promise<ChatMessage[]> => {
+        if (!localPageCursor || localPageCursor.offset === 0 || loadingOlderMessages) {
+            return [];
+        }
+
+        setLoadingOlderMessages(true);
+        try {
+            const page = await invoke<LocalConversationPage>('load_conversation_page', {
+                id: localPageCursor.conversationId,
+                before: localPageCursor.offset,
+                limit: LOCAL_HISTORY_PAGE_SIZE,
+            });
+            setLocalPageCursor((current) => current
+                && current.conversationId === localPageCursor.conversationId
+                ? { ...current, offset: page.offset, total: page.total }
+                : current);
+            return ensureMessagesHaveBlocks(page.messages.map(mapHistoryMessage));
+        } catch (e) {
+            console.error('[useHistory] Failed to load older messages:', e);
+            setError(formatUnknownBackendError(e));
+            throw e;
+        } finally {
+            setLoadingOlderMessages(false);
+        }
+    }, [loadingOlderMessages, localPageCursor]);
+
     return {
         conversations,
         loading,
         error,
         fetchConversations,
-        loadConversation
+        loadConversation,
+        loadOlderMessages,
+        hasOlderMessages: (localPageCursor?.offset ?? 0) > 0,
+        loadingOlderMessages,
     };
 }

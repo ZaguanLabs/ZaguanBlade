@@ -66,6 +66,10 @@ fn default_relevance() -> f64 {
 pub struct ConversationMetadata {
     #[serde(default)]
     pub total_messages: i32,
+    /// Absolute sequence of the first message present in this derived
+    /// searchable projection.
+    #[serde(default)]
+    pub message_offset: i32,
     #[serde(default)]
     pub total_tokens: i32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -78,6 +82,7 @@ impl Default for ConversationMetadata {
     fn default() -> Self {
         Self {
             total_messages: 0,
+            message_offset: 0,
             total_tokens: 0,
             models_used: Vec::new(),
             tags: Vec::new(),
@@ -152,6 +157,12 @@ impl LocalArtifactStore {
         self.conversations_dir().join(format!("{}.json", id))
     }
 
+    /// Test-only accessor for the conversations directory path.
+    #[doc(hidden)]
+    pub fn conversations_dir_test(&self) -> PathBuf {
+        self.conversations_dir()
+    }
+
     fn moment_path(&self, id: &str) -> PathBuf {
         self.moments_dir().join(format!("{}.json", id))
     }
@@ -165,9 +176,9 @@ impl LocalArtifactStore {
 
         // Write JSON file
         let path = self.conversation_path(&artifact.conversation_id);
-        let json = serde_json::to_string_pretty(artifact)
+        let json = serde_json::to_string(artifact)
             .map_err(|e| format!("Failed to serialize conversation: {}", e))?;
-        fs::write(&path, json).map_err(|e| format!("Failed to write conversation: {}", e))?;
+        crate::conversation_store::atomic_write(&path, json.as_bytes())?;
 
         // Update SQLite index
         let index = LocalIndex::open(&self.project_path)

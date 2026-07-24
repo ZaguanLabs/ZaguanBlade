@@ -8,27 +8,14 @@
   font-display: swap;
 }
 
-@font-face {
-  font-family: 'Inter';
-  src: url('/fonts/InterVariable-Italic.ttf') format('truetype');
-  font-weight: 100 900;
-  font-style: italic;
-  font-display: swap;
-}
+/* Italics use the browser's synthesized variable-font slant. Shipping separate
+   Inter and JetBrains Mono italic files added 1.2 MB to every installation. */
 
 @font-face {
   font-family: 'JetBrains Mono';
   src: url('/fonts/JetBrainsMono-Variable.ttf') format('truetype');
   font-weight: 100 800;
   font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'JetBrains Mono';
-  src: url('/fonts/JetBrainsMono-Italic-Variable.ttf') format('truetype');
-  font-weight: 100 800;
-  font-style: italic;
   font-display: swap;
 }
 

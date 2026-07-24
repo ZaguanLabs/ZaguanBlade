@@ -55,6 +55,9 @@ interface ChatViewportProps {
     onOpenFile?: (path: string) => void;
     workspaceRoot?: string | null;
     onEditLastUserMessage?: () => Promise<QueuedRequest | null>;
+    hasOlderMessages?: boolean;
+    loadingOlderMessages?: boolean;
+    onLoadOlderMessages?: () => Promise<void>;
 }
 
 export const ChatViewport: React.FC<ChatViewportProps> = ({
@@ -76,6 +79,9 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     onOpenFile,
     workspaceRoot,
     onEditLastUserMessage,
+    hasOlderMessages = false,
+    loadingOlderMessages = false,
+    onLoadOlderMessages,
 }) => {
     const { t } = useTranslation();
     recordDebugPerf('ChatViewport.render');
@@ -89,6 +95,12 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     const isBottomSentinelVisibleRef = useRef(true);
     const previousFirstMessageIdRef = useRef<string | undefined>(undefined);
     const previousMessageCountRef = useRef(0);
+    const prependAnchorRef = useRef<{
+        scrollHeight: number;
+        scrollTop: number;
+        messageCount: number;
+        firstMessageId: string | undefined;
+    } | null>(null);
     const scrollTopRef = useRef(0);
     const viewportHeightRef = useRef(0);
     const virtualizedRowOffsetsRef = useRef<number[]>([]);
@@ -368,6 +380,13 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             if (scrollModeRef.current !== 'following' || !isUserAtBottomRef.current) {
                 return;
             }
+            // Skip if the streaming layout effect already handled this update
+            // synchronously — the deferred rAF scroll would cause a second
+            // scroll-to-bottom on the next frame, producing visible jitter.
+            if (isStreamingScrollActiveRef.current) {
+                isStreamingScrollActiveRef.current = false;
+                return;
+            }
 
             if (frameId !== null) {
                 cancelAnimationFrame(frameId);
@@ -411,6 +430,49 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         return () => observer.disconnect();
     }, []);
 
+    const handleLoadOlderMessages = useCallback(async () => {
+        const element = scrollRef.current;
+        if (!element || !onLoadOlderMessages || loadingOlderMessages) {
+            return;
+        }
+        prependAnchorRef.current = {
+            scrollHeight: element.scrollHeight,
+            scrollTop: element.scrollTop,
+            messageCount,
+            firstMessageId,
+        };
+        try {
+            await onLoadOlderMessages();
+        } catch {
+            prependAnchorRef.current = null;
+        }
+    }, [
+        firstMessageId,
+        loadingOlderMessages,
+        messageCount,
+        onLoadOlderMessages,
+    ]);
+
+    useLayoutEffect(() => {
+        const anchor = prependAnchorRef.current;
+        const element = scrollRef.current;
+        if (
+            !anchor
+            || !element
+            || (anchor.messageCount === messageCount && anchor.firstMessageId === firstMessageId)
+        ) {
+            return;
+        }
+
+        element.scrollTop = anchor.scrollTop + (element.scrollHeight - anchor.scrollHeight);
+        scrollTopRef.current = element.scrollTop;
+        previousFirstMessageIdRef.current = firstMessageId;
+        previousMessageCountRef.current = messageCount;
+        isUserAtBottomRef.current = false;
+        setStableScrollMode('detached');
+        prependAnchorRef.current = null;
+    }, [firstMessageId, messageCount, setStableScrollMode]);
+
     useEffect(() => {
         if (messageCount === 0) {
             previousFirstMessageIdRef.current = undefined;
@@ -448,19 +510,27 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         }
     }, [lastMessage?.role, messageCount, scrollToBottom]);
 
+    const isStreamingScrollActiveRef = useRef(false);
+
     useLayoutEffect(() => {
         if (!loading || !isUserAtBottomRef.current || !isBottomSentinelVisibleRef.current) {
+            isStreamingScrollActiveRef.current = false;
             return;
         }
 
         const element = scrollRef.current;
         if (!element) {
+            isStreamingScrollActiveRef.current = false;
             return;
         }
 
         if (getDistanceFromBottom(element) > 2) {
             element.scrollTop = element.scrollHeight;
         }
+        // Mark that the layout effect handled this streaming update so the
+        // contentResizeObserver can skip its own (deferred) scroll-to-bottom,
+        // avoiding a double-scroll jitter on the next paint.
+        isStreamingScrollActiveRef.current = true;
     }, [getDistanceFromBottom, loading, streamingSignature]);
 
     useEffect(() => () => {
@@ -508,6 +578,20 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
 
     return (
         <div className="relative min-h-0 flex-1">
+            {hasOlderMessages && (
+                <div className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center">
+                    <button
+                        type="button"
+                        disabled={loadingOlderMessages}
+                        onClick={() => void handleLoadOlderMessages()}
+                        className="pointer-events-auto rounded-md border border-(--border-subtle) bg-(--bg-surface) px-3 py-1.5 text-xs font-medium text-(--fg-secondary) shadow-(--shadow-sm) transition-colors hover:bg-(--bg-surface-hover) hover:text-(--fg-primary) disabled:cursor-wait disabled:opacity-60"
+                    >
+                        {loadingOlderMessages
+                            ? t('chat.loadingOlderMessages')
+                            : t('chat.loadOlderMessages')}
+                    </button>
+                </div>
+            )}
             <div ref={scrollRef} onScroll={handleScroll} onWheel={handleSmoothWheel} className="h-full overflow-y-auto overscroll-contain [overflow-anchor:none] scrollbar-thin scrollbar-thumb-(--bg-surface-hover) scrollbar-track-transparent">
                 <div ref={contentRef} className="mx-auto flex w-full max-w-none flex-col gap-1 px-0.5 py-4 md:px-1">
                     {messages.length === 0 && (
@@ -547,7 +631,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                     )}
 
                     {visibleVirtualRows.map((row) => (
-                        <div key={row.key} className="chat-offscreen-row">
+                        <div key={row.key}>
                             {renderMessageRow(row)}
                         </div>
                     ))}
@@ -557,7 +641,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                     )}
 
                     {liveMessageRows.map((row) => (
-                        <div key={row.key} className={row.isActive ? undefined : 'chat-offscreen-row'}>
+                        <div key={row.key}>
                             {renderMessageRow(row)}
                         </div>
                     ))}

@@ -15,6 +15,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use crate::local_artifacts::{CodeReference, Message, Moment};
 
@@ -26,22 +27,24 @@ const MAX_MOMENTS_PER_CONVERSATION: usize = 12;
 const MIN_DECISION_LEN: usize = 20;
 const MAX_DECISION_LEN: usize = 400;
 
-lazy_static::lazy_static! {
-    /// `path.ext`, optionally `:line` or `:line-line` (hyphen or en-dash).
-    static ref CODE_REF_RE: regex::Regex = regex::Regex::new(
-        r"([A-Za-z0-9_./\-]+\.[A-Za-z][A-Za-z0-9]{0,9})(?::(\d{1,7})(?:[-\x{2013}](\d{1,7}))?)?"
-    ).expect("valid code-reference regex");
+static CODE_REF_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        r"([A-Za-z0-9_./\-]+\.[A-Za-z][A-Za-z0-9]{0,9})(?::(\d{1,7})(?:[-\x{2013}](\d{1,7}))?)?",
+    )
+    .expect("valid code-reference regex")
+});
 
-    /// Markers that a choice/decision is being stated.
-    static ref DECISION_RE: regex::Regex = regex::Regex::new(
-        r"(?i)\b(decided to|decided that|decision (?:is|was)|chose to|chose|choosing|switch(?:ed|ing)? to|going with|go with|let'?s use|we'?ll use|we will use|opt(?:ed|ing)? for|adopt(?:ed|ing)?|instead of|prefer(?:red|ring)?)\b"
-    ).expect("valid decision regex");
+static DECISION_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+    r"(?i)\b(decided to|decided that|decision (?:is|was)|chose to|chose|choosing|switch(?:ed|ing)? to|going with|go with|let'?s use|we'?ll use|we will use|opt(?:ed|ing)? for|adopt(?:ed|ing)?|instead of|prefer(?:red|ring)?)\b"
+).expect("valid decision regex")
+});
 
-    /// Markers that a rationale is present. The mandatory reason gate.
-    static ref REASON_RE: regex::Regex = regex::Regex::new(
-        r"(?i)\b(because|since|so that|in order to|to avoid|due to|as it|reason(?:s)? (?:is|are|being)|rationale)\b"
-    ).expect("valid reason regex");
-}
+static REASON_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+    r"(?i)\b(because|since|so that|in order to|to avoid|due to|as it|reason(?:s)? (?:is|are|being)|rationale)\b"
+).expect("valid reason regex")
+});
 
 /// Extract `file:line` references mentioned in a message body. Stores locators
 /// only (reference-not-text); dedups on (file, start, end).

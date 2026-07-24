@@ -9,7 +9,7 @@ import { EditorPanel, type EditorContentState } from './EditorPanel';
 import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
 import { AppBar } from './AppBar';
 import { AlertTriangle, GitBranch, Settings, Clock, Loader2 } from 'lucide-react';
-import { SettingsModal } from './SettingsModal';
+import { SettingsModalLazy } from './SettingsModalLazy';
 import { useStartupBootstrap } from '../contexts/StartupBootstrapContext';
 import { EditorProvider, useEditorActions } from '../contexts/EditorContext';
 import { useUncommittedChanges } from '../hooks/useUncommittedChanges';
@@ -23,7 +23,7 @@ import { useLayoutEvents } from '../hooks/useLayoutEvents';
 import { subscribeBladeNestedEventType } from '../services/bladeEvents';
 import { readDebugFlag, readDebugSurfaceFlag } from '../utils/debugFlags';
 import { formatIndexStatusLabel, formatIndexStatusTitle, shouldShowIndexStatusCue } from '../utils/indexHealthStatus';
-import type { ChatMode } from '../types/chat';
+import type { ChatMessage, ChatMode, ModelInfo } from '../types/chat';
 import type { BackendSettings } from '../types/settings';
 import type { IndexHealthSnapshot } from '../types/blade';
 import type { UncommittedChange } from '../types/uncommitted';
@@ -122,7 +122,7 @@ function useNoopChat() {
 
     const sendMessage = useCallback(() => Promise.resolve(), []);
     const stopGeneration = useCallback(() => Promise.resolve(), []);
-    const refreshModels = useCallback(() => Promise.resolve([]), []);
+    const refreshModels = useCallback(() => Promise.resolve<ModelInfo[]>([]), []);
     const approveTool = useCallback(() => Promise.resolve(), []);
     const approveToolDecision = useCallback(() => Promise.resolve(), []);
     const respondToApprovalRequest = useCallback(() => Promise.resolve(), []);
@@ -849,16 +849,14 @@ const AppLayoutInner: React.FC = () => {
             setConversation: chat.setConversation,
         });
 
-    type SettingsSection = 'configuration' | 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor' | 'about';
-
     // Settings modal state
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-    const [initialSettingsSection, setInitialSettingsSection] = useState<SettingsSection | undefined>(undefined);
+    const [initialSettingsSection, setInitialSettingsSection] = useState<import('./SettingsModal').SettingsSection | undefined>(undefined);
 
     // Listen for open-settings custom event (from WelcomePage or ChatPanel)
     useEffect(() => {
         const handleOpenSettings = (event: Event) => {
-            const customEvent = event as CustomEvent<{ section?: SettingsSection }>;
+            const customEvent = event as CustomEvent<{ section?: import('./SettingsModal').SettingsSection }>;
             setInitialSettingsSection(customEvent.detail?.section);
             setIsSettingsOpen(true);
         };
@@ -1688,6 +1686,9 @@ const AppLayoutInner: React.FC = () => {
                                     skipSingleCommand={chat.skipSingleCommand}
                                     projectId={projectId || "default-project"}
                                     onLoadConversation={chat.loadConversation}
+                                    onPrependConversation={(messages) => {
+                                        chat.setConversation((current: ChatMessage[]) => [...messages, ...current]);
+                                    }}
                                     researchProgress={researchProgress}
                                     onNewConversation={chat.newConversation}
                                     onUndoTool={chat.undoTool}
@@ -1914,7 +1915,7 @@ const AppLayoutInner: React.FC = () => {
 
             {/* Settings Modal */}
             {isSettingsOpen && (
-                <SettingsModal
+                <SettingsModalLazy
                     isOpen={isSettingsOpen}
                     onClose={() => setIsSettingsOpen(false)}
                     initialSection={initialSettingsSection}

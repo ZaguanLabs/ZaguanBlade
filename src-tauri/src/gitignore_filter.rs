@@ -59,7 +59,8 @@ impl GitignoreFilter {
 
     /// Find the global gitignore file if it exists.
     fn find_global_gitignore() -> Option<PathBuf> {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(base) = directories::BaseDirs::new() {
+            let home = base.home_dir();
             let global = home.join(".gitignore_global");
             if global.exists() {
                 return Some(global);

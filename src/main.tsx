@@ -13,6 +13,9 @@ import './index.css';
 import './i18n'; // Initialize i18n
 import { parseBooleanFlag, readDebugFlag } from './utils/debugFlags';
 import { startDebugPerfReporter } from './utils/debugPerf';
+import { markStartup } from './utils/startupMarks';
+
+markStartup('first_html');
 
 let hasHiddenLoadingScreen = false;
 let hasShownWindow = false;
@@ -97,6 +100,7 @@ async function revealWindow(signalPostUiStartup: boolean) {
         hasShownWindow = true;
         try {
             await getCurrentWindow().show();
+            markStartup('window_show');
         } catch (err) {
             hasShownWindow = false;
             console.error('[WINDOW] Failed to show main window:', err);
@@ -117,6 +121,7 @@ const StartupWindowController = () => {
     const { isLoading, error } = useStartupBootstrap();
 
     useEffect(() => {
+        markStartup('first_react_commit');
         requestAnimationFrame(() => {
             void revealWindow(false);
         });
@@ -135,6 +140,7 @@ const StartupWindowController = () => {
         }
 
         void revealWindow(true);
+        markStartup('bootstrap_complete');
 
         if (error) {
             console.error('[WINDOW] Bootstrap completed with error:', error);

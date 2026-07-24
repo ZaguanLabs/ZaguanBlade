@@ -74,9 +74,43 @@ pub fn get_conversation(state: State<'_, AppState>) -> Vec<crate::protocol::Chat
     conversation.get_messages()
 }
 
+/// Fetch a single page of messages from the active conversation.
+/// Returns at most `limit` messages starting at `offset` (zero-indexed).
+/// This avoids transferring the full history across the Tauri boundary.
+#[tauri::command]
+pub fn get_conversation_page(
+    offset: usize,
+    limit: usize,
+    state: State<'_, AppState>,
+) -> Vec<crate::protocol::ChatMessage> {
+    let conversation = state.conversation.lock().unwrap();
+    conversation.get_messages_page(offset, limit)
+}
+
+#[tauri::command]
+pub fn get_conversation_tail(
+    limit: usize,
+    state: State<'_, AppState>,
+) -> Vec<crate::protocol::ChatMessage> {
+    let conversation = state.conversation.lock().unwrap();
+    let start = conversation.len().saturating_sub(limit.min(200));
+    conversation.get_messages_page(start, limit.min(200))
+}
+
+/// Return the active conversation metadata and total message count without
+/// transferring any messages.
+#[tauri::command]
+pub fn get_conversation_metadata(
+    state: State<'_, AppState>,
+) -> conversation_store::ConversationMetadata {
+    let conversation = state.conversation.lock().unwrap();
+    conversation.metadata().clone()
+}
+
 #[tauri::command]
 pub fn truncate_conversation(
-    len: usize,
+    len: Option<usize>,
+    message_id: Option<String>,
     reset_session: Option<bool>,
     state: State<'_, AppState>,
     app: AppHandle,
@@ -85,14 +119,24 @@ pub fn truncate_conversation(
         .conversation
         .lock()
         .map_err(|e| format!("Failed to lock conversation: {}", e))?;
-    if len > conversation.len() {
+    let target_len = message_id
+        .as_deref()
+        .and_then(|id| {
+            conversation
+                .messages_ref()
+                .iter()
+                .position(|message| message.id.as_deref() == Some(id))
+        })
+        .or(len)
+        .ok_or_else(|| "A truncation position or message id is required".to_string())?;
+    if target_len > conversation.len() {
         return Err(format!(
             "Cannot truncate conversation to {} messages; current length is {}",
-            len,
+            target_len,
             conversation.len()
         ));
     }
-    conversation.truncate(len);
+    conversation.truncate(target_len);
     if reset_session.unwrap_or(false) {
         // Reset means "start a fresh server session" — mint the id now so
         // warmup and the next chat message share one session key.
@@ -126,6 +170,26 @@ pub async fn list_conversations(
     .map_err(|e| format!("list conversations task failed: {}", e))?
 }
 
+/// Load a bounded page ending immediately before `before`.
+///
+/// Passing no cursor returns the newest page. The backend reads only the
+/// corresponding message files, and the page is capped by both count and
+/// serialized bytes.
+#[tauri::command]
+pub async fn load_conversation_page(
+    id: String,
+    before: Option<usize>,
+    limit: usize,
+    app: AppHandle,
+) -> Result<conversation_store::ConversationPage, String> {
+    tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state.with_conversation_store(|store| store.load_message_page_before(&id, before, limit))
+    })
+    .await
+    .map_err(|e| format!("load conversation page task failed: {e}"))?
+}
+
 #[tauri::command]
 pub async fn load_conversation(
     id: String,
@@ -136,22 +200,31 @@ pub async fn load_conversation(
 
     let blocking_id = id.clone();
     let app_for_task = app.clone();
-    let stored = tokio::task::spawn_blocking(move || {
+    let (metadata, page) = tokio::task::spawn_blocking(move || {
         let state = app_for_task.state::<AppState>();
-        state.with_conversation_store(|store| store.load_conversation(&blocking_id))
+        state.with_conversation_store(|store| {
+            let loaded = store.load_conversation_tail(&blocking_id, 100)?;
+            store.set_active(&blocking_id)?;
+            Ok(loaded)
+        })
     })
     .await
     .map_err(|e| format!("load conversation task failed: {}", e))??;
 
+    let session_id_stored = metadata.session_id.clone();
+    let planning_mode = metadata.planning_mode;
+    let runtime_mode = metadata.runtime_mode.clone();
+    let mode_source = metadata.mode_source.clone();
+
     let mut conversation = state.conversation.lock().unwrap();
-    *conversation = ConversationHistory::from_stored(stored.clone());
+    *conversation = ConversationHistory::from_persisted_page(metadata, page.messages, page.offset);
 
     // Restore session ID to ChatManager so it can resume the session.
     // Pre-Blade-minting conversations may lack one — mint on the spot so the
     // resumed conversation still shares a session key with warmup.
     let session_id = {
         let mut mgr = state.chat_manager.lock().unwrap();
-        let session_id = match &stored.metadata.session_id {
+        let session_id = match &session_id_stored {
             Some(session_id) => {
                 eprintln!("[CHAT] Restored session ID: {}", session_id);
                 session_id.clone()
@@ -166,9 +239,9 @@ pub async fn load_conversation(
             }
         };
         mgr.session_id = Some(session_id.clone());
-        mgr.planning_mode = stored.metadata.planning_mode;
-        mgr.runtime_mode = stored.metadata.runtime_mode.clone();
-        mgr.mode_source = stored.metadata.mode_source.clone();
+        mgr.planning_mode = planning_mode;
+        mgr.runtime_mode = runtime_mode;
+        mgr.mode_source = mode_source;
         session_id
     };
     emit_session_id_changed(&app, &session_id);
@@ -184,29 +257,29 @@ pub async fn new_conversation(
 ) -> Result<String, String> {
     graceful_close_active_chat_session(state.inner()).await;
 
-    // Save current conversation if it has messages
-    let stored_to_save = {
-        let conversation = state.conversation.lock().unwrap();
-        if conversation.len() > 0 {
-            Some(conversation.to_stored())
-            // Note: session_id is auto-saved by background loop, but we should make sure
-            // we don't lose the current session ID if we switch away.
-            // However, conversation.to_stored() uses ConversationMetadata which we don't hold in ConversationHistory.
-            // This logic relies on `store` having the correct metadata already or creating new.
-            // The background loop in chat_orchestrator handles continuous saving with session_id.
-        } else {
-            None
-        }
-    };
-
     let blocking_model_id = model_id.clone();
     let app_for_task = app.clone();
     let metadata = tokio::task::spawn_blocking(move || {
         let state = app_for_task.state::<AppState>();
-        if let Some(stored) = stored_to_save {
-            state.with_conversation_store(|store| store.save_conversation(&stored))?;
-        }
-        state.with_conversation_store(|store| Ok(store.create_new_conversation(blocking_model_id)))
+        state.with_conversation_store(|store| {
+            let delta = {
+                let conversation = state.conversation.lock().unwrap();
+                if conversation.len() == 0 {
+                    None
+                } else {
+                    let start = store
+                        .changed_tail_start(&conversation.metadata.id, conversation.absolute_len());
+                    Some(conversation_store::ConversationDelta::from_history(
+                        &conversation,
+                        start,
+                    ))
+                }
+            };
+            if let Some(delta) = delta {
+                store.save_delta(delta)?;
+            }
+            store.create_new_conversation(blocking_model_id)
+        })
     })
     .await
     .map_err(|e| format!("new conversation task failed: {}", e))??;

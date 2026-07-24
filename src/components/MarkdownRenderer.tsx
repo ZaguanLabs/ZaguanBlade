@@ -4,9 +4,9 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { Streamdown, type AnimateOptions, type Components as StreamdownComponents, type ControlsConfig, type StreamdownProps } from 'streamdown';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Copy, Check } from 'lucide-react';
+import { SyntaxHighlighter } from './SyntaxHighlighter';
 
 interface MarkdownRendererProps {
     content: string;

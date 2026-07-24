@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core';
-import { v4 as uuidv4 } from 'uuid';
 import type {
     BladeIntent,
     BladeEnvelope,
@@ -32,7 +31,7 @@ export class BladeDispatcher {
      * @returns Promise that resolves when the intent is ACCEPTED (not necessarily completed)
      */
     static async dispatch(domain: string, intent: BladeIntent, idempotencyKey?: string, explicitId?: string): Promise<string> {
-        const id = explicitId || uuidv4();
+        const id = explicitId || crypto.randomUUID();
         const envelope: BladeEnvelope<BladeIntentEnvelope> = {
             protocol: this.PROTOCOL_NAME,
             version: this.PROTOCOL_VERSION,

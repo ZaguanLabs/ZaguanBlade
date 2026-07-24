@@ -61,7 +61,8 @@ impl EnvironmentInfo {
         let os_version = detect_os_version();
         let shell = detect_shell();
         let package_manager = detect_package_manager();
-        let home_dir = dirs::home_dir().map(|p| p.to_string_lossy().to_string());
+        let home_dir =
+            directories::BaseDirs::new().map(|b| b.home_dir().to_string_lossy().to_string());
         // For AppImage: Use OWD (Original Working Directory) if available.
         // AppImages change CWD to their mount point (/tmp/.mount_XXX/usr),
         // but preserve the original directory in OWD.

@@ -405,7 +405,9 @@ fn clamp_font_size(value: u8, fallback: u8) -> u8 {
 }
 
 pub fn default_global_config_dir() -> PathBuf {
-    let home_dir = dirs::home_dir().unwrap_or_else(|| Path::new(".").to_path_buf());
+    let home_dir = directories::BaseDirs::new()
+        .map(|b| b.home_dir().to_path_buf())
+        .unwrap_or_else(|| Path::new(".").to_path_buf());
     let config_home = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
     let app_data_home = std::env::var_os("APPDATA").map(PathBuf::from);
     zblade_global_config_dir_for(
@@ -451,7 +453,7 @@ pub fn global_skills_dir() -> PathBuf {
 }
 
 pub fn standard_user_skills_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|home_dir| home_dir.join(".agents").join("skills"))
+    directories::BaseDirs::new().map(|base| base.home_dir().join(".agents").join("skills"))
 }
 
 pub fn ensure_global_prompts_dir() -> Result<(), String> {

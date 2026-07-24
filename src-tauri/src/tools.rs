@@ -2,10 +2,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use lazy_static::lazy_static;
 use regex::Regex;
 use serde::Deserialize;
 use walkdir::WalkDir;
@@ -275,11 +274,10 @@ struct GrepSearchMetricState {
     durations_ms: Vec<u64>,
 }
 
-lazy_static! {
-    static ref TOOL_METRICS: Mutex<HashMap<String, ToolMetricState>> = Mutex::new(HashMap::new());
-    static ref GREP_SEARCH_METRICS: Mutex<GrepSearchMetricState> =
-        Mutex::new(GrepSearchMetricState::default());
-}
+static TOOL_METRICS: LazyLock<Mutex<HashMap<String, ToolMetricState>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static GREP_SEARCH_METRICS: LazyLock<Mutex<GrepSearchMetricState>> =
+    LazyLock::new(|| Mutex::new(GrepSearchMetricState::default()));
 
 fn percentile(sorted: &[u64], p: f64) -> u64 {
     if sorted.is_empty() {

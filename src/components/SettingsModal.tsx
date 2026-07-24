@@ -248,7 +248,7 @@ interface SettingsModalProps {
     onRefreshModels?: () => Promise<import('../types/chat').ModelInfo[]>;
 }
 
-type SettingsSection = 'configuration' | 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor' | 'remote' | 'about';
+export type SettingsSection = 'configuration' | 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor' | 'remote' | 'about';
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialSection, workspacePath, onRefreshModels }) => {
     const { t } = useTranslation();

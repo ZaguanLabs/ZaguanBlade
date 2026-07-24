@@ -167,6 +167,46 @@ impl LocalIndex {
         "#,
         );
 
+        let has_reference_identity_index: bool = self.conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'index' AND name = 'idx_code_ref_identity'
+            )",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_reference_identity_index {
+            // Older builds inserted the same derived reference on every
+            // autosave. Collapse those rows once, then make tail-projection
+            // updates idempotent. The index itself is the migration marker, so
+            // ordinary opens remain O(1).
+            self.conn.execute_batch(
+                r#"
+            DELETE FROM code_references
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM code_references
+                GROUP BY conversation_id, message_id, file_path, start_line, end_line
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_code_ref_identity
+            ON code_references(
+                conversation_id,
+                message_id,
+                file_path,
+                start_line,
+                end_line
+            );
+            UPDATE file_references
+            SET reference_count = (
+                SELECT COUNT(*)
+                FROM code_references
+                WHERE code_references.file_path = file_references.file_path
+            );
+            DELETE FROM file_references WHERE reference_count = 0;
+            "#,
+            )?;
+        }
+
         Ok(())
     }
 
@@ -333,9 +373,9 @@ impl LocalIndex {
 
     /// Insert a code reference
     pub fn insert_code_reference(&self, ref_: &CodeReferenceIndex) -> SqliteResult<i64> {
-        self.conn.execute(
+        let inserted = self.conn.execute(
             r#"
-            INSERT INTO code_references (conversation_id, message_id, file_path, start_line, end_line, context, created_at)
+            INSERT OR IGNORE INTO code_references (conversation_id, message_id, file_path, start_line, end_line, context, created_at)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
             params![
@@ -349,8 +389,30 @@ impl LocalIndex {
             ],
         )?;
 
-        // Update file_references table
-        self.conn.execute(
+        if inserted == 0 {
+            self.conn.execute(
+                r#"
+                UPDATE code_references
+                SET context = ?6, created_at = ?7
+                WHERE conversation_id = ?1
+                  AND message_id = ?2
+                  AND file_path = ?3
+                  AND start_line = ?4
+                  AND end_line = ?5
+                "#,
+                params![
+                    ref_.conversation_id,
+                    ref_.message_id,
+                    ref_.file_path,
+                    ref_.start_line,
+                    ref_.end_line,
+                    ref_.context,
+                    ref_.created_at,
+                ],
+            )?;
+        } else {
+            // Update the aggregate only for a genuinely new reference.
+            self.conn.execute(
             r#"
             INSERT INTO file_references (file_path, reference_count, first_referenced, last_referenced)
             VALUES (?1, 1, ?2, ?2)
@@ -359,7 +421,8 @@ impl LocalIndex {
                 last_referenced = excluded.last_referenced
             "#,
             params![ref_.file_path, ref_.created_at],
-        )?;
+            )?;
+        }
 
         Ok(self.conn.last_insert_rowid())
     }
@@ -518,12 +581,25 @@ mod tests {
 
         let id = index.insert_code_reference(&ref_).unwrap();
         assert!(id > 0);
+        let mut updated = ref_.clone();
+        updated.context = Some("Updated context".to_string());
+        index.insert_code_reference(&updated).unwrap();
 
         // Get by file
         let refs = index.get_references_for_file("src/auth.ts").unwrap();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].start_line, 10);
         assert_eq!(refs[0].end_line, 25);
+        assert_eq!(refs[0].context.as_deref(), Some("Updated context"));
+        let aggregate_count: i64 = index
+            .conn
+            .query_row(
+                "SELECT reference_count FROM file_references WHERE file_path = ?1",
+                ["src/auth.ts"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(aggregate_count, 1);
 
         // Get by conversation
         let refs = index.get_references_for_conversation("conv_123").unwrap();

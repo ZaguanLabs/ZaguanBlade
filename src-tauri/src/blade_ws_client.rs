@@ -2,11 +2,11 @@ use crate::blade_protocol::ContextPackPayload;
 use crate::environment::EnvironmentInfo;
 use crate::protocol::CognitiveInterruptPayload;
 use futures_util::{SinkExt, StreamExt};
-use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_tungstenite::{
@@ -18,15 +18,15 @@ use tokio_tungstenite::{
     },
 };
 
-lazy_static! {
-    static ref FILE_PATH_REGEXES: Vec<Regex> = vec![
+static FILE_PATH_REGEXES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
         Regex::new(r#""path"\s*:\s*"([^"]*)""#).unwrap(),
         Regex::new(r#""file_path"\s*:\s*"([^"]*)""#).unwrap(),
         Regex::new(r#""target_file"\s*:\s*"([^"]*)"#).unwrap(),
         Regex::new(r#""absolute_path"\s*:\s*"([^"]*)"#).unwrap(),
         Regex::new(r#""file"\s*:\s*"([^"]*)"#).unwrap(),
-    ];
-}
+    ]
+});
 
 /// WebSocket-based Blade Protocol v3 client
 #[derive(Clone)]
@@ -1947,9 +1947,11 @@ mod tests {
 
     #[test]
     fn websocket_request_uses_authorization_bearer_header() {
-        let request =
-            BladeWsClient::websocket_request("https://coder-api.zblade.dev", "  ps_live_0123456789abcdefghijklmnopqrstuv  ")
-                .unwrap();
+        let request = BladeWsClient::websocket_request(
+            "https://coder-api.zblade.dev",
+            "  ps_live_0123456789abcdefghijklmnopqrstuv  ",
+        )
+        .unwrap();
 
         assert_eq!(
             request.uri().to_string(),

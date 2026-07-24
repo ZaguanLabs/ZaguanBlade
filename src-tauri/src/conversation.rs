@@ -7,6 +7,11 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct ConversationHistory {
     messages: Vec<ChatMessage>,
+    /// Absolute sequence of `messages[0]` in the persisted conversation.
+    ///
+    /// Loaded conversations retain only a bounded tail in memory. New
+    /// conversations use zero.
+    storage_offset: usize,
     pub metadata: ConversationMetadata,
 }
 
@@ -14,6 +19,7 @@ impl ConversationHistory {
     pub fn new() -> Self {
         Self {
             messages: Vec::new(),
+            storage_offset: 0,
             metadata: ConversationMetadata {
                 id: Uuid::new_v4().to_string(),
                 title: "New Conversation".to_string(),
@@ -25,12 +31,40 @@ impl ConversationHistory {
                 planning_mode: None,
                 runtime_mode: None,
                 mode_source: None,
+                format_version: None,
             },
         }
     }
 
     pub fn get_messages(&self) -> Vec<ChatMessage> {
         self.messages.clone()
+    }
+
+    /// Return a slice of messages without cloning the entire vector.
+    /// The caller receives references; use this for read-only access.
+    pub fn messages_ref(&self) -> &[ChatMessage] {
+        &self.messages
+    }
+
+    /// Return a page of messages (zero-indexed `offset`, up to `limit` items).
+    /// Clones only the returned page, not the full history.
+    pub fn get_messages_page(&self, offset: usize, limit: usize) -> Vec<ChatMessage> {
+        let start = offset.min(self.messages.len());
+        let end = (start + limit).min(self.messages.len());
+        self.messages[start..end].to_vec()
+    }
+
+    /// Return metadata without cloning the full conversation.
+    pub fn metadata(&self) -> &ConversationMetadata {
+        &self.metadata
+    }
+
+    pub fn storage_offset(&self) -> usize {
+        self.storage_offset
+    }
+
+    pub fn absolute_len(&self) -> usize {
+        self.storage_offset.saturating_add(self.messages.len())
     }
 
     pub fn push(&mut self, message: ChatMessage) {
@@ -40,7 +74,7 @@ impl ConversationHistory {
         }
 
         self.messages.push(message);
-        self.metadata.message_count = self.messages.len();
+        self.metadata.message_count = self.absolute_len();
         self.metadata.updated_at = Utc::now();
     }
 
@@ -119,13 +153,14 @@ impl ConversationHistory {
 
     pub fn clear(&mut self) {
         self.messages.clear();
+        self.storage_offset = 0;
         self.metadata.message_count = 0;
         self.metadata.updated_at = Utc::now();
     }
 
     pub fn truncate(&mut self, len: usize) {
         self.messages.truncate(len);
-        self.metadata.message_count = self.messages.len();
+        self.metadata.message_count = self.absolute_len();
         self.metadata.updated_at = Utc::now();
     }
 
@@ -225,19 +260,25 @@ impl ConversationHistory {
         messages
     }
 
-    /// Convert to StoredConversation for persistence
-    pub fn to_stored(&self) -> StoredConversation {
-        StoredConversation {
-            metadata: self.metadata.clone(),
-            messages: self.messages.iter().map(|m| m.into()).collect(),
-        }
-    }
-
     /// Create from StoredConversation
     pub fn from_stored(stored: StoredConversation) -> Self {
         Self {
             metadata: stored.metadata,
             messages: stored.messages.into_iter().map(|m| m.into()).collect(),
+            storage_offset: 0,
+        }
+    }
+
+    /// Create a history backed by a bounded persisted tail.
+    pub fn from_persisted_page(
+        metadata: ConversationMetadata,
+        messages: Vec<ChatMessage>,
+        storage_offset: usize,
+    ) -> Self {
+        Self {
+            metadata,
+            messages,
+            storage_offset,
         }
     }
 }

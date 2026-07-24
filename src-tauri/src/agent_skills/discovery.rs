@@ -318,14 +318,13 @@ fn discover_root(
     }
 
     let mut directory_count = 0usize;
-    let mut entry_count = 0usize;
     let walker = WalkDir::new(skills_root)
         .follow_links(follow_directory_links)
         .max_depth(MAX_SCAN_DEPTH)
         .into_iter()
         .filter_entry(should_descend);
 
-    for result in walker {
+    for (entry_count, result) in walker.enumerate() {
         if entry_count >= MAX_ENTRIES_PER_ROOT {
             catalog.truncated = true;
             push_diagnostic(
@@ -335,7 +334,6 @@ fn discover_root(
             );
             break;
         }
-        entry_count += 1;
 
         let entry = match result {
             Ok(entry) => entry,

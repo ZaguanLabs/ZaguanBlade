@@ -1,14 +1,14 @@
 use crate::protocol::ToolCall;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-lazy_static::lazy_static! {
-    static ref POLLING_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
-    static ref ACTIVE_INTERACTION: Mutex<Option<ActiveInteraction>> = Mutex::new(None);
-}
+static POLLING_TASK: LazyLock<Mutex<Option<JoinHandle<()>>>> = LazyLock::new(|| Mutex::new(None));
+static ACTIVE_INTERACTION: LazyLock<Mutex<Option<ActiveInteraction>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 #[derive(Deserialize, Debug)]
 struct UpdateResponse {

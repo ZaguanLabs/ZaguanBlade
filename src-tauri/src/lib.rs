@@ -63,6 +63,7 @@ pub mod semantic_patch;
 pub mod sso;
 pub mod stable_hash;
 pub mod startup;
+pub mod startup_marks;
 pub mod symbol_index;
 mod symbol_wire;
 pub mod telegram_service;
@@ -94,6 +95,7 @@ pub struct Cli {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    crate::startup_marks::record("process_entry");
     crate::linux_webkit_workaround::apply();
 
     let cli = Cli::parse();
@@ -128,6 +130,7 @@ pub fn run() {
         .manage(AppState::new(resolved_path))
         .manage(terminal::TerminalManager::new())
         .setup(|app| {
+            crate::startup_marks::record("tauri_setup");
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 use tauri::{Emitter, Manager};
@@ -212,7 +215,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             // Misc
@@ -221,6 +223,9 @@ pub fn run() {
             commands::misc::frontend_shell_ready,
             commands::misc::set_window_title,
             commands::misc::get_runtime_debug_flags,
+            // Startup marks (P0 performance baseline)
+            crate::startup_marks::record_startup_mark,
+            crate::startup_marks::get_startup_marks,
             // Files
             commands::files::open_workspace,
             commands::files::list_files,
@@ -258,6 +263,10 @@ pub fn run() {
             // Chat
             commands::chat::list_models,
             commands::chat::get_conversation,
+            commands::chat::get_conversation_page,
+            commands::chat::get_conversation_tail,
+            commands::chat::get_conversation_metadata,
+            commands::chat::load_conversation_page,
             commands::chat::truncate_conversation,
             commands::chat::list_conversations,
             commands::chat::load_conversation,

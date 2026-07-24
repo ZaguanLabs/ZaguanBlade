@@ -3,11 +3,11 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Save, X, FileText } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ScrollArea } from './ui/ScrollArea';
+import { SyntaxHighlighter } from './SyntaxHighlighter';
 
 interface DocumentViewerProps {
   documentId: string;
