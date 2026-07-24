@@ -1,9 +1,9 @@
-import React, { useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
-import { Streamdown, type AnimateOptions, type Components as StreamdownComponents, type ControlsConfig, type StreamdownProps } from 'streamdown';
+import { Streamdown, type Components as StreamdownComponents, type ControlsConfig, type StreamdownProps } from 'streamdown';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Copy, Check } from 'lucide-react';
 import { SyntaxHighlighter } from './SyntaxHighlighter';
@@ -11,7 +11,6 @@ import { SyntaxHighlighter } from './SyntaxHighlighter';
 interface MarkdownRendererProps {
     content: string;
     className?: string;
-    isAnimating?: boolean;
     profile?: 'default' | 'reasoning';
     mode?: StreamdownProps['mode'];
 }
@@ -51,10 +50,62 @@ interface CodeBlockProps {
     value: string;
 }
 
+const MAX_HIGHLIGHTED_CODE_CHARACTERS = 20_000;
+const syntaxHighlightQueue = new Map<number, () => void>();
+let nextSyntaxHighlightTaskId = 1;
+let syntaxHighlightQueueScheduled = false;
+
+function scheduleNextSyntaxHighlight(): void {
+    if (syntaxHighlightQueueScheduled || syntaxHighlightQueue.size === 0) {
+        return;
+    }
+    syntaxHighlightQueueScheduled = true;
+
+    const runNext = () => {
+        syntaxHighlightQueueScheduled = false;
+        const nextTask = syntaxHighlightQueue.entries().next().value as [number, () => void] | undefined;
+        if (!nextTask) {
+            return;
+        }
+        const [taskId, task] = nextTask;
+        syntaxHighlightQueue.delete(taskId);
+        task();
+        scheduleNextSyntaxHighlight();
+    };
+
+    const idleScheduler = window as unknown as {
+        requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+    };
+    if (typeof idleScheduler.requestIdleCallback === 'function') {
+        idleScheduler.requestIdleCallback(runNext, { timeout: 1_000 });
+        return;
+    }
+    globalThis.setTimeout(runNext, 200);
+}
+
+function enqueueSyntaxHighlight(task: () => void): () => void {
+    const taskId = nextSyntaxHighlightTaskId;
+    nextSyntaxHighlightTaskId += 1;
+    syntaxHighlightQueue.set(taskId, task);
+    scheduleNextSyntaxHighlight();
+    return () => {
+        syntaxHighlightQueue.delete(taskId);
+    };
+}
+
 // Memoized CodeBlock - only re-renders when language or value changes
 const CodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
     const { t } = useTranslation();
     const [copied, setCopied] = useState(false);
+    const [shouldHighlight, setShouldHighlight] = useState(false);
+
+    useEffect(() => {
+        setShouldHighlight(false);
+        if (!language || language === 'text' || value.length > MAX_HIGHLIGHTED_CODE_CHARACTERS) {
+            return;
+        }
+        return enqueueSyntaxHighlight(() => setShouldHighlight(true));
+    }, [language, value]);
 
     const handleCopy = useCallback(async () => {
         try {
@@ -98,14 +149,20 @@ const CodeBlock = React.memo<CodeBlockProps>(({ language, value }) => {
 
             {/* Code content */}
             <div className="overflow-x-auto">
-                <SyntaxHighlighter
-                    language={language || 'text'}
-                    style={customTheme}
-                    customStyle={codeBlockCustomStyle}
-                    codeTagProps={{ style: codeTagStyle }}
-                >
-                    {value}
-                </SyntaxHighlighter>
+                {shouldHighlight ? (
+                    <SyntaxHighlighter
+                        language={language}
+                        style={customTheme}
+                        customStyle={codeBlockCustomStyle}
+                        codeTagProps={{ style: codeTagStyle }}
+                    >
+                        {value}
+                    </SyntaxHighlighter>
+                ) : (
+                    <pre className="m-0 whitespace-pre-wrap wrap-break-word bg-transparent px-4 py-3 text-[0.92em] leading-relaxed text-(--markdown-body)">
+                        <code style={codeTagStyle}>{value}</code>
+                    </pre>
+                )}
             </div>
         </div>
     );
@@ -390,12 +447,6 @@ const streamdownControls = {
 
 const reasoningStreamdownControls = false satisfies ControlsConfig;
 
-const streamdownAnimation = {
-    duration: 90,
-    stagger: 10,
-    sep: 'word',
-} as const satisfies AnimateOptions;
-
 const reasoningRemendOptions = {
     inlineCode: false,
     images: false,
@@ -422,11 +473,9 @@ const MarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, c
     );
 };
 
-const StreamingMarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, className = '', isAnimating = true, profile = 'default', mode = 'streaming' }) => {
+const StreamingMarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ content, className = '', profile = 'default', mode = 'streaming' }) => {
     const isReasoning = profile === 'reasoning';
-    const effectiveIsAnimating = isReasoning ? false : isAnimating;
     const effectiveControls = isReasoning ? reasoningStreamdownControls : streamdownControls;
-    const effectiveAnimation = effectiveIsAnimating && !isReasoning ? streamdownAnimation : false;
     const remend = isReasoning ? reasoningRemendOptions : undefined;
 
     return (
@@ -435,8 +484,8 @@ const StreamingMarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ c
                 mode={mode}
                 components={streamdownComponents}
                 controls={effectiveControls}
-                animated={effectiveAnimation}
-                isAnimating={effectiveIsAnimating}
+                animated={false}
+                isAnimating={false}
                 lineNumbers={false}
                 parseIncompleteMarkdown
                 remend={remend}
@@ -454,7 +503,6 @@ export const MarkdownRenderer = React.memo(MarkdownRendererComponent, (prevProps
 export const StreamingMarkdownRenderer = React.memo(StreamingMarkdownRendererComponent, (prevProps, nextProps) => {
     return prevProps.content === nextProps.content
         && prevProps.className === nextProps.className
-        && prevProps.isAnimating === nextProps.isAnimating
         && prevProps.profile === nextProps.profile
         && prevProps.mode === nextProps.mode;
 });

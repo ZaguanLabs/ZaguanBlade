@@ -576,7 +576,14 @@ fn handle_command(state: &mut SchedulerState, command: SchedulerCommand) {
             emit,
             envelope,
             queued_at,
-        } => emit_tracked(state, &emit, EmitClass::Immediate, envelope, queued_at),
+        } => {
+            // "Immediate" is a latency class, not permission to overtake
+            // stream data already accepted by this FIFO worker. In
+            // particular, MessageCompleted must never reach the frontend
+            // before the final queued text/reasoning delta.
+            flush(state, FlushReason::Manual);
+            emit_tracked(state, &emit, EmitClass::Immediate, envelope, queued_at);
+        }
         SchedulerCommand::ResetChatStream => {
             flush(state, FlushReason::Manual);
             state.chat_seq_by_message.clear();
@@ -1005,4 +1012,63 @@ pub fn metrics_snapshot() -> serde_json::Value {
                 "error": format!("metrics snapshot failed: {}", error),
             })
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[test]
+    fn immediate_event_does_not_overtake_queued_chat_delta() {
+        let emitted_events = Arc::new(Mutex::new(Vec::<BladeEvent>::new()));
+        let recorded_events = Arc::clone(&emitted_events);
+        let emit: EmitFn = Arc::new(move |transport| {
+            let mut events = recorded_events.lock().expect("event collector lock");
+            match transport {
+                BladeEventTransport::Single(envelope) => events.push(envelope.event),
+                BladeEventTransport::Batch(envelopes) => {
+                    events.extend(envelopes.into_iter().map(|envelope| envelope.event));
+                }
+            }
+        });
+        let mut state = SchedulerState::default();
+
+        handle_command(
+            &mut state,
+            SchedulerCommand::QueueChatDelta {
+                emit: Arc::clone(&emit),
+                causality_id: Some("assistant-1".to_string()),
+                message_id: "assistant-1".to_string(),
+                kind: ChatDeltaKind::Content,
+                chunk: "final words".to_string(),
+                queued_at: Instant::now(),
+            },
+        );
+        handle_command(
+            &mut state,
+            SchedulerCommand::EmitEnvelope {
+                emit,
+                envelope: build_envelope(
+                    None,
+                    BladeEvent::Chat(ChatEvent::MessageCompleted {
+                        id: "assistant-1".to_string(),
+                    }),
+                ),
+                queued_at: Instant::now(),
+            },
+        );
+
+        let events = emitted_events.lock().expect("event collector lock");
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0],
+            BladeEvent::Chat(ChatEvent::MessageDelta { id, chunk, .. })
+                if id == "assistant-1" && chunk == "final words"
+        ));
+        assert!(matches!(
+            &events[1],
+            BladeEvent::Chat(ChatEvent::MessageCompleted { id }) if id == "assistant-1"
+        ));
+    }
 }

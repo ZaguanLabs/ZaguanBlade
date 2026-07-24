@@ -29,6 +29,14 @@ const EMPTY_VIRTUAL_RANGE: VisibleVirtualRange = {
     bottomSpacerHeight: 0,
 };
 
+interface CachedChatRowHeight {
+    message: ChatMessageType;
+    viewportWidth: number;
+    isContinued: boolean;
+    hasPendingUi: boolean;
+    height: number;
+}
+
 interface ResearchProgress {
     message: string;
     stage: string;
@@ -105,6 +113,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     const viewportHeightRef = useRef(0);
     const virtualizedRowOffsetsRef = useRef<number[]>([]);
     const virtualizedRowHeightsRef = useRef<number[]>([]);
+    const virtualizedRowHeightCacheRef = useRef<Map<string, CachedChatRowHeight>>(new Map());
     const totalVirtualizedHeightRef = useRef(0);
     const visibleRangeFrameRef = useRef<number | null>(null);
     const [smoothScrollResetKey, setSmoothScrollResetKey] = useState(0);
@@ -152,10 +161,47 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         return null;
     }, [messageRows]);
     const hasPendingRunCommand = pendingRunCommandId !== null;
-    const virtualizedRowHeights = useMemo(
-        () => virtualizedMessageRows.map((row) => estimateChatRowHeight(row, { viewportWidthPx: viewportMetrics.width })),
-        [viewportMetrics.width, virtualizedMessageRows],
-    );
+    const virtualizedRowHeights = useMemo(() => {
+        const viewportWidth = Math.round(viewportMetrics.width);
+        const cache = virtualizedRowHeightCacheRef.current;
+        const activeKeys = new Set<string>();
+        const heights = virtualizedMessageRows.map((row) => {
+            activeKeys.add(row.key);
+            const hasPendingUi = Boolean(row.pendingActions?.length || row.pendingApprovalRequest);
+            const cached = cache.get(row.key);
+            if (
+                cached
+                && cached.message === row.message
+                && cached.viewportWidth === viewportWidth
+                && cached.isContinued === row.isContinued
+                && cached.hasPendingUi === hasPendingUi
+            ) {
+                return cached.height;
+            }
+
+            const height = estimateChatRowHeight(row, { viewportWidthPx: viewportWidth });
+            cache.set(row.key, {
+                message: row.message,
+                viewportWidth,
+                isContinued: row.isContinued,
+                hasPendingUi,
+                height,
+            });
+            return height;
+        });
+
+        // Prepending history can leave old entries behind. Retain a small
+        // reserve for rows crossing the virtualized/live boundary while
+        // keeping the cache bounded for arbitrarily long sessions.
+        if (cache.size > activeKeys.size + 32) {
+            for (const key of cache.keys()) {
+                if (!activeKeys.has(key)) {
+                    cache.delete(key);
+                }
+            }
+        }
+        return heights;
+    }, [viewportMetrics.width, virtualizedMessageRows]);
     const virtualizedRowOffsets = useMemo(() => {
         const offsets: number[] = [];
         let runningTotal = 0;
@@ -173,8 +219,23 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         () => virtualizedMessageRows.slice(visibleVirtualRange.startIndex, visibleVirtualRange.endIndex),
         [virtualizedMessageRows, visibleVirtualRange.endIndex, visibleVirtualRange.startIndex],
     );
-    const activeMessage = rows.find((row) => row.kind === 'message' && row.isActive)?.message;
-    const lastUserMessageId = [...messages].reverse().find((message) => message.role === 'User')?.id;
+    const activeMessage = useMemo(() => {
+        for (let index = rows.length - 1; index >= 0; index -= 1) {
+            const row = rows[index];
+            if (row.kind === 'message' && row.isActive) {
+                return row.message;
+            }
+        }
+        return undefined;
+    }, [rows]);
+    const lastUserMessageId = useMemo(() => {
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+            if (messages[index].role === 'User') {
+                return messages[index].id;
+            }
+        }
+        return undefined;
+    }, [messages]);
     const firstMessageId = messages[0]?.id;
     const lastMessage = messages[messages.length - 1];
     const messageCount = messages.length;

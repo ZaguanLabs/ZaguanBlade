@@ -219,7 +219,6 @@ const ReasoningBlock: React.FC<{ content: string; isActive?: boolean; hasContent
                     >
                         <StreamingMarkdownRenderer
                             content={displayContent}
-                            isAnimating={false}
                             mode={isReasoningActive ? 'streaming' : 'static'}
                             profile="reasoning"
                         />
@@ -604,12 +603,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
         && !!blockId
         && stream.activeBlockId === blockId
     ), [shouldUseStreamingMarkdown, stream?.activeBlockId, stream?.activeKind]);
-    const isLiveContentBlock = useCallback((blockId?: string) => (
-        hasLiveTextStream
-        && stream?.activeKind === 'content'
-        && !!blockId
-        && stream.activeBlockId === blockId
-    ), [hasLiveTextStream, stream?.activeBlockId, stream?.activeKind]);
     const isActiveReasoningBlock = useCallback((blockId?: string) => (
         hasLiveTextStream
         && stream?.activeKind === 'reasoning'
@@ -649,14 +642,13 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     const renderTextContent = (
         content: string,
         useStreamingRenderer = shouldUseStreamingMarkdown,
-        isAnimating = useStreamingRenderer && hasLiveTextStream,
     ) => {
         if (isUser && shouldUsePlainTextForLargeUserMessage(content)) {
             return <PlainTextMessage content={content} />;
         }
 
         return useStreamingRenderer
-            ? <StreamingMarkdownRenderer content={content} isAnimating={isAnimating} />
+            ? <StreamingMarkdownRenderer content={content} />
             : <MarkdownRenderer content={content} />;
     };
     const imageAttachments = (message.images || []).flatMap((image, index) => {
@@ -994,7 +986,7 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         {previousSegment?.kind === 'activity_group' && (
                                             <div className="mb-1.5 h-px w-full bg-(--border-default)" style={assistantDividerStyle} />
                                         )}
-                                        {renderTextContent(block.content, isActiveContentBlock(block.id), isLiveContentBlock(block.id))}
+                                        {renderTextContent(block.content, isActiveContentBlock(block.id))}
                                     </div>
                                 );
                             } else if (block.type === 'todo') {
@@ -1077,7 +1069,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         {renderTextContent(
                                             initialText,
                                             shouldUseStreamingMarkdown && stream?.activeKind === 'content' && !hasToolCalls,
-                                            hasLiveTextStream && stream?.activeKind === 'content' && !hasToolCalls,
                                         )}
                                     </div>
                                 )}
@@ -1151,7 +1142,6 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                                         {renderTextContent(
                                             finalText,
                                             shouldUseStreamingMarkdown && stream?.activeKind === 'content',
-                                            hasLiveTextStream && stream?.activeKind === 'content',
                                         )}
                                     </div>
                                 )}

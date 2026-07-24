@@ -13,6 +13,7 @@ import type { ChatMention } from '../types/blade';
 import type { ChatImage, ChatMessage, ChatMode, ComposerMention, CommandExecution, HookApprovalRequest, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
 import type { ChatActivity } from '../utils/chatTimeline';
 import { buildContextLengthSystemMessage, buildMessageTooLargeSystemMessage, formatChatErrorPayload } from '../utils/localizedEvents';
+import { getStreamRenderIntervalMs } from '../utils/streamRendering';
 import i18n from '../i18n';
 
 const TOOL_ACTIVITY_DISPATCH_INTERVAL_MS = 120;
@@ -560,6 +561,8 @@ export function useChatV2(options: UseChatV2Options = {}) {
         contentAfterTools?: string;
     }>>(new Map());
     const flushFrameRef = useRef<number | null>(null);
+    const flushTimerRef = useRef<number | null>(null);
+    const lastMessageFlushAtRef = useRef(0);
     const streamingStatesRef = useRef<Map<string, StreamingState>>(new Map());
     const toolChunkCountsRef = useRef<Map<string, { chunkCount: number; startedAt: number; lastChunkAt: number }>>(new Map());
     const messageCompletionCleanupTimersRef = useRef<Map<string, number>>(new Map());
@@ -903,6 +906,11 @@ export function useChatV2(options: UseChatV2Options = {}) {
             window.cancelAnimationFrame(flushFrameRef.current);
             flushFrameRef.current = null;
         }
+        if (flushTimerRef.current !== null) {
+            window.clearTimeout(flushTimerRef.current);
+            flushTimerRef.current = null;
+        }
+        lastMessageFlushAtRef.current = 0;
         clearPendingTimers();
         pendingRunCommandCompletionStatusRef.current.clear();
         toolActivityRef.current = null;
@@ -914,10 +922,12 @@ export function useChatV2(options: UseChatV2Options = {}) {
 
     const flushPendingUpdates = useCallback(() => {
         flushFrameRef.current = null;
-        const pending = pendingUpdatesRef.current;
+        const pending = new Map(pendingUpdatesRef.current);
+        pendingUpdatesRef.current.clear();
         if (pending.size === 0) {
             return;
         }
+        lastMessageFlushAtRef.current = performance.now();
         setMessages((previousMessages) => {
             let nextMessages = previousMessages;
             let changed = false;
@@ -999,7 +1009,6 @@ export function useChatV2(options: UseChatV2Options = {}) {
                 });
             });
 
-            pending.clear();
             return changed ? nextMessages : previousMessages;
         });
     }, [setMessages]);
@@ -1008,6 +1017,10 @@ export function useChatV2(options: UseChatV2Options = {}) {
         if (flushFrameRef.current !== null) {
             window.cancelAnimationFrame(flushFrameRef.current);
             flushFrameRef.current = null;
+        }
+        if (flushTimerRef.current !== null) {
+            window.clearTimeout(flushTimerRef.current);
+            flushTimerRef.current = null;
         }
         flushPendingUpdates();
     }, [flushPendingUpdates]);
@@ -1061,15 +1074,24 @@ export function useChatV2(options: UseChatV2Options = {}) {
         });
     }, [flushPendingUpdatesImmediately, scheduleMessageCompletionCleanup, setMessages]);
 
-    const scheduleFlush = useCallback(() => {
-        if (flushFrameRef.current !== null) {
+    const scheduleFlush = useCallback((contentLength: number, reasoningLength: number) => {
+        if (flushFrameRef.current !== null || flushTimerRef.current !== null) {
             return;
         }
 
-        flushFrameRef.current = window.requestAnimationFrame(() => {
-            flushFrameRef.current = null;
-            flushPendingUpdates();
-        });
+        const scheduleFrame = () => {
+            flushTimerRef.current = null;
+            flushFrameRef.current = window.requestAnimationFrame(flushPendingUpdates);
+        };
+        const interval = getStreamRenderIntervalMs(contentLength, reasoningLength);
+        const elapsed = performance.now() - lastMessageFlushAtRef.current;
+        const delay = Math.max(0, interval - elapsed);
+        if (delay <= 1) {
+            scheduleFrame();
+            return;
+        }
+
+        flushTimerRef.current = window.setTimeout(scheduleFrame, delay);
     }, [flushPendingUpdates]);
 
     const queueMessageUpdate = useCallback((
@@ -1089,7 +1111,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
             contentBeforeTools,
             contentAfterTools,
         });
-        scheduleFlush();
+        scheduleFlush(content.length, reasoning.length);
     }, [scheduleFlush]);
 
     const setSelectedModelId = useCallback(async (modelId: string) => {
@@ -2086,6 +2108,10 @@ export function useChatV2(options: UseChatV2Options = {}) {
             if (flushFrameRef.current !== null) {
                 window.cancelAnimationFrame(flushFrameRef.current);
                 flushFrameRef.current = null;
+            }
+            if (flushTimerRef.current !== null) {
+                window.clearTimeout(flushTimerRef.current);
+                flushTimerRef.current = null;
             }
             clearPendingTimers();
         };

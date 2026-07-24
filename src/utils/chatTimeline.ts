@@ -401,20 +401,6 @@ function deriveCommandExecutionWorkEntry(messageId: string, execution: CommandEx
     };
 }
 
-function findActivityMessageId(activity: ChatActivity, messages: ChatMessageType[]): string | null {
-    if (activity.messageId) {
-        return activity.messageId;
-    }
-    if (activity.toolCallId) {
-        const owner = messages.find((message) => message.tool_calls?.some((toolCall) => toolCall.id === activity.toolCallId));
-        if (owner?.id) {
-            return owner.id;
-        }
-    }
-    const lastAssistant = [...messages].reverse().find((message) => message.role === 'Assistant' && message.id);
-    return lastAssistant?.id ?? null;
-}
-
 function deriveActivityWorkEntry(activity: ChatActivity, messageId: string): ChatWorkEntry {
     const command = activity.command;
     const detail = command ?? activity.detail ?? activity.filePath ?? activity.action;
@@ -474,16 +460,33 @@ function hasEquivalentToolWorkEntry(entries: ChatWorkEntry[], entry: ChatWorkEnt
     );
 }
 
-export function deriveChatProjection(messages: ChatMessageType[], activities: ChatActivity[] = []): ChatProjection {
+export function deriveChatProjection(
+    messages: ChatMessageType[],
+    activities: ChatActivity[] = [],
+    messageWorkEntryCache?: WeakMap<ChatMessageType, ChatWorkEntry[]>,
+): ChatProjection {
     const messageById = new Map<string, ChatMessageType>();
+    const toolCallOwnerMessageId = new Map<string, string>();
     const activityById = new Map<string, ChatActivity>();
     const workEntriesByMessageId = new Map<string, ChatWorkEntry[]>();
     const workEntries: ChatWorkEntry[] = [];
+    let lastAssistantMessageId: string | null = null;
 
     messages.forEach((message, index) => {
         const messageId = message.id || `${message.role}-${index}`;
         messageById.set(messageId, message);
-        const messageWorkEntries = deriveChatWorkEntries([message]);
+        if (message.role === 'Assistant' && message.id) {
+            lastAssistantMessageId = message.id;
+        }
+        for (const toolCall of message.tool_calls || []) {
+            toolCallOwnerMessageId.set(toolCall.id, messageId);
+        }
+
+        let messageWorkEntries = messageWorkEntryCache?.get(message);
+        if (!messageWorkEntries) {
+            messageWorkEntries = deriveChatWorkEntries([message]);
+            messageWorkEntryCache?.set(message, messageWorkEntries);
+        }
         if (messageWorkEntries.length > 0) {
             workEntriesByMessageId.set(messageId, messageWorkEntries);
             workEntries.push(...messageWorkEntries);
@@ -492,7 +495,9 @@ export function deriveChatProjection(messages: ChatMessageType[], activities: Ch
 
     for (const activity of activities) {
         activityById.set(activity.id, activity);
-        const messageId = findActivityMessageId(activity, messages);
+        const messageId = activity.messageId
+            ?? (activity.toolCallId ? toolCallOwnerMessageId.get(activity.toolCallId) : undefined)
+            ?? lastAssistantMessageId;
         if (!messageId) {
             continue;
         }

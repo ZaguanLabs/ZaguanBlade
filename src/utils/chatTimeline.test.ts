@@ -371,6 +371,23 @@ test('deriveChatProjection indexes messages and work entries separately', () => 
     assert.equal(projection.workEntriesByMessageId.get('assistant-projection')?.[0]?.toolCallId, 'tool-read');
 });
 
+test('deriveChatProjection reuses cached work entries for unchanged message objects', () => {
+    const message = makeAssistantMessage({
+        id: 'assistant-cached-projection',
+        content: 'Reading',
+        tool_calls: [makeToolCall({ id: 'tool-cached' })],
+    });
+    const cache = new WeakMap<ChatMessage, ReturnType<typeof deriveChatWorkEntries>>();
+
+    const firstProjection = deriveChatProjection([message], [], cache);
+    const secondProjection = deriveChatProjection([message], [], cache);
+
+    assert.equal(
+        secondProjection.workEntriesByMessageId.get('assistant-cached-projection'),
+        firstProjection.workEntriesByMessageId.get('assistant-cached-projection'),
+    );
+});
+
 test('deriveChatProjection merges explicit activity work entries', () => {
     const message = makeAssistantMessage({
         id: 'assistant-activity',
