@@ -1106,7 +1106,7 @@ pub fn submit_command_result(
                     } else {
                         format!(
                             "Command failed with exit code {}:\n{}",
-                            exit_code, &clean_output
+                            exit_code, clean_output
                         )
                     };
                     crate::tools::ToolResult::err(error_msg)
