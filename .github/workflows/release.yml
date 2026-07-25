@@ -43,7 +43,7 @@ jobs:
         run: make ci-check
 
   # ------------------------------------------------------------------
-  # Build job: full release build on every target arch / OS.
+  # Build job: full release build on every supported target arch / OS.
   # Uses the Makefile ci-build target with TARGET/BUNDLES overrides.
   # The tauri-action wraps the build for GitHub release publishing.
   # ------------------------------------------------------------------
@@ -58,10 +58,6 @@ jobs:
           # macOS ARM64 (Apple Silicon)
           - platform: 'macos-15'
             rust_target: 'aarch64-apple-darwin'
-            bundles: 'app dmg'
-          # macOS x86_64 (Intel)
-          - platform: 'macos-13'
-            rust_target: 'x86_64-apple-darwin'
             bundles: 'app dmg'
           # Linux x86_64
           - platform: 'ubuntu-24.04'
