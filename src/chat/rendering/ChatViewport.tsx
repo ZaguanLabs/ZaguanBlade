@@ -96,11 +96,9 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     const compactEmptyStatesV1 = readDebugFlag('compactEmptyStatesV1');
     const scrollRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
-    const bottomRef = useRef<HTMLDivElement>(null);
     const [scrollMode, setScrollMode] = useState<'following' | 'detached'>('following');
     const scrollModeRef = useRef<'following' | 'detached'>('following');
     const isUserAtBottomRef = useRef(true);
-    const isBottomSentinelVisibleRef = useRef(true);
     const previousFirstMessageIdRef = useRef<string | undefined>(undefined);
     const previousMessageCountRef = useRef(0);
     const prependAnchorRef = useRef<{
@@ -219,15 +217,6 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         () => virtualizedMessageRows.slice(visibleVirtualRange.startIndex, visibleVirtualRange.endIndex),
         [virtualizedMessageRows, visibleVirtualRange.endIndex, visibleVirtualRange.startIndex],
     );
-    const activeMessage = useMemo(() => {
-        for (let index = rows.length - 1; index >= 0; index -= 1) {
-            const row = rows[index];
-            if (row.kind === 'message' && row.isActive) {
-                return row.message;
-            }
-        }
-        return undefined;
-    }, [rows]);
     const lastUserMessageId = useMemo(() => {
         for (let index = messages.length - 1; index >= 0; index -= 1) {
             if (messages[index].role === 'User') {
@@ -239,19 +228,6 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
     const firstMessageId = messages[0]?.id;
     const lastMessage = messages[messages.length - 1];
     const messageCount = messages.length;
-    const streamingSignature = useMemo(() => {
-        if (!activeMessage) {
-            return '';
-        }
-
-        return [
-            activeMessage.id,
-            activeMessage.content.length,
-            activeMessage.reasoning?.length ?? 0,
-            activeMessage.blocks?.length ?? 0,
-            activeMessage.streaming?.seq ?? '',
-        ].join('|');
-    }, [activeMessage]);
     const showProgressIndicator = Boolean(researchProgress?.isActive);
     const showPendingResponse = loading && messages[messages.length - 1]?.role !== 'Assistant' && !showProgressIndicator;
 
@@ -296,10 +272,6 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         setScrollMode(nextMode);
     }, []);
 
-    const getDistanceFromBottom = useCallback((element: HTMLDivElement) => {
-        return Math.max(0, element.scrollHeight - element.scrollTop - element.clientHeight);
-    }, []);
-
     const syncBottomState = useCallback((element: HTMLDivElement) => {
         const isAtBottom = isNearChatBottom(
             element.scrollHeight,
@@ -309,9 +281,6 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         );
 
         isUserAtBottomRef.current = isAtBottom;
-        if (isAtBottom) {
-            isBottomSentinelVisibleRef.current = true;
-        }
         setStableScrollMode(isAtBottom ? 'following' : 'detached');
     }, [setStableScrollMode]);
 
@@ -327,7 +296,6 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
 
         if (attachFollow) {
             isUserAtBottomRef.current = true;
-            isBottomSentinelVisibleRef.current = true;
             setStableScrollMode('following');
         }
     }, [setStableScrollMode, scheduleVisibleVirtualRangeUpdate]);
@@ -360,7 +328,6 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
 
         if (shouldDetachChatAutoScrollOnWheel(event.deltaY, element.scrollTop)) {
             isUserAtBottomRef.current = false;
-            isBottomSentinelVisibleRef.current = false;
             setStableScrollMode('detached');
         }
     }, [setStableScrollMode]);
@@ -435,61 +402,28 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             return;
         }
 
-        let frameId: number | null = null;
         const observer = new ResizeObserver(() => {
             recordDebugPerf('ChatViewport.contentResizeObserver');
             if (scrollModeRef.current !== 'following' || !isUserAtBottomRef.current) {
                 return;
             }
-            // Skip if the streaming layout effect already handled this update
-            // synchronously — the deferred rAF scroll would cause a second
-            // scroll-to-bottom on the next frame, producing visible jitter.
-            if (isStreamingScrollActiveRef.current) {
-                isStreamingScrollActiveRef.current = false;
+
+            // ResizeObserver runs after layout. Following the new height here
+            // avoids the forced synchronous layout read that useLayoutEffect
+            // caused on every streamed React commit.
+            const scrollElement = scrollRef.current;
+            if (!scrollElement) {
                 return;
             }
-
-            if (frameId !== null) {
-                cancelAnimationFrame(frameId);
-            }
-            frameId = requestAnimationFrame(() => {
-                frameId = null;
-                recordDebugPerf('ChatViewport.contentResizeFollowBottom');
-                scrollToBottom(false);
-            });
+            recordDebugPerf('ChatViewport.contentResizeFollowBottom');
+            scrollElement.scrollTop = scrollElement.scrollHeight;
+            scrollTopRef.current = scrollElement.scrollTop;
+            scheduleVisibleVirtualRangeUpdate(scrollElement.scrollTop);
         });
 
         observer.observe(content);
-        return () => {
-            observer.disconnect();
-            if (frameId !== null) {
-                cancelAnimationFrame(frameId);
-                frameId = null;
-            }
-        };
-    }, [scrollToBottom]);
-
-    useEffect(() => {
-        const sentinel = bottomRef.current;
-        const scrollRoot = scrollRef.current;
-        if (!sentinel || !scrollRoot || typeof IntersectionObserver === 'undefined') {
-            return;
-        }
-
-        const observer = new IntersectionObserver(
-            ([entry]) => {
-                isBottomSentinelVisibleRef.current = entry.isIntersecting;
-            },
-            {
-                root: scrollRoot,
-                threshold: 0,
-                rootMargin: `0px 0px ${FOLLOW_BOTTOM_THRESHOLD_PX}px 0px`,
-            },
-        );
-
-        observer.observe(sentinel);
         return () => observer.disconnect();
-    }, []);
+    }, [scheduleVisibleVirtualRangeUpdate]);
 
     const handleLoadOlderMessages = useCallback(async () => {
         const element = scrollRef.current;
@@ -539,7 +473,6 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             previousFirstMessageIdRef.current = undefined;
             previousMessageCountRef.current = 0;
             isUserAtBottomRef.current = true;
-            isBottomSentinelVisibleRef.current = true;
             setStableScrollMode('following');
             return;
         }
@@ -551,7 +484,6 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
         previousFirstMessageIdRef.current = firstMessageId;
         previousMessageCountRef.current = messageCount;
         isUserAtBottomRef.current = true;
-        isBottomSentinelVisibleRef.current = true;
         setStableScrollMode('following');
 
         const timer = window.setTimeout(() => scrollToBottom(), 50);
@@ -570,29 +502,6 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
             return () => cancelAnimationFrame(frameId);
         }
     }, [lastMessage?.role, messageCount, scrollToBottom]);
-
-    const isStreamingScrollActiveRef = useRef(false);
-
-    useLayoutEffect(() => {
-        if (!loading || !isUserAtBottomRef.current || !isBottomSentinelVisibleRef.current) {
-            isStreamingScrollActiveRef.current = false;
-            return;
-        }
-
-        const element = scrollRef.current;
-        if (!element) {
-            isStreamingScrollActiveRef.current = false;
-            return;
-        }
-
-        if (getDistanceFromBottom(element) > 2) {
-            element.scrollTop = element.scrollHeight;
-        }
-        // Mark that the layout effect handled this streaming update so the
-        // contentResizeObserver can skip its own (deferred) scroll-to-bottom,
-        // avoiding a double-scroll jitter on the next paint.
-        isStreamingScrollActiveRef.current = true;
-    }, [getDistanceFromBottom, loading, streamingSignature]);
 
     useEffect(() => () => {
         if (visibleRangeFrameRef.current !== null) {
@@ -726,7 +635,7 @@ export const ChatViewport: React.FC<ChatViewportProps> = ({
                         </div>
                     )}
 
-                    <div ref={bottomRef} className="h-4" />
+                    <div className="h-4" />
                 </div>
             </div>
             <FloatingCommandApprovalPill visible={scrollMode === 'detached' && hasPendingRunCommand} onClick={scrollToPendingCommand} />

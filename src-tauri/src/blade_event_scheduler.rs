@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Runtime};
 
 const FRAME_FLUSH_INTERVAL: Duration = Duration::from_millis(12);
+const CHAT_FLUSH_INTERVAL: Duration = Duration::from_millis(32);
 const CHAT_FLUSH_BYTES: usize = 8 * 1024;
 const TERMINAL_FLUSH_BYTES: usize = 32 * 1024;
 const METRIC_SAMPLE_CAP: usize = 512;
@@ -463,7 +464,11 @@ fn scheduler_loop(rx: mpsc::Receiver<SchedulerCommand>) {
                         flush(&mut state, FlushReason::Interval);
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => flush(&mut state, FlushReason::Interval),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if should_flush_on_age(&state) {
+                        flush(&mut state, FlushReason::Interval);
+                    }
+                }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     flush(&mut state, FlushReason::Disconnect);
                     break;
@@ -501,17 +506,22 @@ fn should_flush_early(state: &SchedulerState) -> bool {
 }
 
 fn should_flush_on_age(state: &SchedulerState) -> bool {
-    oldest_pending_age(state)
+    let now = Instant::now();
+    let chat_is_due = state
+        .pending_chat
+        .front()
+        .map(|pending| now.saturating_duration_since(pending.queued_at) >= CHAT_FLUSH_INTERVAL)
+        .unwrap_or(false);
+    if chat_is_due {
+        return true;
+    }
+
+    oldest_non_chat_pending_age(state, now)
         .map(|age| age >= FRAME_FLUSH_INTERVAL)
         .unwrap_or(false)
 }
 
-fn oldest_pending_age(state: &SchedulerState) -> Option<Duration> {
-    let now = Instant::now();
-    let oldest_chat = state
-        .pending_chat
-        .front()
-        .map(|pending| now.saturating_duration_since(pending.queued_at));
+fn oldest_non_chat_pending_age(state: &SchedulerState, now: Instant) -> Option<Duration> {
     let oldest_terminal = state
         .pending_terminal
         .values()
@@ -533,7 +543,6 @@ fn oldest_pending_age(state: &SchedulerState) -> Option<Duration> {
         .map(|pending| now.saturating_duration_since(pending.queued_at));
 
     [
-        oldest_chat,
         oldest_terminal,
         oldest_tool_update,
         oldest_tool_activity,
@@ -1018,6 +1027,50 @@ pub fn metrics_snapshot() -> serde_json::Value {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    fn no_op_emit() -> EmitFn {
+        Arc::new(|_| {})
+    }
+
+    #[test]
+    fn chat_deltas_wait_for_the_chat_interval() {
+        let mut state = SchedulerState::default();
+        state
+            .chat_seq_by_message
+            .insert("assistant-1".to_string(), 1);
+
+        handle_command(
+            &mut state,
+            SchedulerCommand::QueueChatDelta {
+                emit: no_op_emit(),
+                causality_id: Some("assistant-1".to_string()),
+                message_id: "assistant-1".to_string(),
+                kind: ChatDeltaKind::Content,
+                chunk: "batched words".to_string(),
+                queued_at: Instant::now() - FRAME_FLUSH_INTERVAL,
+            },
+        );
+
+        assert!(!should_flush_on_age(&state));
+        state.pending_chat.front_mut().unwrap().queued_at = Instant::now() - CHAT_FLUSH_INTERVAL;
+        assert!(should_flush_on_age(&state));
+    }
+
+    #[test]
+    fn non_chat_events_keep_the_low_latency_interval() {
+        let mut state = SchedulerState::default();
+        handle_command(
+            &mut state,
+            SchedulerCommand::QueueTerminalOutput {
+                emit: no_op_emit(),
+                terminal_id: "terminal-1".to_string(),
+                data: "output".to_string(),
+                queued_at: Instant::now() - FRAME_FLUSH_INTERVAL,
+            },
+        );
+
+        assert!(should_flush_on_age(&state));
+    }
 
     #[test]
     fn immediate_event_does_not_overtake_queued_chat_delta() {

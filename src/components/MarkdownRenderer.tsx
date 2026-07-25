@@ -1,12 +1,19 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
-import { Streamdown, type Components as StreamdownComponents, type ControlsConfig, type StreamdownProps } from 'streamdown';
+import {
+    parseMarkdownIntoBlocks,
+    Streamdown,
+    type Components as StreamdownComponents,
+    type ControlsConfig,
+    type StreamdownProps,
+} from 'streamdown';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Copy, Check } from 'lucide-react';
 import { SyntaxHighlighter } from './SyntaxHighlighter';
+import { createIncrementalMarkdownBlockParser } from '../utils/streamRendering';
 
 interface MarkdownRendererProps {
     content: string;
@@ -477,6 +484,10 @@ const StreamingMarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ c
     const isReasoning = profile === 'reasoning';
     const effectiveControls = isReasoning ? reasoningStreamdownControls : streamdownControls;
     const remend = isReasoning ? reasoningRemendOptions : undefined;
+    const parseMarkdownBlocksIncrementally = useMemo(
+        () => createIncrementalMarkdownBlockParser(parseMarkdownIntoBlocks),
+        [],
+    );
 
     return (
         <div className={`markdown-content select-text ${className}`} style={{ fontSize: 'var(--markdown-font-size, var(--editor-content-font-size, 14px))' }}>
@@ -488,6 +499,7 @@ const StreamingMarkdownRendererComponent: React.FC<MarkdownRendererProps> = ({ c
                 isAnimating={false}
                 lineNumbers={false}
                 parseIncompleteMarkdown
+                parseMarkdownIntoBlocksFn={parseMarkdownBlocksIncrementally}
                 remend={remend}
             >
                 {content}
