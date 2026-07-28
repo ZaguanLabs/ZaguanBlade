@@ -721,7 +721,8 @@
         "emptyToken": "Bot token cannot be empty",
         "telegramUnreachable": "Failed to reach Telegram: {{error}}",
         "telegramParseFailed": "Failed to parse Telegram response: {{error}}",
-        "invalidToken": "Invalid bot token"
+        "invalidToken": "Invalid bot token",
+        "missingBotDetails": "Telegram accepted the token but returned no bot details. Try again, or generate a new token with BotFather."
       }
     }
   },

@@ -717,7 +717,8 @@
         "emptyToken": "El token del bot no puede estar vacío",
         "telegramUnreachable": "No se pudo contactar con Telegram: {{error}}",
         "telegramParseFailed": "No se pudo analizar la respuesta de Telegram: {{error}}",
-        "invalidToken": "Token de bot no válido"
+        "invalidToken": "Token de bot no válido",
+        "missingBotDetails": "Telegram aceptó el token, pero no devolvió los datos del bot. Vuelve a intentarlo o genera un token nuevo con BotFather."
       }
     }
   },

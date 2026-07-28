@@ -172,6 +172,46 @@ export const ComposerTextarea = forwardRef<ComposerTextareaHandle, ComposerTexta
         }
     }, [resize, text]);
 
+    // A width change re-wraps the text, so the content height changes with no
+    // keystroke to trigger the effect above — dragging the chat/editor splitter
+    // would otherwise leave the height pinned to the old wrap, clipping the last
+    // line or leaving dead space until the next keypress. Only width is compared:
+    // reacting to height would feed our own height writes back in as a loop.
+    useEffect(() => {
+        const textarea = textareaRef.current;
+        if (!textarea || typeof ResizeObserver === 'undefined') {
+            return;
+        }
+
+        let lastWidth = textarea.clientWidth;
+        let frameId: number | null = null;
+
+        const observer = new ResizeObserver(() => {
+            const nextWidth = textarea.clientWidth;
+            // Width 0 means the panel is hidden; measuring then would collapse
+            // the box. The observer fires again with a real width on reveal.
+            if (nextWidth === lastWidth || nextWidth === 0) {
+                return;
+            }
+            lastWidth = nextWidth;
+            if (frameId !== null) {
+                return;
+            }
+            frameId = requestAnimationFrame(() => {
+                frameId = null;
+                resize();
+            });
+        });
+
+        observer.observe(textarea);
+        return () => {
+            observer.disconnect();
+            if (frameId !== null) {
+                cancelAnimationFrame(frameId);
+            }
+        };
+    }, [resize]);
+
     const handlePaste = useCallback(async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
         // Paste fires before the mutation — capture the pre-change selection so
         // an undo of this paste restores the cursor to the paste point.

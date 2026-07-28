@@ -89,6 +89,7 @@ const EXACT_BACKEND_MESSAGE_KEYS = new Map<string, string>([
     // Remote control (Telegram)
     ['Bot token cannot be empty', 'settings.remote.errors.emptyToken'],
     ['Invalid bot token', 'settings.remote.errors.invalidToken'],
+    ['Telegram accepted the token but returned no bot details', 'settings.remote.errors.missingBotDetails'],
 
     // SSO
     ['A Zaguán sign-in is already in progress.', 'settings.account.sso.alreadyInProgress'],

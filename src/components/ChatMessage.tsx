@@ -614,12 +614,9 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
         ? ((stream.endTime ?? Date.now()) - stream.startTime) / 1000
         : 0;
 
-    // Determine content split for rendering tool calls in the middle
-    const toolCalls = (message.tool_calls || []).filter(
-        (call) => call.function.name !== 'todo_write'
-    );
-    const hasToolCalls = toolCalls.length > 0;
-
+    // Determine content split for rendering tool calls in the middle.
+    // (The tool-call list itself is derived inside the legacy fallback below,
+    // which is the only place it is read.)
     // Use explicit fields from protocol if available
     const hasExplicitSplit = message.content_before_tools !== undefined || message.content_after_tools !== undefined;
     let initialText = '';
@@ -1186,6 +1183,32 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
     );
 };
 
+// Compared field-by-field rather than by building a joined signature string:
+// this runs for every mounted row on every parent render, and streaming
+// re-renders the viewport several times a second.
+function areMentionsEqual(
+    left: ChatMessageType['mentions'],
+    right: ChatMessageType['mentions'],
+): boolean {
+    const leftLength = left?.length ?? 0;
+    const rightLength = right?.length ?? 0;
+    if (leftLength !== rightLength) return false;
+    if (leftLength === 0 || !left || !right) return true;
+
+    for (let index = 0; index < leftLength; index += 1) {
+        const leftMention = left[index];
+        const rightMention = right[index];
+        if (
+            leftMention.kind !== rightMention.kind
+            || leftMention.path !== rightMention.path
+            || leftMention.is_dir !== rightMention.is_dir
+        ) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Custom comparison for ChatMessage - only re-render when meaningful props change
 export const ChatMessage = React.memo(ChatMessageComponent, (prevProps, nextProps) => {
     // Quick bail-out checks for primitive props
@@ -1205,9 +1228,7 @@ export const ChatMessage = React.memo(ChatMessageComponent, (prevProps, nextProp
     if ((prevMsg.streaming?.endTime ?? null) !== (nextMsg.streaming?.endTime ?? null)) return false;
     if ((prevMsg.streaming?.activeKind ?? null) !== (nextMsg.streaming?.activeKind ?? null)) return false;
     if ((prevMsg.streaming?.activeBlockId ?? null) !== (nextMsg.streaming?.activeBlockId ?? null)) return false;
-    const prevMentionSignature = (prevMsg.mentions || []).map((mention) => `${mention.kind}:${mention.path}:${mention.is_dir}`).join('|');
-    const nextMentionSignature = (nextMsg.mentions || []).map((mention) => `${mention.kind}:${mention.path}:${mention.is_dir}`).join('|');
-    if (prevMentionSignature !== nextMentionSignature) return false;
+    if (!areMentionsEqual(prevMsg.mentions, nextMsg.mentions)) return false;
     if (prevMsg.tool_calls?.length !== nextMsg.tool_calls?.length) return false;
     if (prevMsg.commandExecutions?.length !== nextMsg.commandExecutions?.length) return false;
     if (prevMsg.blocks?.length !== nextMsg.blocks?.length) return false;

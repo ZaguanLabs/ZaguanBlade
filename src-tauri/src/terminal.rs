@@ -82,9 +82,13 @@ const MAX_BG_JOBS: usize = 32;
 #[derive(Debug)]
 pub struct BgOutputBuffer {
     text: String,
+    /// Byte offset in `text` where retained output starts. Bytes before it have
+    /// been logically dropped and are reclaimed in batches (see `append`), so
+    /// `text` may hold up to `max_bytes / 2` of dead prefix.
+    head: usize,
     /// Total bytes ever appended (monotonic; == absolute end offset).
     total: usize,
-    /// Bytes dropped from the front == absolute offset of `text[0]`.
+    /// Bytes dropped from the front == absolute offset of the retained text.
     dropped: usize,
     /// Cap on retained bytes. `usize::MAX` == unbounded (blocking commands, which
     /// must return their full output exactly as before this feature existed).
@@ -101,24 +105,44 @@ impl BgOutputBuffer {
     fn new(max_bytes: usize) -> Self {
         Self {
             text: String::new(),
+            head: 0,
             total: 0,
             dropped: 0,
             max_bytes,
         }
     }
 
+    /// The live window: the most recent `<= max_bytes` bytes of output.
+    fn retained(&self) -> &str {
+        &self.text[self.head..]
+    }
+
     fn append(&mut self, chunk: &str) {
         self.text.push_str(chunk);
         self.total += chunk.len();
-        if self.text.len() > self.max_bytes {
-            let overflow = self.text.len() - self.max_bytes;
-            // Drop whole chars from the front so we never split a UTF-8 boundary.
-            let mut cut = overflow;
-            while cut < self.text.len() && !self.text.is_char_boundary(cut) {
-                cut += 1;
-            }
-            self.text.drain(..cut);
-            self.dropped += cut;
+
+        let retained_len = self.text.len() - self.head;
+        if retained_len <= self.max_bytes {
+            return;
+        }
+
+        // Removing bytes from the front of a String memmoves everything after
+        // them. The reader thread appends in 4 KiB chunks, so trimming on every
+        // append would rewrite the entire ~1 MiB buffer thousands of times over
+        // a long-running command. Advance a window head instead, and reclaim the
+        // dead prefix only once it is worth a single memmove — the retained text
+        // is byte-for-byte what an eager trim would leave.
+        let mut cut = self.head + (retained_len - self.max_bytes);
+        // Drop whole chars from the front so we never split a UTF-8 boundary.
+        while cut < self.text.len() && !self.text.is_char_boundary(cut) {
+            cut += 1;
+        }
+        self.dropped += cut - self.head;
+        self.head = cut;
+
+        if self.head >= self.max_bytes / 2 {
+            self.text.drain(..self.head);
+            self.head = 0;
         }
     }
 
@@ -127,10 +151,10 @@ impl BgOutputBuffer {
     fn snapshot(&self) -> String {
         if self.dropped > 0 {
             let mut out = format!("[… {} bytes of earlier output truncated …]\n", self.dropped);
-            out.push_str(&self.text);
+            out.push_str(self.retained());
             out
         } else {
-            self.text.clone()
+            self.retained().to_string()
         }
     }
 
@@ -149,11 +173,11 @@ impl BgOutputBuffer {
         if cursor < self.dropped {
             let omitted = self.dropped - cursor;
             let mut out = format!("[… {omitted} bytes of earlier output truncated …]\n");
-            out.push_str(&self.text);
+            out.push_str(self.retained());
             return (out, self.total);
         }
         let start = cursor - self.dropped;
-        (self.text[start..].to_string(), self.total)
+        (self.retained()[start..].to_string(), self.total)
     }
 }
 
@@ -1777,7 +1801,7 @@ mod bg_buffer_tests {
         let big = "x".repeat(BG_OUTPUT_MAX_BYTES + 4096);
         buf.append(&big);
         // Never retains more than the cap.
-        assert!(buf.text.len() <= BG_OUTPUT_MAX_BYTES);
+        assert!(buf.retained().len() <= BG_OUTPUT_MAX_BYTES);
         // Total is the full stream length; some bytes were dropped from the front.
         assert_eq!(buf.total_appended(), big.len());
         assert!(buf.dropped > 0);
@@ -1803,9 +1827,44 @@ mod bg_buffer_tests {
         let big = "y".repeat(BG_OUTPUT_MAX_BYTES + 8192);
         buf.append(&big);
         assert_eq!(buf.dropped, 0);
-        assert_eq!(buf.text.len(), big.len());
+        assert_eq!(buf.retained().len(), big.len());
         // snapshot() returns everything with no truncation notice.
         assert_eq!(buf.snapshot(), big);
+    }
+
+    #[test]
+    fn batched_reclamation_matches_eager_trimming() {
+        // The window head is advanced per append but the dead prefix is only
+        // reclaimed in slabs. Feed many small chunks past the cap (the shape the
+        // 4 KiB reader thread produces) and check the retained bytes are exactly
+        // the tail an eager trim would leave, with matching drop accounting.
+        const CAP: usize = 1024;
+        let mut buf = BgOutputBuffer::new(CAP);
+        let mut reference = String::new();
+
+        for index in 0..2000 {
+            let chunk = format!("{index}-áé\n");
+            buf.append(&chunk);
+            reference.push_str(&chunk);
+        }
+
+        // Eager-trim reference: keep the last <= CAP bytes, on a char boundary.
+        let mut cut = reference.len().saturating_sub(CAP);
+        while cut < reference.len() && !reference.is_char_boundary(cut) {
+            cut += 1;
+        }
+
+        assert_eq!(buf.retained(), &reference[cut..]);
+        assert!(buf.retained().len() <= CAP);
+        assert_eq!(buf.total_appended(), reference.len());
+        assert_eq!(buf.dropped, cut);
+        // Dead prefix stays bounded rather than growing with the stream.
+        assert!(buf.head < CAP);
+
+        // Absolute cursors still resolve against the retained window.
+        let (delta, cursor) = buf.read_from(reference.len() - 10);
+        assert_eq!(delta, &reference[reference.len() - 10..]);
+        assert_eq!(cursor, reference.len());
     }
 
     #[test]

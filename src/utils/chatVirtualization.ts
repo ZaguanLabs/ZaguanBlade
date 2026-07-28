@@ -14,6 +14,30 @@ export function sameVisibleVirtualRange(a: VisibleVirtualRange, b: VisibleVirtua
         && a.bottomSpacerHeight === b.bottomSpacerHeight;
 }
 
+/**
+ * Smallest index in [lowerBound, rowCount] whose predicate holds, or rowCount
+ * when none does. Row offsets are a running total of strictly positive row
+ * heights, so both predicates used below are monotonic and a binary search
+ * returns exactly what a forward linear scan would.
+ */
+function findFirstIndex(
+    lowerBound: number,
+    rowCount: number,
+    predicate: (index: number) => boolean,
+): number {
+    let low = lowerBound;
+    let high = rowCount;
+    while (low < high) {
+        const mid = (low + high) >>> 1;
+        if (predicate(mid)) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    return low;
+}
+
 export function computeVisibleVirtualRange(
     scrollTop: number,
     viewportHeight: number,
@@ -30,25 +54,20 @@ export function computeVisibleVirtualRange(
     const viewportStart = Math.max(0, scrollTop - overscanPx);
     const viewportEnd = scrollTop + viewportHeight + overscanPx;
 
-    let startIndex = 0;
-    while (
-        startIndex < rowCount
-        && virtualizedRowOffsets[startIndex] + virtualizedRowHeights[startIndex] < viewportStart
-    ) {
-        startIndex += 1;
-    }
+    // This runs once per scroll frame, so it must not scan the whole timeline:
+    // a long conversation would otherwise walk thousands of rows every rAF.
+    const startIndex = findFirstIndex(0, rowCount, (index) => (
+        virtualizedRowOffsets[index] + virtualizedRowHeights[index] >= viewportStart
+    ));
+    const endIndex = findFirstIndex(startIndex, rowCount, (index) => (
+        virtualizedRowOffsets[index] >= viewportEnd
+    ));
 
-    let endIndex = startIndex;
-    while (endIndex < rowCount && virtualizedRowOffsets[endIndex] < viewportEnd) {
-        endIndex += 1;
-    }
-
+    // Offsets are a running total, so the height of rows [startIndex, endIndex)
+    // is the difference between their offsets — no need to re-sum them.
     const topSpacerHeight = virtualizedRowOffsets[startIndex] ?? totalVirtualizedHeight;
-    let renderedHeight = 0;
-    for (let index = startIndex; index < endIndex; index += 1) {
-        renderedHeight += virtualizedRowHeights[index] ?? 0;
-    }
-    const bottomSpacerHeight = Math.max(0, totalVirtualizedHeight - topSpacerHeight - renderedHeight);
+    const renderedEndOffset = virtualizedRowOffsets[endIndex] ?? totalVirtualizedHeight;
+    const bottomSpacerHeight = Math.max(0, totalVirtualizedHeight - renderedEndOffset);
 
     return { startIndex, endIndex, topSpacerHeight, bottomSpacerHeight };
 }

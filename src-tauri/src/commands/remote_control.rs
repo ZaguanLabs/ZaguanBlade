@@ -57,7 +57,13 @@ pub async fn set_telegram_bot_token(
             .unwrap_or_else(|| "Invalid bot token".to_string()));
     }
 
-    let bot_username = get_me.result.unwrap().username;
+    // `ok` and `result` are independent fields on the wire: a response can report
+    // success without carrying a user object. Unwrapping here would panic inside
+    // the command rather than surfacing as a normal error in the settings dialog.
+    let bot_username = get_me
+        .result
+        .ok_or_else(|| "Telegram accepted the token but returned no bot details".to_string())?
+        .username;
 
     // Save token in config
     let config_path = default_api_config_path();
