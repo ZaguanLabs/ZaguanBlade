@@ -811,6 +811,18 @@
   "toolCall": {
     "stopCommand": "Stop command",
     "copyCommand": "Copy command",
+    "commandSession": {
+      "poll": "Checking command progress",
+      "write": "Sending command input",
+      "interrupt": "Interrupting command",
+      "kill": "Stopping background command",
+      "running": "Still running",
+      "exited": "Finished",
+      "session": "Session: {{id}}",
+      "elapsed": "Elapsed: {{seconds}} s",
+      "output": "Command output",
+      "noOutput": "No new output"
+    },
     "showDetails": "Show details",
     "hideDetails": "Hide details",
     "undoChanges": "Undo changes",

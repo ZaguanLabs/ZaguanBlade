@@ -807,6 +807,18 @@
   "toolCall": {
     "stopCommand": "Detener comando",
     "copyCommand": "Copiar comando",
+    "commandSession": {
+      "poll": "Comprobando el progreso del comando",
+      "write": "Enviando datos al comando",
+      "interrupt": "Interrumpiendo el comando",
+      "kill": "Deteniendo el comando en segundo plano",
+      "running": "Sigue en ejecución",
+      "exited": "Finalizado",
+      "session": "Sesión: {{id}}",
+      "elapsed": "Tiempo transcurrido: {{seconds}} s",
+      "output": "Salida del comando",
+      "noOutput": "Sin nueva salida"
+    },
     "showDetails": "Mostrar detalles",
     "hideDetails": "Ocultar detalles",
     "undoChanges": "Deshacer cambios",

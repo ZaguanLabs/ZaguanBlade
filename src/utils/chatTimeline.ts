@@ -1,6 +1,7 @@
 import i18n from '../i18n';
 import type { ChatMessage as ChatMessageType, CommandExecution, HookApprovalRequest, MessageBlock, ToolCall } from '../types/chat';
 import type { StructuredAction } from '../types/events';
+import { getCommandSessionAction, parseCommandSessionResult } from './commandSession';
 
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 10;
 
@@ -366,6 +367,22 @@ function firstStringField(record: Record<string, unknown> | null, fields: string
 function deriveToolCallWorkEntry(messageId: string, toolCall: ToolCall): ChatWorkEntry {
     const name = toolCall.function.name;
     const args = parseToolArguments(toolCall.function.arguments);
+    if (name === 'command_session') {
+        const session = parseCommandSessionResult(toolCall.result);
+        const sessionId = firstStringField(args, ['session_id']) ?? session.sessionId;
+        const failed = toolCall.status === 'error' || toolCall.status === 'skipped'
+            || (toolCall.status === 'complete' && session.exitCode !== undefined && session.exitCode !== 0);
+        return {
+            id: `tool:${toolCall.id}`,
+            messageId,
+            source: 'tool_call',
+            label: i18n.t(`toolCall.commandSession.${getCommandSessionAction(args)}`),
+            tone: failed ? 'error' : 'tool',
+            ...(sessionId ? { detail: i18n.t('toolCall.commandSession.session', { id: sessionId }) } : {}),
+            toolCallId: toolCall.id,
+            status: toolCall.status,
+        };
+    }
     const command = name === 'run_command'
         ? firstStringField(args, ['command', 'cmd'])
         : undefined;

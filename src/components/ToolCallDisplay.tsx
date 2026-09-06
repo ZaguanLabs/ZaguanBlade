@@ -2,6 +2,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ToolCall } from '../types/chat';
+import { CommandSessionDisplay } from './CommandSessionDisplay';
 import { Zap, CheckCircle2, XCircle, Loader2, Copy, Check, ChevronRight, ChevronDown, RotateCcw, StopCircle, FileSearch, ShieldAlert, GitBranch } from 'lucide-react';
 
 const COMPLETE_FADE_DELAY_MS = 250;
@@ -476,7 +477,7 @@ const ToolCallDisplayComponent: React.FC<ToolCallDisplayProps> = ({
     // arguments on every streaming re-render is a real CPU cost in WebKit.
     const parsedArgs = React.useMemo<Record<string, unknown>>(() => {
         try {
-            return JSON.parse(toolCall.function.arguments);
+            return asRecord(JSON.parse(toolCall.function.arguments)) ?? {};
         } catch {
             return { raw: toolCall.function.arguments };
         }
@@ -554,6 +555,10 @@ const ToolCallDisplayComponent: React.FC<ToolCallDisplayProps> = ({
     const resultCount = isComplete && isSymbolResultTool(toolCall.function.name)
         ? symbolResultCount(jsonResult)
         : null;
+
+    if (toolCall.function.name === 'command_session') {
+        return <CommandSessionDisplay id={toolCall.id} args={parsedArgs} status={status} result={result ?? toolCall.result} />;
+    }
 
     if (toolCall.function.name === 'fast_context' && jsonResult) {
         return (
