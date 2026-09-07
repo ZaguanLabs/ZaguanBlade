@@ -27,7 +27,7 @@ export function shouldShowIndexStatusCue(indexHealth: IndexHealthSnapshot | null
         return false;
     }
 
-    return indexHealth.status === 'checking' || indexHealth.status === 'indexing';
+    return indexHealth.status === 'disabled' || indexHealth.status === 'stopping' || indexHealth.status === 'checking' || indexHealth.status === 'indexing';
 }
 
 /** Minimal shape of i18next's `t`, so this util stays framework-light and testable. */
@@ -37,6 +37,7 @@ export function formatIndexStatusLabel(
     indexHealth: IndexHealthSnapshot,
     t: IndexStatusTranslate,
 ): string {
+    if (indexHealth.status === 'disabled' || indexHealth.status === 'stopping') return t(`statusBar.index.${indexHealth.status}`);
     if (indexHealth.status === 'indexing') {
         const progress = formatIndexingProgress(indexHealth);
         const currentFile = indexHealth.current_file?.trim();
@@ -85,6 +86,7 @@ export function formatIndexStatusLabel(
 }
 
 export function formatIndexStatusTitle(indexHealth: IndexHealthSnapshot): string {
+    if (indexHealth.status === 'disabled' || indexHealth.status === 'stopping') return i18n.t(`statusBar.index.${indexHealth.status}`);
     const parts = [
         indexHealth.message,
         i18n.t('statusBar.index.filesIndexed', {

@@ -3464,6 +3464,12 @@ pub fn execute_tool_with_editor<R: tauri::Runtime>(
     editor_state: Option<&EditorState>,
     app_handle: Option<&tauri::AppHandle<R>>,
 ) -> ToolResult {
+    if crate::index_policy::requires_index(tool_name)
+        && !crate::index_policy::enabled(workspace_root).unwrap_or(false)
+    {
+        return ToolResult::err(crate::index_policy::DISABLED);
+    }
+
     // Claude models sometimes prefix arguments with {} - strip it
     // But don't strip if the entire string is just "{}"
     let sanitized_args = if raw_args.starts_with("{}") && raw_args.len() > 2 {
@@ -5277,7 +5283,7 @@ fn empty_result_trust_from_parts(
     match health.status {
         IndexHealthStatus::Indexing | IndexHealthStatus::Checking => return "indexing",
         IndexHealthStatus::Stale | IndexHealthStatus::Partial => return "stale",
-        IndexHealthStatus::Unknown | IndexHealthStatus::Error => return "unavailable",
+        IndexHealthStatus::Unknown | IndexHealthStatus::Error | IndexHealthStatus::Disabled | IndexHealthStatus::Stopping => return "unavailable",
         IndexHealthStatus::Fresh => {}
     }
     if health.stale_files > 0 || health.missing_files > 0 {
@@ -9064,10 +9070,12 @@ fn apply_semantic_patch_writes_with_service<F>(
 where
     F: FnOnce(&[SemanticPatchWrite]),
 {
+    let _work = service.lifetime.enter().map_err(|error| error.to_string())?;
     let applier = crate::semantic_patch::PatchApplier::new(service.clone());
     let result = applier.apply(patch).map_err(|error| error.to_string())?;
     let writes = collect_semantic_patch_writes(workspace_root, result)?;
     before_commit(&writes);
+    service.lifetime.check().map_err(|error| error.to_string())?;
     let staged_writes = stage_semantic_patch_writes(writes)?;
     let mut applied_count = 0usize;
 

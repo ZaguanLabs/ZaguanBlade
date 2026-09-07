@@ -94,3 +94,22 @@ test('changing only the theme does not trigger account or model reconciliation',
     await saveSettingsChanges(next, previous, '/workspace', 'missing', services);
     assert.deepEqual(calls, ['save_remote_ai_settings', 'theme-changed']);
 });
+
+test('disabling the global index is persisted before clearing a workspace disable override', async () => {
+    const previous = payload();
+    previous.project.integrations = { disabled_ids: [], symbols_index_enabled: false };
+    const next = payload();
+    next.integrations.symbols_index_enabled = false;
+    next.project.integrations = { disabled_ids: [], symbols_index_enabled: null };
+    const { calls, services } = recorder();
+    await saveSettingsChanges(next, previous, '/workspace', 'revision', services);
+    assert.ok(calls.indexOf('save_integration_settings') < calls.indexOf('save_project_settings'));
+});
+
+test('index overrides survive conversion and unrelated preference changes', () => {
+    const original = payload().project;
+    original.integrations = { disabled_ids: ['server'], symbols_index_enabled: false };
+    const draft = projectSettingsFromBackend(original);
+    draft.warmupContextPrefetch = false;
+    assert.deepEqual(projectSettingsToBackend(draft).integrations, original.integrations);
+});

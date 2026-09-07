@@ -28,6 +28,8 @@ for (const [language, translation] of Object.entries({ en, es })) {
         assert.ok(html.includes('type="password"'));
         assert.ok(html.includes(translation.settings.integrations.test.button));
         assert.ok(html.includes(translation.settings.integrations.environment.credentials));
+        assert.ok(html.includes(translation.settings.integrations.index.title));
+        assert.ok(html.includes(translation.settings.integrations.index.globalDefault));
         assert.ok(!html.includes('settings.integrations.'));
     });
 }

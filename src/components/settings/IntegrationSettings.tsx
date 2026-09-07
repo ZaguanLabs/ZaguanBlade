@@ -1,9 +1,10 @@
 import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, Trash2 } from 'lucide-react';
-import type { IntegrationConfig, IntegrationDefinition, IntegrationProcess } from '../../types/integrations';
+import type { IntegrationConfig, IntegrationDefinition, IntegrationProcess, WorkspaceIntegrationSettings } from '../../types/integrations';
 import { newIntegrationProcess, removeIntegration, replaceIntegration } from '../../utils/integrationSettings';
 import { IntegrationConnectionTest, type ConnectionTestContext } from './IntegrationConnectionTest';
+import { SymbolsIndexSettings } from './SymbolsIndexSettings';
 import { IntegrationEnvironment, IntegrationSecrets } from './IntegrationEnvironment';
 
 const inputClass = 'w-full rounded-md border border-(--border-default) bg-(--bg-input) px-3 py-2 text-sm text-(--fg-primary) focus:outline-none focus:border-(--border-focus)';
@@ -106,7 +107,7 @@ function DefinitionFields({ entry, onChange, onRemove, config, testContext }: {
     </section>;
 }
 
-export function IntegrationSettings({ config, onChange, ...testContext }: ConnectionTestContext & { config: IntegrationConfig; onChange: (config: IntegrationConfig) => void }) {
+export function IntegrationSettings({ config, onChange, workspace, onWorkspaceChange, ...testContext }: ConnectionTestContext & { config: IntegrationConfig; onChange: (config: IntegrationConfig) => void; workspace?: WorkspaceIntegrationSettings; onWorkspaceChange?: (workspace: WorkspaceIntegrationSettings) => void }) {
     const { t } = useTranslation();
     const add = (protocol: 'mcp' | 'acp', atlas = false) => {
         const entry: IntegrationDefinition = {
@@ -140,5 +141,6 @@ export function IntegrationSettings({ config, onChange, ...testContext }: Connec
                 {protocol === 'mcp' ? <button type="button" className={buttonClass} onClick={() => add('mcp', true)}>{t('settings.integrations.addAtlas')}</button> : null}
             </div>
         </div>)}
+        <SymbolsIndexSettings config={config} workspace={workspace} workspacePath={testContext.workspacePath} onChange={onChange} onWorkspaceChange={onWorkspaceChange} />
     </div>;
 }

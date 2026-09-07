@@ -8,6 +8,7 @@ use crate::{
     app_state::AppState,
     integrations::{probe::ProbeResult, runtime::LaunchReview, RuntimeError},
 };
+use tauri::Manager;
 use uuid::Uuid;
 
 fn runtime_desktop_only(window: &tauri::WebviewWindow) -> Result<(), RuntimeError> {
@@ -126,10 +127,62 @@ pub async fn save_integration_settings(
     config: IntegrationConfig,
 ) -> Result<ConfigSnapshot, ConfigError> {
     desktop_only(&window)?;
-    tokio::task::spawn_blocking(move || {
+    let saved = tokio::task::spawn_blocking(move || {
         IntegrationStore::new(crate::config::default_global_config_dir())
             .save(&expected_revision, config)
     })
     .await
-    .map_err(|_| ConfigError::WriteFailed)?
+    .map_err(|_| ConfigError::WriteFailed)??;
+    crate::index_policy::refresh();
+    crate::startup::refresh_symbols_index(window.app_handle());
+    Ok(saved)
+}
+
+#[derive(serde::Serialize)]
+pub struct SymbolsIndexStatus {
+    pub workspace: crate::integrations::identity::WorkspaceIdentity,
+    pub enabled: bool,
+    pub health: crate::language_service::IndexHealthSnapshot,
+}
+
+#[tauri::command]
+pub async fn get_symbols_index_status(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    workspace_path: String,
+) -> Result<SymbolsIndexStatus, String> {
+    desktop_only(&window).map_err(|_| "desktop_only")?;
+    let documents = state.document_service()?;
+    let service = state
+        .language_service
+        .read()
+        .map_err(|_| "symbols_index_policy_unavailable")?
+        .clone();
+    tokio::task::spawn_blocking(move || {
+        let root = std::fs::canonicalize(workspace_path).map_err(|_| "workspace_changed")?;
+        if root != documents.workspace_root() || documents.cancellation().is_cancelled() {
+            return Err("workspace_changed".into());
+        }
+        crate::index_policy::refresh();
+        let enabled = crate::index_policy::enabled(&root)?;
+        let mut health = service
+            .filter(|service| service.uses_documents(&documents))
+            .map(|service| service.index_health_snapshot())
+            .unwrap_or_default();
+        if crate::index_policy::stopping(&root) {
+            health.status = crate::language_service::IndexHealthStatus::Stopping;
+        } else if !enabled {
+            health.status = crate::language_service::IndexHealthStatus::Disabled;
+        }
+        if documents.cancellation().is_cancelled() {
+            return Err("workspace_changed".into());
+        }
+        Ok(SymbolsIndexStatus {
+            workspace: documents.identity().clone(),
+            enabled,
+            health,
+        })
+    })
+    .await
+    .map_err(|_| "symbols_index_policy_unavailable".to_string())?
 }

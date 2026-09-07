@@ -33,15 +33,21 @@ export async function saveSettingsChanges(
 
     if (remoteChanged) await services.invoke('save_remote_ai_settings', { settings: next.remote });
     if (localChanged) await services.invoke('save_local_ai_settings', { settings: next.local });
+    const saveIntegrations = async () => {
+        if (integrationsChanged) {
+            const saved = await services.invoke<IntegrationConfigSnapshot>('save_integration_settings', {
+                expectedRevision: integrationRevision, config: next.integrations,
+            });
+            // Advance the revision before notifications: a notification failure must
+            // not make the next attempt conflict with our own successful disk write.
+            services.integrationSaved(saved.revision);
+        }
+    };
+    // Persist a disabling global default before clearing a workspace override,
+    // so the intermediate effective policy cannot start an unwanted index.
+    if (next.integrations.symbols_index_enabled === false) await saveIntegrations();
     if (projectChanged) await services.invoke('save_project_settings', { projectPath: workspacePath, settings: next.project });
-    if (integrationsChanged) {
-        const saved = await services.invoke<IntegrationConfigSnapshot>('save_integration_settings', {
-            expectedRevision: integrationRevision, config: next.integrations,
-        });
-        // Advance the revision before notifications: a notification failure must
-        // not make the next attempt conflict with our own successful disk write.
-        services.integrationSaved(saved.revision);
-    }
+    if (next.integrations.symbols_index_enabled !== false) await saveIntegrations();
 
     if (next.remote.theme !== previous.remote.theme) await services.emit('theme-changed');
     if (next.remote.language !== previous.remote.language) await services.changeLanguage(next.remote.language);

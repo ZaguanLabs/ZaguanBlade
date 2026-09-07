@@ -34,6 +34,7 @@ import { useTheme } from "../contexts/ThemeContext";
 import { useContextMenu, type ContextMenuItem } from "./ui/ContextMenu";
 import { Copy, Scissors, Clipboard, Undo2, Redo2, Search, Network } from "lucide-react";
 import { SymbolsIndexService, type InspectorSymbol } from "../services/symbolIndex";
+import { useSymbolsIndexAvailable } from "../hooks/useSymbolsIndexStatus";
 import { GraphInspector } from "./GraphInspector";
 import { normalizeEditorPath } from "../utils/editorBufferRegistry";
 
@@ -155,6 +156,9 @@ export type CodeEditorReplaceDocumentInput = {
 
 const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onDocumentChange, onSave, filename, externalContentVersion = 0, highlightLines, onNavigate, lineWrap, unifiedDiff }, ref) => {
     const { t } = useTranslation();
+    const symbolsIndexAvailable = useSymbolsIndexAvailable();
+    const symbolsIndexAvailableRef = useRef(symbolsIndexAvailable);
+    symbolsIndexAvailableRef.current = symbolsIndexAvailable;
     // Auto-enable line wrap for markdown files
     const isMarkdown = filename?.endsWith('.md') || filename?.endsWith('.markdown') || false;
     const shouldWrap = lineWrap ?? isMarkdown;
@@ -184,6 +188,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
 
     // Local Symbols Index Graph Inspector State
     const [inspectorData, setInspectorData] = React.useState<InspectorSymbol | null>(null);
+    useEffect(() => { if (!symbolsIndexAvailable) setInspectorData(null); }, [symbolsIndexAvailable]);
 
 
     const languageRequestIdRef = useRef(0);
@@ -727,10 +732,11 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
             { id: 'div-3', label: '', divider: true },
             {
                 id: 'graph',
-                label: t('contextMenu.showSymbolGraph'),
+                label: symbolsIndexAvailable ? t('contextMenu.showSymbolGraph') : t('settings.integrations.index.graphDisabled'),
+                disabled: !symbolsIndexAvailable,
                 icon: <Network className="w-4 h-4" />,
                 onClick: async () => {
-                    if (!filename) return;
+                    if (!filename || !symbolsIndexAvailable) return;
                     const pos = view.state.selection.main.head;
                     const line = view.state.doc.lineAt(pos);
 
@@ -741,7 +747,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
                             pos - line.from,
                         );
                         if (symbol) {
-                            setInspectorData(symbol);
+                            if (symbolsIndexAvailableRef.current && filenameRef.current === filename) setInspectorData(symbol);
                         } else {
                             console.warn("No indexed symbol found at cursor for graph");
                         }
@@ -753,13 +759,13 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(({ content, onD
         ];
 
         showMenu({ x: e.clientX, y: e.clientY }, items);
-    }, [filename, showMenu, t]);
+    }, [filename, showMenu, t, symbolsIndexAvailable]);
 
     return (
         <div className="code-editor-scroll h-full w-full relative" data-font-zoom-scope="editor" onContextMenu={handleContextMenu}>
             <div ref={editorRef} className="h-full w-full overflow-hidden text-base" />
 
-            {inspectorData && filename && (
+            {inspectorData && symbolsIndexAvailable && filename && (
                 <GraphInspector
                     symbol={inspectorData}
                     onClose={() => setInspectorData(null)}

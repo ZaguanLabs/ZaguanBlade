@@ -831,6 +831,21 @@
         "delete": "Delete stored credential",
         "stored": "Credential stored.",
         "deleted": "Stored credential deleted."
+      },
+      "index": {
+        "title": "Built-in Symbols Index",
+        "help": "Provides built-in symbol navigation, graph inspection and structural context. Turning it off stops indexing and hides dependent tools. Editing, text search, Git and history remain available. Cached index data is kept; re-enabling reconciles changes made while it was off.",
+        "globalDefault": "Enable by default",
+        "workspaceOverride": "This workspace",
+        "inherit": "Inherit global default",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "stopping": "Stopping index work…",
+        "checking": "Checking…",
+        "unavailable": "Status unavailable",
+        "saveHelp": "Save to apply these settings. Re-enabling starts an index refresh. Adding an MCP server does not change this preference.",
+        "currentStatus": "Saved effective status: {{status}}",
+        "graphDisabled": "Symbol graph unavailable — check index settings"
       }
     },
     "retryLoading": "Reload settings",
@@ -888,7 +903,9 @@
       "rebuildingIntegrity": "Rebuilding symbol index after graph integrity issues ({{missingSources}} missing sources, {{missingTargets}} missing targets, {{filesMissingRoots}} files missing roots)",
       "partialIntegrity": "Code intelligence partial: graph integrity issues detected ({{missingSources}} missing sources, {{missingTargets}} missing targets, {{filesMissingRoots}} files missing roots)",
       "readyResolved": "Code intelligence ready: {{resolved}}/{{total}} symbol relationships resolved",
-      "refreshFailed": "Code intelligence refresh failed: {{error}}"
+      "refreshFailed": "Code intelligence refresh failed: {{error}}",
+      "disabled": "Symbols Index disabled",
+      "stopping": "Stopping Symbols Index…"
     },
     "languages": {
       "plainText": "Plain Text",

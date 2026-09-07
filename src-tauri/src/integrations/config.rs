@@ -34,8 +34,14 @@ pub enum ConfigError {
 pub struct IntegrationConfig {
     #[serde(default = "schema_version")]
     pub schema_version: u32,
+    #[serde(default = "default_index_enabled")]
+    pub symbols_index_enabled: bool,
     #[serde(default)]
     pub entries: Vec<IntegrationDefinition>,
+}
+
+fn default_index_enabled() -> bool {
+    true
 }
 
 fn schema_version() -> u32 {
@@ -46,6 +52,7 @@ impl Default for IntegrationConfig {
     fn default() -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
+            symbols_index_enabled: true,
             entries: Vec::new(),
         }
     }
@@ -120,6 +127,8 @@ pub enum ConfigValue {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceIntegrationSettings {
+    #[serde(default)]
+    pub symbols_index_enabled: Option<bool>,
     #[serde(default)]
     pub disabled_ids: Vec<Uuid>,
 }
@@ -294,7 +303,8 @@ mod tests {
         entry.enabled = true;
         assert!(WorkspaceIntegrationSettings::default().allows(&entry));
         assert!(!WorkspaceIntegrationSettings {
-            disabled_ids: vec![entry.id]
+            disabled_ids: vec![entry.id],
+            ..Default::default()
         }
         .allows(&entry));
     }

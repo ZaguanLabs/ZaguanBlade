@@ -99,6 +99,7 @@ pub async fn load_project_settings(
 
 #[tauri::command]
 pub async fn save_project_settings(
+    app: tauri::AppHandle,
     project_path: String,
     settings: project_settings::ProjectSettings,
 ) -> Result<(), String> {
@@ -106,10 +107,13 @@ pub async fn save_project_settings(
     tokio::task::spawn_blocking(move || {
         project_settings::save_project_settings(&path, &settings)?;
         crate::agent_skills::invalidate_skill_cache(Some(&path));
-        Ok(())
+        Ok::<(), String>(())
     })
     .await
-    .map_err(|e| format!("save project settings task failed: {}", e))?
+    .map_err(|e| format!("save project settings task failed: {}", e))??;
+    crate::index_policy::refresh();
+    crate::startup::refresh_symbols_index(&app);
+    Ok(())
 }
 
 #[tauri::command]

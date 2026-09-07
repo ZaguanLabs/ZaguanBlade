@@ -8,7 +8,7 @@ import { exists } from '@tauri-apps/plugin-fs';
 import { EditorPanel, type EditorContentState } from './EditorPanel';
 import { TerminalPane, TerminalPaneHandle } from './TerminalPane';
 import { AppBar } from './AppBar';
-import { AlertTriangle, GitBranch, Settings, Clock, Loader2 } from 'lucide-react';
+import { AlertTriangle, GitBranch, Settings, Clock, Loader2, Pause } from 'lucide-react';
 import { SettingsModalLazy } from './SettingsModalLazy';
 import { useStartupBootstrap } from '../contexts/StartupBootstrapContext';
 import { EditorProvider, useEditorActions } from '../contexts/EditorContext';
@@ -22,6 +22,7 @@ import { useResizeHandlers } from '../hooks/useResizeHandlers';
 import { useLayoutEvents } from '../hooks/useLayoutEvents';
 import { subscribeBladeNestedEventType } from '../services/bladeEvents';
 import { readDebugFlag, readDebugSurfaceFlag } from '../utils/debugFlags';
+import { useSymbolsIndexStatus } from '../hooks/useSymbolsIndexStatus';
 import { formatIndexStatusLabel, formatIndexStatusTitle, shouldShowIndexStatusCue } from '../utils/indexHealthStatus';
 import type { ChatMessage, ChatMode, ModelInfo } from '../types/chat';
 import type { BackendSettings } from '../types/settings';
@@ -681,12 +682,6 @@ const AppLayoutInner: React.FC = () => {
         setOpenFiles(JSON.parse(openFilePathsJson) as string[]);
     }, [openFilePathsJson, setOpenFiles]);
 
-    useEffect(() => {
-        return subscribeBladeNestedEventType('Language', 'IndexStatus', (payload) => {
-            setIndexHealth(payload.health);
-        });
-    }, []);
-
     const handleOpenChatFile = useCallback((path: string) => {
         const highlightLines = findMatchingChangeRange(path, uncommittedChanges);
         handleFileSelect(path, highlightLines);
@@ -890,6 +885,8 @@ const AppLayoutInner: React.FC = () => {
     // First-time setup modal state (RFC-002)
     const [showStorageSetup, setShowStorageSetup] = useState(false);
     const [workspacePath, setWorkspacePath] = useState<string | null>(null);
+    const { status: symbolsIndexStatus } = useSymbolsIndexStatus(workspacePath, true);
+    useEffect(() => { setIndexHealth(symbolsIndexStatus?.health ?? null); }, [symbolsIndexStatus]);
     const [projectId, setProjectId] = useState<string | null>(null);
     const bootstrapAppliedRef = useRef(false);
     const bootstrapHasApiKey = useMemo(() => {
@@ -1727,7 +1724,9 @@ const AppLayoutInner: React.FC = () => {
                             className={`inline-flex max-w-[42vw] items-center gap-1 font-normal ${indexHealth.status === 'error' ? 'text-(--state-danger)' : ''}`}
                             title={formatIndexStatusTitle(indexHealth)}
                         >
-                            {indexHealth.status === 'error' ? (
+                            {indexHealth.status === 'disabled' ? (
+                                <Pause className="h-3 w-3 shrink-0" aria-hidden="true" />
+                            ) : indexHealth.status === 'error' ? (
                                 <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
                             ) : indexHealth.status === 'partial' || indexHealth.status === 'stale' ? (
                                 <Clock className="h-3 w-3 shrink-0" aria-hidden="true" />

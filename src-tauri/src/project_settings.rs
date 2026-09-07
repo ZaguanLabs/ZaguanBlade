@@ -342,7 +342,23 @@ pub fn save_project_settings(
     let json = serde_json::to_string_pretty(settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
 
-    fs::write(&settings_path, json).map_err(|e| format!("Failed to write settings: {}", e))?;
+    // Policy readers must see either complete revision, never a truncated file.
+    let temporary = settings_path.with_file_name(format!(".settings-{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<(), std::io::Error> {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(json.as_bytes())?;
+        file.sync_all()?;
+        fs::rename(&temporary, &settings_path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result.map_err(|error| format!("Failed to write settings: {}", error))?;
 
     eprintln!("[SETTINGS] Saved settings to {:?}", settings_path);
     Ok(())

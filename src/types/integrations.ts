@@ -23,6 +23,7 @@ export interface IntegrationDefinition {
 }
 
 export interface IntegrationConfig {
+    symbols_index_enabled?: boolean;
     schema_version: 1;
     entries: IntegrationDefinition[];
 }
@@ -33,6 +34,7 @@ export interface IntegrationConfigSnapshot {
 }
 
 export interface WorkspaceIntegrationSettings {
+    symbols_index_enabled?: boolean | null;
     disabled_ids: string[];
 }
 

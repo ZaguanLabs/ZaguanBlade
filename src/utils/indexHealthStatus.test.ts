@@ -96,3 +96,11 @@ test('shows a distinct finalizing phase after the scan (no current file, nothing
 
     assert.equal(formatIndexStatusLabel(health, t), 'Finalizing index…');
 });
+
+test('disabled and stopping remain visible and use translated labels instead of stale progress', () => {
+    for (const status of ['disabled', 'stopping'] as const) {
+        const health = makeHealth({ status, message: 'Old scan complete', current_file: 'old.rs' });
+        assert.equal(shouldShowIndexStatusCue(health), true);
+        assert.equal(formatIndexStatusLabel(health, key => key), `statusBar.index.${status}`);
+    }
+});

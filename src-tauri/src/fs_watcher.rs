@@ -48,6 +48,20 @@ fn is_under_ignored_dir(path: &Path, workspace_root: &Path) -> bool {
 }
 
 fn reindex_changed_paths(state: &AppState, workspace_root: &Path, event: &notify::Event) {
+    if !crate::index_policy::enabled(workspace_root).unwrap_or(false) {
+        return;
+    }
+    let documents = match state.document_service() {
+        Ok(documents) => documents,
+        Err(_) => return,
+    };
+    if documents.workspace_root()
+        != workspace_root
+            .canonicalize()
+            .unwrap_or_else(|_| workspace_root.into())
+    {
+        return;
+    }
     let service = match state.language_service() {
         Ok(service) => service,
         Err(error) => {
@@ -59,7 +73,13 @@ fn reindex_changed_paths(state: &AppState, workspace_root: &Path, event: &notify
         }
     };
 
+    if !service.uses_documents(&documents) {
+        return;
+    }
     for path in &event.paths {
+        if documents.cancellation().is_cancelled() || service.lifetime.is_cancelled() {
+            return;
+        }
         let Ok(relative_path) = path.strip_prefix(workspace_root) else {
             continue;
         };

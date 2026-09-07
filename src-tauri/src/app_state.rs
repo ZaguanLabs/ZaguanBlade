@@ -312,42 +312,70 @@ impl AppState {
         &self,
         documents: &Arc<crate::document_service::DocumentService>,
     ) -> Result<Option<Arc<crate::language_service::LanguageService>>, String> {
+        if !crate::index_policy::enabled(documents.workspace_root())? {
+            crate::index_policy::refresh();
+            return Ok(None);
+        }
         Ok(self
             .language_service
             .read()
             .map_err(|_| "Language service lock is unavailable".to_string())?
             .as_ref()
-            .filter(|service| service.uses_documents(documents))
+            .filter(|service| service.uses_documents(documents) && !service.lifetime.is_cancelled())
             .cloned())
     }
 
     pub fn language_service(
         &self,
     ) -> Result<Arc<crate::language_service::LanguageService>, String> {
-        get_or_try_init_arc(&self.language_service, "language service", || {
-            let documents = self.document_service()?;
-            let db_path = documents
-                .workspace_root()
-                .join(".zblade")
-                .join("index")
-                .join("symbols.db");
-            if let Some(parent) = db_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        let mut slot = self
+            .language_service
+            .write()
+            .map_err(|_| "Symbols Index lock is unavailable")?;
+        let documents = self.document_service()?;
+        if !crate::index_policy::enabled(documents.workspace_root())? {
+            if let Some(service) = slot.take() {
+                service.lifetime.cancel();
             }
-
-            let symbol_store = Arc::new(
-                crate::symbol_index::store::SymbolStore::new(&db_path)
-                    .map_err(|error| format!("Failed to create SymbolStore: {}", error))?,
-            );
-            let service =
-                crate::language_service::LanguageService::with_documents(documents, symbol_store)
-                    .map_err(|error| format!("Failed to initialize LanguageService: {}", error))?;
-            if let Ok(worktree) = self.worktree() {
-                service.set_worktree_store(worktree);
+            crate::index_policy::refresh();
+            return Err(crate::index_policy::DISABLED.into());
+        }
+        if slot.as_ref().is_some_and(|service| {
+            service.lifetime.is_cancelled() || !service.uses_documents(&documents)
+        }) {
+            if let Some(service) = slot.take() {
+                service.lifetime.cancel();
             }
-
-            Ok(service)
-        })
+        }
+        if let Some(service) = slot.as_ref() {
+            return Ok(service.clone());
+        }
+        if crate::index_policy::stopping(documents.workspace_root()) {
+            return Err(crate::index_policy::STOPPING.into());
+        }
+        let lifetime = crate::index_policy::register(documents.workspace_root())?;
+        let _creating = lifetime.enter().map_err(|error| error.to_string())?;
+        let db_path = documents.workspace_root().join(".zblade/index/symbols.db");
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        let symbol_store = Arc::new(
+            crate::symbol_index::store::SymbolStore::new(&db_path)
+                .map_err(|error| error.to_string())?,
+        );
+        let service = Arc::new(
+            crate::language_service::LanguageService::with_lifetime(
+                documents,
+                symbol_store,
+                lifetime.clone(),
+            )
+            .map_err(|error| error.to_string())?,
+        );
+        if let Ok(worktree) = self.worktree() {
+            service.set_worktree_store(worktree);
+        }
+        *slot = Some(service.clone());
+        Ok(service)
     }
 
     pub fn language_handler(&self) -> Result<crate::language_service::LanguageHandler, String> {
@@ -365,6 +393,7 @@ impl AppState {
             .as_ref()
         {
             documents.retire();
+            crate::index_policy::cancel_workspace(documents.workspace_root());
         }
         *self
             .conversation_store
@@ -374,10 +403,14 @@ impl AppState {
             .history_service
             .write()
             .map_err(|e| format!("Failed to write history service: {}", e))? = None;
-        *self
+        if let Some(service) = self
             .language_service
             .write()
-            .map_err(|e| format!("Failed to write language service: {}", e))? = None;
+            .map_err(|e| format!("Failed to write language service: {}", e))?
+            .take()
+        {
+            service.lifetime.cancel();
+        }
         if let Some(documents) = self
             .documents
             .write()
@@ -385,6 +418,7 @@ impl AppState {
             .take()
         {
             documents.retire();
+            crate::index_policy::cancel_workspace(documents.workspace_root());
         }
         *self
             .worktree

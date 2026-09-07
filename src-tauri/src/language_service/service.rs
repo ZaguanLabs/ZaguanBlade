@@ -24,8 +24,8 @@ use crate::symbol_index::{
 };
 use crate::tree_sitter::{
     call_form, collect_extraction_facts, extract_symbol_relationships_with_facts,
-    extract_symbols_with_facts, stable_symbol_id, Language, Position, Range, Symbol,
-    SymbolRelationship, SymbolRelationshipType, SymbolType, TreeSitterParser, unresolved_reason,
+    extract_symbols_with_facts, stable_symbol_id, unresolved_reason, Language, Position, Range,
+    Symbol, SymbolRelationship, SymbolRelationshipType, SymbolType, TreeSitterParser,
 };
 use crate::worktree::{normalize_path, WorktreeStore};
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,7 @@ const SEMANTIC_CONTEXT_EXTRACTOR_VERSION: u32 = 3;
 
 /// Unified language service
 pub struct LanguageService {
+    pub(crate) lifetime: Arc<crate::index_policy::IndexLifetime>,
     /// Workspace root path
     workspace_root: PathBuf,
     /// Symbol index for persistent storage
@@ -61,6 +62,8 @@ pub struct LanguageService {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IndexHealthStatus {
+    Disabled,
+    Stopping,
     Unknown,
     Checking,
     Fresh,
@@ -1050,7 +1053,19 @@ impl LanguageService {
         documents: Arc<DocumentService>,
         symbol_store: Arc<SymbolStore>,
     ) -> Result<Self, LanguageError> {
+        let lifetime = crate::index_policy::register(documents.workspace_root())
+            .map_err(LanguageError::NotSupported)?;
+        Self::with_lifetime(documents, symbol_store, lifetime)
+    }
+
+    pub(crate) fn with_lifetime(
+        documents: Arc<DocumentService>,
+        symbol_store: Arc<SymbolStore>,
+        lifetime: Arc<crate::index_policy::IndexLifetime>,
+    ) -> Result<Self, LanguageError> {
+        lifetime.check()?;
         let service = Self {
+            lifetime,
             workspace_root: documents.workspace_root().to_path_buf(),
             symbol_store,
             worktree_store: RwLock::new(None),
@@ -1089,6 +1104,7 @@ impl LanguageService {
     }
 
     pub fn index_schema_snapshot(&self) -> Result<IndexSchemaSnapshot, LanguageError> {
+        let _work = self.lifetime.enter()?;
         self.index_schema_snapshot_for_path(None)
     }
 
@@ -1096,6 +1112,7 @@ impl LanguageService {
         &self,
         scope_path: Option<&str>,
     ) -> Result<IndexSchemaSnapshot, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let all_indexed_files = self.symbol_store.list_all_indexed_files()?;
         let normalized_scope = scope_path.and_then(normalize_schema_scope_path);
         let indexed_files = match normalized_scope.as_deref() {
@@ -1292,6 +1309,7 @@ impl LanguageService {
     }
 
     pub fn audit_index_health(&self) -> Result<IndexHealthSnapshot, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let started = std::time::Instant::now();
         let current_health = self.index_health_snapshot();
         let timings = current_health.timings;
@@ -1370,6 +1388,7 @@ impl LanguageService {
     }
 
     pub fn audit_index_graph_quality(&self) -> Result<IndexGraphQualityReport, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let relationship_stats = self.symbol_store.relationship_integrity_stats()?;
         let indexed_files = self.symbol_store.list_all_indexed_files()?;
         let mut indexed_files_missing_root_symbol = 0usize;
@@ -1394,6 +1413,7 @@ impl LanguageService {
     }
 
     pub fn reconcile_index(&self) -> Result<IndexReconciliationReport, LanguageError> {
+        let _work = self.lifetime.enter()?;
         self.reconcile_index_with_progress(|_| {})
     }
 
@@ -1404,6 +1424,7 @@ impl LanguageService {
     where
         F: FnMut(&IndexHealthSnapshot),
     {
+        let _work = self.lifetime.enter()?;
         self.reconcile_index_with_progress_inner(progress, true)
     }
 
@@ -1415,6 +1436,7 @@ impl LanguageService {
     where
         F: FnMut(&IndexHealthSnapshot),
     {
+        self.lifetime.check()?;
         let started = std::time::Instant::now();
 
         // M6.1 — discover the supported-file set ONCE, up front. It feeds the
@@ -1433,6 +1455,7 @@ impl LanguageService {
         if let Some(report) = fast_report {
             self.set_index_health(report.health.clone());
             progress(&report.health);
+            self.lifetime.check()?;
             return Ok(report);
         }
         // Guarantee a fingerprint for end-of-reconcile storage even when no checkpoint
@@ -1460,6 +1483,7 @@ impl LanguageService {
         let mut files_removed = 0usize;
 
         for record in &indexed_files {
+            self.lifetime.check()?;
             if !supported_set.contains(record.file_path.as_str()) {
                 self.remove_file(&record.file_path)?;
                 files_removed += 1;
@@ -1467,6 +1491,7 @@ impl LanguageService {
         }
 
         for file_path in supported_files {
+            self.lifetime.check()?;
             let needs_index = match indexed_map.get(file_path.as_str()) {
                 Some(record) => self.indexed_file_needs_refresh(&file_path, record, true)?,
                 None => true,
@@ -1533,6 +1558,7 @@ impl LanguageService {
                         .spawn_scoped(commit_scope, move || -> Result<usize, LanguageError> {
                             let mut suppressed = 0usize;
                             while let Ok(staged) = commit_rx.recv() {
+                                self.lifetime.check()?;
                                 suppressed += self.commit_staged_file_indexes(&staged)?;
                             }
                             Ok(suppressed)
@@ -1540,6 +1566,7 @@ impl LanguageService {
                         .expect("spawn index committer thread");
 
                     for (batch_start, batch_end) in self.size_bounded_batch_ranges(&queued_files) {
+                        self.lifetime.check()?;
                         let batch = &queued_files[batch_start..batch_end];
                         let worker_count = indexing_worker_count(batch.len());
                         let (tx, rx) = mpsc::channel::<IndexWorkerEvent>();
@@ -1569,6 +1596,9 @@ impl LanguageService {
                                 std::thread::Builder::new()
                                     .stack_size(256 * 1024 * 1024)
                                     .spawn_scoped(scope, move || loop {
+                                        if self.lifetime.is_cancelled() {
+                                            break;
+                                        }
                                         let index = next_file
                                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                         let Some(file_path) = batch.get(index) else {
@@ -1695,6 +1725,7 @@ impl LanguageService {
                 let mut recovered = 0usize;
                 let mut still_failed = 0usize;
                 for file_path in &failed_files {
+                    self.lifetime.check()?;
                     match self.stage_file_index(file_path) {
                         Ok(staged) => {
                             retried_staged.push(staged);
@@ -1738,8 +1769,11 @@ impl LanguageService {
                 self.set_index_health(health.clone());
                 progress(&health);
 
-                let rust_stats =
-                    rust_project::resolve_qualified_calls(&self.workspace_root, &self.symbol_store)?;
+                self.lifetime.check()?;
+                let rust_stats = rust_project::resolve_qualified_calls(
+                    &self.workspace_root,
+                    &self.symbol_store,
+                )?;
                 if rust_stats.observations > 0 {
                     eprintln!(
                         "[SYMBOLS][RUST_QUALIFIED] observations={} resolved={} unresolved={} candidates_examined={} candidate_p50={} candidate_p95={} candidate_p99={} max_candidates={} comparisons_avoided={} duration_ms={} forms={:?} strategies={:?} unresolved_reasons={:?}",
@@ -1763,6 +1797,7 @@ impl LanguageService {
                 // batch has committed. Only now is COUNT(*) truly global; running it
                 // per-batch would resolve against an incomplete symbol set
                 // (order-dependent).
+                self.lifetime.check()?;
                 self.symbol_store
                     .backfill_unresolved_relationship_targets()?;
 
@@ -1774,6 +1809,7 @@ impl LanguageService {
                 // recv_type via the GLOBAL cross-file receiver-type registry. Runs
                 // last so it sees the fully-committed symbol+edge set and only
                 // touches edges the prior two passes left NULL.
+                self.lifetime.check()?;
                 self.symbol_store
                     .mine_receiver_type_relationship_targets()?;
 
@@ -1785,7 +1821,9 @@ impl LanguageService {
                 // edges) from the fully-committed global method sets. Go has no
                 // explicit `implements` syntax, so this post-index mining pass is
                 // the only source of those edges.
+                self.lifetime.check()?;
                 self.symbol_store.mine_go_interface_implementations()?;
+                self.lifetime.check()?;
                 self.symbol_store.resolve_semantic_anchor_targets(None)?;
                 derived_relationships_refreshed = true;
             }
@@ -1796,6 +1834,7 @@ impl LanguageService {
         // fresh: resolver/store projection upgrades and removed Cargo/module
         // files can change targets without making an individual Rust file stale.
         if !derived_relationships_refreshed {
+            self.lifetime.check()?;
             let rust_stats =
                 rust_project::resolve_qualified_calls(&self.workspace_root, &self.symbol_store)?;
             if rust_stats.observations > 0 {
@@ -1816,11 +1855,15 @@ impl LanguageService {
                     rust_stats.by_unresolved_reason,
                 );
             }
+            self.lifetime.check()?;
             self.symbol_store
                 .backfill_unresolved_relationship_targets()?;
+            self.lifetime.check()?;
             self.symbol_store
                 .mine_receiver_type_relationship_targets()?;
+            self.lifetime.check()?;
             self.symbol_store.mine_go_interface_implementations()?;
+            self.lifetime.check()?;
             self.symbol_store.resolve_semantic_anchor_targets(None)?;
         }
 
@@ -1860,6 +1903,7 @@ impl LanguageService {
             progress(&rebuild_health);
 
             self.file_cache.write().unwrap().clear();
+            self.lifetime.check()?;
             self.symbol_store.clear_generated_index_data()?;
 
             return self.reconcile_index_with_progress_inner(progress, false);
@@ -1908,6 +1952,7 @@ impl LanguageService {
         };
         self.set_index_health(final_health.clone());
         progress(&final_health);
+        self.lifetime.check()?;
 
         // M6.1 — persist (or invalidate) the no-change checkpoint. Store ONLY when the
         // index ended fully Fresh; any partial/stale/graph-broken end clears the prior
@@ -2064,6 +2109,7 @@ impl LanguageService {
     }
 
     pub fn get_file_content(&self, file_path: &str) -> Result<String, LanguageError> {
+        let _work = self.lifetime.enter()?;
         Ok(self.load_buffer_snapshot(file_path)?.to_string())
     }
 
@@ -2072,6 +2118,7 @@ impl LanguageService {
         symbol: &Symbol,
         file_path: &str,
     ) -> Result<(usize, usize), LanguageError> {
+        let _work = self.lifetime.enter()?;
         self.load_buffer_snapshot(file_path)?
             .symbol_byte_range(symbol)
             .map_err(LanguageError::Index)
@@ -2082,6 +2129,7 @@ impl LanguageService {
         symbol: &Symbol,
         file_path: &str,
     ) -> Result<(usize, usize), LanguageError> {
+        let _work = self.lifetime.enter()?;
         let snapshot = self.load_buffer_snapshot(file_path)?;
         let symbol_start = symbol.byte_offset;
         let symbol_end = symbol
@@ -2108,6 +2156,7 @@ impl LanguageService {
         symbol: &Symbol,
         file_path: &str,
     ) -> Result<String, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let snapshot = self.load_buffer_snapshot(file_path)?;
         let (start, end) = if symbol.byte_length > 0 {
             let start = symbol.byte_offset.min(snapshot.content().len());
@@ -2132,6 +2181,7 @@ impl LanguageService {
         symbol: &Symbol,
         file_path: &str,
     ) -> Result<(usize, usize), LanguageError> {
+        let _work = self.lifetime.enter()?;
         let snapshot = self.load_buffer_snapshot(file_path)?;
         let symbol_start = symbol.byte_offset.min(snapshot.content().len());
         let symbol_end = symbol
@@ -2165,6 +2215,7 @@ impl LanguageService {
         start_line: u32,
         end_line: u32,
     ) -> Result<(usize, usize), LanguageError> {
+        let _work = self.lifetime.enter()?;
         self.load_buffer_snapshot(file_path)?
             .line_byte_range(start_line, end_line)
             .map_err(LanguageError::Index)
@@ -2432,10 +2483,12 @@ impl LanguageService {
 
     /// Index a single file
     pub fn index_file(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         self.index_file_with_timings(file_path)
     }
 
     fn index_file_with_timings(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
+        self.lifetime.check()?;
         // M5.11 — re-entrancy guard against cyclic module graphs.
         //
         // `enrich_symbol_relationships` resolves module re-exports
@@ -2503,6 +2556,7 @@ impl LanguageService {
             {
                 let mut anchors = extract_semantic_anchors(file_path, &content);
                 attach_semantic_anchor_context(&mut anchors, &symbols);
+                self.lifetime.check()?;
                 let db_write_start = std::time::Instant::now();
                 self.symbol_store
                     .replace_semantic_anchors_for_file(file_path, &anchors)?;
@@ -2584,11 +2638,13 @@ impl LanguageService {
             &mut relationships,
         )?;
 
+        self.lifetime.check()?;
         // Delete old symbols and insert new ones
         let mut semantic_anchors = extract_semantic_anchors(file_path, &content);
         attach_semantic_anchor_context(&mut semantic_anchors, &symbols);
         let relationship_ms = relationship_start.elapsed().as_millis() as u64;
 
+        self.lifetime.check()?;
         let db_write_start = std::time::Instant::now();
         self.symbol_store.replace_file_index(
             file_path,
@@ -2656,7 +2712,9 @@ impl LanguageService {
         total_start: std::time::Instant,
         mut metrics: IndexFileMetrics,
     ) -> Result<Vec<Symbol>, LanguageError> {
+        self.lifetime.check()?;
         let anchors = extract_semantic_anchors(file_path, content);
+        self.lifetime.check()?;
         let db_write_start = std::time::Instant::now();
         self.symbol_store.replace_file_index(
             file_path,
@@ -2740,6 +2798,7 @@ impl LanguageService {
         &self,
         file_path: &str,
     ) -> Result<StagedFileIndexOutcome, LanguageError> {
+        self.lifetime.check()?;
         let total_start = std::time::Instant::now();
         let load_start = std::time::Instant::now();
         let disk_metadata = file_index_metadata(&self.resolve_path(file_path)).ok();
@@ -2896,6 +2955,7 @@ impl LanguageService {
         &self,
         staged_files: &[StagedFileIndex],
     ) -> Result<CommitStagedFileMetrics, LanguageError> {
+        self.lifetime.check()?;
         if staged_files.is_empty() {
             return Ok(CommitStagedFileMetrics::default());
         }
@@ -2933,6 +2993,7 @@ impl LanguageService {
             })
             .collect::<Vec<_>>();
 
+        self.lifetime.check()?;
         let initial_db_write_start = std::time::Instant::now();
         self.symbol_store.replace_file_indexes(&initial_records)?;
         let mut db_write_ms = initial_db_write_start.elapsed().as_millis() as u64;
@@ -2941,6 +3002,7 @@ impl LanguageService {
         let mut suppressed_external_relationships = 0usize;
         let relationship_start = std::time::Instant::now();
         for file in staged_files {
+            self.lifetime.check()?;
             let mut relationships = file.relationships.clone();
             suppressed_external_relationships += self.enrich_symbol_relationships(
                 &file.file_path,
@@ -2991,6 +3053,7 @@ impl LanguageService {
 
     /// Index an entire directory recursively
     pub fn index_directory(&self, dir_path: &str) -> Result<IndexStats, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let mut stats = IndexStats::default();
         let start = std::time::Instant::now();
         let discovery_start = std::time::Instant::now();
@@ -3056,6 +3119,9 @@ impl LanguageService {
                     std::thread::Builder::new()
                         .stack_size(256 * 1024 * 1024)
                         .spawn_scoped(scope, move || loop {
+                            if self.lifetime.is_cancelled() {
+                                break;
+                            }
                             let index =
                                 next_file.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             let Some(file_path) = batch.get(index) else {
@@ -3116,6 +3182,7 @@ impl LanguageService {
         }
 
         if committed_any {
+            self.lifetime.check()?;
             let rust_stats =
                 rust_project::resolve_qualified_calls(&self.workspace_root, &self.symbol_store)?;
             if rust_stats.observations > 0 {
@@ -3192,6 +3259,7 @@ impl LanguageService {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchResult>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let search_query = SearchQuery::text(query).with_limit(limit);
         let results =
             crate::symbol_index::search::execute_search(&self.symbol_store, &search_query)?;
@@ -3207,6 +3275,7 @@ impl LanguageService {
         active_file: Option<&str>,
         preferred_files: &[String],
     ) -> Result<Vec<SearchResult>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let mut search_query = SearchQuery::text(query).with_limit(limit);
         let preferred_directories = crate::symbol_index::search::collect_preferred_directories(
             active_file,
@@ -3238,6 +3307,7 @@ impl LanguageService {
         symbol_types: Option<Vec<SymbolType>>,
         limit: usize,
     ) -> Result<Vec<SearchResult>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         self.search_symbols_filtered_with_patterns(
             query,
             file_path,
@@ -3259,6 +3329,7 @@ impl LanguageService {
         qualified_name_pattern: Option<&str>,
         limit: usize,
     ) -> Result<Vec<SearchResult>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         if let Some(path) = file_path {
             self.ensure_file_fresh(path)?;
         } else {
@@ -3329,11 +3400,7 @@ impl LanguageService {
             right
                 .score
                 .total_cmp(&left.score)
-                .then_with(|| {
-                    left.symbol
-                        .qualified_name
-                        .cmp(&right.symbol.qualified_name)
-                })
+                .then_with(|| left.symbol.qualified_name.cmp(&right.symbol.qualified_name))
                 .then_with(|| left.symbol.file_path.cmp(&right.symbol.file_path))
                 .then_with(|| left.symbol.id.cmp(&right.symbol.id))
         });
@@ -3348,6 +3415,7 @@ impl LanguageService {
         symbol_types: Option<Vec<SymbolType>>,
         limit: usize,
     ) -> Result<SymbolSearchOutcome, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let initial_results =
             self.search_symbols_filtered(query, file_path, symbol_types.clone(), limit)?;
         let initial_results = self.filter_visible_search_results(initial_results);
@@ -3471,6 +3539,7 @@ impl LanguageService {
         file_path: Option<&str>,
         limit: usize,
     ) -> Result<Vec<SemanticAnchorResult>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         Ok(self
             .search_semantic_anchors_mode(query, file_path, limit, AnchorQueryMode::Phrase)?
             .results)
@@ -3486,6 +3555,7 @@ impl LanguageService {
         limit: usize,
         mode: AnchorQueryMode,
     ) -> Result<SemanticAnchorSearchOutcome, LanguageError> {
+        let _work = self.lifetime.enter()?;
         if let Some(path) = file_path {
             self.ensure_file_fresh(path)?;
         }
@@ -3563,6 +3633,7 @@ impl LanguageService {
         file_path: &str,
         limit: usize,
     ) -> Result<Vec<SemanticAnchor>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let key = self.snapshot_key(file_path);
         let file_path = key.as_str();
         if let Some(document) = self.overlays.read().unwrap().get(file_path) {
@@ -3579,6 +3650,7 @@ impl LanguageService {
         symbol_ids: &[String],
         limit: usize,
     ) -> Result<Vec<SemanticAnchor>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         Ok(self
             .symbol_store
             .get_semantic_context_for_symbol_ids(symbol_ids, limit)?)
@@ -3590,6 +3662,7 @@ impl LanguageService {
         line: u32,
         character: u32,
     ) -> Result<Option<Symbol>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let key = self.snapshot_key(file_path);
         let file_path = key.as_str();
         if let Some(document) = self.overlays.read().unwrap().get(file_path) {
@@ -3617,6 +3690,7 @@ impl LanguageService {
     }
 
     pub fn get_symbol(&self, id: &str) -> Result<Option<Symbol>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let overlays = self.overlays.read().unwrap();
         if let Some(symbol) = overlays
             .values()
@@ -3630,6 +3704,7 @@ impl LanguageService {
     }
 
     pub fn get_file_module_symbol(&self, file_path: &str) -> Result<Option<Symbol>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let key = self.snapshot_key(file_path);
         let file_path = key.as_str();
         if let Some(document) = self.overlays.read().unwrap().get(file_path) {
@@ -3734,6 +3809,7 @@ impl LanguageService {
         relationship_type: SymbolRelationshipType,
         limit: usize,
     ) -> Result<Vec<String>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         Ok(self.symbol_store.get_relationship_targets(
             source_symbol_id,
             relationship_type,
@@ -3747,6 +3823,7 @@ impl LanguageService {
         relationship_type: SymbolRelationshipType,
         limit: usize,
     ) -> Result<Vec<String>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         Ok(self.symbol_store.get_file_relationship_targets(
             source_file_path,
             relationship_type,
@@ -3759,6 +3836,7 @@ impl LanguageService {
         symbol: &Symbol,
         limit: usize,
     ) -> Result<Vec<SymbolReference>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let expanded_limit = limit.saturating_mul(8).max(limit);
         let mut references = self.find_relationship_references_to_symbol(
             symbol,
@@ -3807,6 +3885,7 @@ impl LanguageService {
         symbol: &Symbol,
         limit: usize,
     ) -> Result<Vec<RelatedSymbol>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -3967,6 +4046,7 @@ impl LanguageService {
 
     /// Get all symbols in a file
     pub fn get_file_symbols(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let key = self.snapshot_key(file_path);
         let file_path = key.as_str();
         if let Some(document) = self.overlays.read().unwrap().get(file_path) {
@@ -3981,6 +4061,7 @@ impl LanguageService {
         &self,
         file_path: &str,
     ) -> Result<Option<crate::symbol_index::store::IndexedFileRecord>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         Ok(self.symbol_store.indexed_file_record(file_path)?)
     }
 
@@ -4033,6 +4114,7 @@ impl LanguageService {
 
     /// Update only parsed overlays; editor storage is owned by DocumentService.
     pub(crate) fn sync_document_overlay(&self, file_path: &str) -> Result<(), LanguageError> {
+        let _work = self.lifetime.enter()?;
         let key = self.snapshot_key(file_path);
         let Some(snapshot) = self.documents.live_snapshot(file_path)? else {
             self.retire_closed_overlay(file_path)?;
@@ -4055,6 +4137,7 @@ impl LanguageService {
 
     /// Notify that a document was opened (also used by standalone language clients).
     pub fn did_open(&self, file_path: &str, content: &str) -> Result<(), LanguageError> {
+        let _work = self.lifetime.enter()?;
         self.documents.sync(file_path, None, content)?;
         self.sync_document_overlay(file_path)
     }
@@ -4065,12 +4148,14 @@ impl LanguageService {
         version: i32,
         content: &str,
     ) -> Result<(), LanguageError> {
+        let _work = self.lifetime.enter()?;
         self.documents.sync(file_path, Some(version), content)?;
         self.sync_document_overlay(file_path)
     }
 
     /// Retire derived state only if the document has not been reopened meanwhile.
     pub(crate) fn retire_closed_overlay(&self, file_path: &str) -> Result<(), LanguageError> {
+        let _work = self.lifetime.enter()?;
         let key = self.snapshot_key(file_path);
         self.documents.with_live_snapshot(file_path, |current| {
             if current.is_none() {
@@ -4082,12 +4167,14 @@ impl LanguageService {
     }
 
     pub fn did_close(&self, file_path: &str) -> Result<(), LanguageError> {
+        let _work = self.lifetime.enter()?;
         self.documents.close(file_path)?;
         self.retire_closed_overlay(file_path)
     }
 
     /// Index saved bytes without overwriting a newer, still-unsaved editor buffer.
     pub fn did_save(&self, file_path: &str, content: &str) -> Result<(), LanguageError> {
+        let _work = self.lifetime.enter()?;
         self.documents.saved(file_path, content)?;
         self.index_saved_document(file_path, content)
     }
@@ -4098,6 +4185,7 @@ impl LanguageService {
         file_path: &str,
         content: &str,
     ) -> Result<(), LanguageError> {
+        let _work = self.lifetime.enter()?;
         let key = self.snapshot_key(file_path);
         if !should_allow_non_indexed_live_sync(&key) {
             self.index_file_content(&key, None, content)?;
@@ -4107,11 +4195,13 @@ impl LanguageService {
 
     /// Remove a file from the symbol index and cache
     pub fn remove_file(&self, file_path: &str) -> Result<(), LanguageError> {
+        let _work = self.lifetime.enter()?;
         self.documents.close(file_path)?;
         self.remove_deleted_file_index(file_path)
     }
 
     pub(crate) fn remove_deleted_file_index(&self, file_path: &str) -> Result<(), LanguageError> {
+        let _work = self.lifetime.enter()?;
         let key = self.snapshot_key(file_path);
         let file_path = key.as_str();
         {
@@ -4366,6 +4456,7 @@ impl LanguageService {
         scope_root: Option<&Path>,
         probe_limit: usize,
     ) -> Result<(), LanguageError> {
+        self.lifetime.check()?;
         let indexed_files = self.symbol_store.list_indexed_files(probe_limit.max(32))?;
         let scope_has_any = match scope_root {
             Some(scope_root) => indexed_files
@@ -4399,6 +4490,9 @@ impl LanguageService {
     }
 
     fn supported_language_discovery(&self, scope: &str) -> DiscoveryReport {
+        if self.lifetime.is_cancelled() {
+            return DiscoveryReport::default();
+        }
         if let Some(store) = self.worktree_store.read().unwrap().clone() {
             let files = store.supported_language_files(scope);
             return DiscoveryReport {
@@ -4436,6 +4530,9 @@ impl LanguageService {
         files: &mut Vec<String>,
         report: &mut DiscoveryReport,
     ) {
+        if self.lifetime.is_cancelled() {
+            return;
+        }
         let Ok(entries) = std::fs::read_dir(dir_path) else {
             *report
                 .skipped_by_reason
@@ -4445,6 +4542,9 @@ impl LanguageService {
         };
 
         for entry in entries.flatten() {
+            if self.lifetime.is_cancelled() {
+                return;
+            }
             let path = entry.path();
             let file_name = entry.file_name().to_string_lossy().to_string();
             // M6.2 — dotenv files (`.env`, `.env.local`, …) start with `.` but are
@@ -4508,6 +4608,7 @@ impl LanguageService {
         &self,
         records: &[crate::symbol_index::store::IndexedFileRecord],
     ) -> Result<(), LanguageError> {
+        self.lifetime.check()?;
         for record in records {
             let resolved = self.resolve_path(&record.file_path);
             if !resolved.exists() {
@@ -5555,6 +5656,7 @@ impl LanguageService {
         version: Option<i32>,
         content: &str,
     ) -> Result<Vec<Symbol>, LanguageError> {
+        self.lifetime.check()?;
         // Saved/indexed bytes are not an editor update. In particular, a delayed
         // save must not replace a newer live document with older disk content.
         let snapshot = Arc::new(BufferSnapshot::new(
@@ -5599,6 +5701,7 @@ impl LanguageService {
             &mut relationships,
         )?;
 
+        self.lifetime.check()?;
         // Delete old symbols and insert new ones
         self.symbol_store.delete_file_symbols(file_path)?;
         self.symbol_store.upsert_symbols(&symbols)?;
@@ -5686,6 +5789,7 @@ impl LanguageService {
 
     /// Get statistics about the index
     pub fn stats(&self) -> Result<IndexStats, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let supported_files = self.supported_language_files(".");
         Ok(IndexStats {
             files_indexed: self.symbol_store.file_count()?,
@@ -5715,6 +5819,7 @@ impl LanguageService {
         max_modules: usize,
         max_symbols_per_module: usize,
     ) -> Result<Option<String>, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let scope_root = scope_root.and_then(|path| std::fs::canonicalize(path).ok());
         self.ensure_scope_index_fresh(
             scope_root.as_deref(),
@@ -5938,6 +6043,7 @@ impl LanguageService {
         max_edges: usize,
         max_communities: usize,
     ) -> Result<ArchitectureSnapshot, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let max_modules = max_modules.clamp(2, 1_000);
         let max_edges = max_edges.clamp(1, 2_000);
         let max_communities = max_communities.clamp(1, 50);
@@ -6317,6 +6423,7 @@ impl LanguageService {
         relationship_type: SymbolRelationshipType,
         limit: usize,
     ) -> Result<SymbolGraph, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let incoming = match relationship_type {
             SymbolRelationshipType::Call => self.find_references_to_symbol(symbol, limit)?,
             SymbolRelationshipType::Import => {
@@ -6374,6 +6481,7 @@ impl LanguageService {
         edge_limit: usize,
         per_node_limit: usize,
     ) -> Result<SymbolTrace, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let max_depth = max_depth.min(4);
         let edge_limit = edge_limit.min(200);
         let per_node_limit = per_node_limit.min(50);
@@ -6547,6 +6655,7 @@ impl LanguageService {
         per_node_limit: usize,
         min_confidence: f32,
     ) -> Result<SymbolPath, LanguageError> {
+        let _work = self.lifetime.enter()?;
         let max_hops = max_hops.clamp(1, 8);
         let edge_limit = edge_limit.clamp(1, 500);
         let per_node_limit = per_node_limit.clamp(1, 50);
@@ -7434,9 +7543,7 @@ impl LanguageService {
         let root_id = Self::synthetic_file_root_id(file_path);
         symbols
             .iter()
-            .filter(|symbol| {
-                symbol.id != root_id || !Self::is_synthetic_file_root_symbol(symbol)
-            })
+            .filter(|symbol| symbol.id != root_id || !Self::is_synthetic_file_root_symbol(symbol))
             .count()
     }
 
@@ -21569,9 +21676,7 @@ func helper() {}
                 .unwrap();
             let mut observed: Vec<(String, u32)> = references
                 .iter()
-                .filter(|reference| {
-                    reference.relationship_type == SymbolRelationshipType::Call
-                })
+                .filter(|reference| reference.relationship_type == SymbolRelationshipType::Call)
                 .map(|reference| (reference.source_symbol.file_path.clone(), reference.line))
                 .collect();
             observed.sort();

@@ -86,11 +86,16 @@ pub struct InspectorGraphResponse {
 }
 
 fn language_service(state: &AppState) -> Result<Arc<LanguageService>, String> {
+    let root = state.workspace_root().ok_or("No workspace is open")?;
+    if !crate::index_policy::enabled(&root)? {
+        return Err(crate::index_policy::DISABLED.into());
+    }
     state
         .language_service
         .read()
         .map_err(|_| "Symbols Index lock is unavailable".to_string())?
         .clone()
+        .filter(|service| !service.lifetime.is_cancelled())
         .ok_or_else(|| "Symbols Index is not available for this workspace".to_string())
 }
 

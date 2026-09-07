@@ -1,5 +1,5 @@
 // use eframe::egui; // Removed
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 
 use crate::agentic_loop::AgenticLoop;
@@ -212,10 +212,27 @@ fn load_local_system_prompt(
     time_value: &str,
     agent_instructions: Option<&str>,
 ) -> Option<String> {
+    let index_enabled = crate::index_policy::enabled(Path::new(workspace_root)).unwrap_or(false);
     let rendered = crate::config::read_prompt_for_model(model_id)
         .ok()
         .flatten()
         .map(|prompt| {
+            let prompt = if !index_enabled
+                && prompt == crate::config::default_local_ai_system_prompt(model_id)
+            {
+                prompt
+                    .lines()
+                    .filter(|line| {
+                        !line.contains("symbol_")
+                            && !line.contains("fast_context")
+                            && !line.contains("semantic_anchor_search")
+                            && !line.contains("edit_impact")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                prompt
+            };
             prompt
                 .replace("{{WORKSPACE_ROOT}}", workspace_root)
                 .replace("{{ACTIVE_FILE}}", active_file_value)
@@ -230,8 +247,14 @@ fn load_local_system_prompt(
         })
         .filter(|prompt| !prompt.trim().is_empty());
 
-    let mut prompt =
-        maybe_prefix_gemma4_think_token(model_id, apply_zblade_workflow_guidance(rendered));
+    let mut prompt = maybe_prefix_gemma4_think_token(
+        model_id,
+        if index_enabled {
+            apply_zblade_workflow_guidance(rendered)
+        } else {
+            rendered.unwrap_or_else(|| "You are an AI coding assistant in Zaguán Blade. Inspect relevant files before editing and validate changes with focused checks.".into())
+        },
+    );
     if let Some(instructions) = agent_instructions
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -242,6 +265,9 @@ fn load_local_system_prompt(
     if !workspace_root.trim().is_empty() {
         prompt.push_str("\n\n");
         prompt.push_str(crate::agent_skills::SKILL_DISCOVERY_PROMPT);
+    }
+    if !index_enabled {
+        prompt.push_str("\n\nThe built-in Symbols Index is disabled. Use get_workspace_structure, rg, read_file_range and ordinary text patches. Index-based tools and semantic patches are unavailable.");
     }
     Some(prompt)
 }
@@ -1044,7 +1070,16 @@ impl ChatManager {
                                         storage_mode.clone(),
                                         mode.clone(),
                                         local_conversation_state.clone(),
-                                        None,
+                                        (!crate::index_policy::enabled(Path::new(
+                                            &workspace_info.root,
+                                        ))
+                                        .unwrap_or(false))
+                                        .then(|| {
+                                            crate::index_policy::filter_tools(
+                                                get_tool_definitions_for_model(&model_id, true),
+                                                false,
+                                            )
+                                        }),
                                         None,
                                         None,
                                         None,
@@ -1662,8 +1697,12 @@ impl ChatManager {
             model: model_name.clone(),
             messages,
             stream: true,
-            tools: include_tools
-                .then(|| get_tool_definitions_for_model(&model_name, composite_tools_enabled)),
+            tools: include_tools.then(|| {
+                crate::index_policy::filter_tools(
+                    get_tool_definitions_for_model(&model_name, composite_tools_enabled),
+                    crate::index_policy::enabled(Path::new(&workspace_root)).unwrap_or(false),
+                )
+            }),
             options: Some(OllamaOptions {
                 temperature: gemma4_temperature(&model_name),
                 top_p: gemma4_top_p(&model_name),
@@ -2148,8 +2187,12 @@ impl ChatManager {
             model: model_name.clone(),
             messages,
             stream: true,
-            tools: include_tools
-                .then(|| get_tool_definitions_for_model(&model_name, composite_tools_enabled)),
+            tools: include_tools.then(|| {
+                crate::index_policy::filter_tools(
+                    get_tool_definitions_for_model(&model_name, composite_tools_enabled),
+                    crate::index_policy::enabled(Path::new(&workspace_root)).unwrap_or(false),
+                )
+            }),
             temperature: gemma4_temperature(&model_name),
             top_p: gemma4_top_p(&model_name),
             top_k: gemma4_top_k(&model_name),

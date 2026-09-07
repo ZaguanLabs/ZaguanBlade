@@ -170,6 +170,19 @@ fn infer_context_files_from_query(
     query: &str,
     limit: usize,
 ) -> Vec<String> {
+    if let Some(root) = state.workspace_root() {
+        if !crate::index_policy::enabled(&root).unwrap_or(false) {
+            let active = state.active_file.lock().unwrap().clone();
+            let open = state.open_files.lock().unwrap().clone();
+            return crate::index_policy::file_context_paths(
+                &root,
+                query,
+                active.as_deref(),
+                &open,
+                limit,
+            );
+        }
+    }
     let mut files = Vec::new();
     let mut seen = HashSet::new();
 

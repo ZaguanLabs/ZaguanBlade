@@ -51,61 +51,64 @@ pub fn ensure_post_ui_startup<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
     crate::startup_marks::record("post_ui_service_start");
     crate::fs_watcher::restart_fs_watcher(app_handle);
 
+    refresh_symbols_index(app_handle);
+}
+
+/// Capture document identity before scheduling; a queued startup must never
+/// index a replacement workspace. Settings saves use this to restart a retired index.
+pub fn refresh_symbols_index<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
+    let state = app_handle.state::<AppState>();
+    let Ok(documents) = state.document_service() else {
+        return;
+    };
+    crate::index_policy::refresh();
+    {
+        let Ok(mut slot) = state.language_service.write() else {
+            return;
+        };
+        if !crate::index_policy::enabled(documents.workspace_root()).unwrap_or(false) {
+            if let Some(service) = slot.take() {
+                service.lifetime.cancel();
+            }
+            return;
+        }
+    }
     let app_handle = app_handle.clone();
     std::thread::spawn(move || {
-        let state = app_handle.state::<AppState>();
-        let workspace = state.workspace.lock().unwrap().workspace.clone();
-
-        if let Some(path) = workspace {
-            let path_str = path.to_string_lossy().to_string();
-            eprintln!(
-                "[LanguageService] Triggering post-UI workspace indexing for: {}",
-                path_str
-            );
-            match state.language_service() {
-                Ok(service) => {
-                    let status_app_handle = app_handle.clone();
-                    let result = service.reconcile_index_with_progress(|health| {
-                        emit_index_status(&status_app_handle, health.clone());
-                    });
-                    match result {
-                        Ok(report) => {
-                            eprintln!(
-                                "[LanguageService] Post-UI index reconciliation complete: {} indexed, {} removed in {}ms; relationships {}/{} resolved, {} unresolved, {} suppressed external, {} missing sources, {} missing targets, {} missing roots",
-                                report.files_indexed,
-                                report.files_removed,
-                                report.duration_ms,
-                                report.graph_quality.resolved_relationships,
-                                report.graph_quality.total_relationships,
-                                report.graph_quality.unresolved_symbol_relationships,
-                                report.graph_quality.suppressed_external_relationships,
-                                report.graph_quality.missing_source_symbols,
-                                report.graph_quality.missing_target_symbols,
-                                report.graph_quality.indexed_files_missing_root_symbol
-                            );
-                        }
-                        Err(error) => {
-                            let mut health = service.index_health_snapshot();
-                            health.status = crate::language_service::IndexHealthStatus::Error;
-                            health.active_workers = 0;
-                            health.current_file = None;
-                            health.message = format!("Code intelligence refresh failed: {}", error);
-                            service.set_index_health(health.clone());
-                            emit_index_status(&app_handle, health);
-                            eprintln!(
-                                "[LanguageService] Post-UI index reconciliation failed: {}",
-                                error
-                            );
-                        }
-                    }
-                }
-                Err(error) => {
-                    eprintln!(
-                        "[LanguageService] Failed to initialize post-UI indexing: {}",
-                        error
-                    );
-                }
+        while crate::index_policy::stopping(documents.workspace_root()) {
+            if documents.cancellation().is_cancelled()
+                || !crate::index_policy::enabled(documents.workspace_root()).unwrap_or(false)
+            {
+                return;
             }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if documents.cancellation().is_cancelled() {
+            return;
+        }
+        let state = app_handle.state::<AppState>();
+        let Ok(service) = state.language_service() else {
+            return;
+        };
+        if !service.uses_documents(&documents) || !service.lifetime.claim_background_refresh() {
+            return;
+        }
+        let result = service.reconcile_index_with_progress(|health| {
+            if !documents.cancellation().is_cancelled() && !service.lifetime.is_cancelled() {
+                emit_index_status(&app_handle, health.clone());
+            }
+        });
+        if documents.cancellation().is_cancelled() || service.lifetime.is_cancelled() {
+            return;
+        }
+        if let Err(error) = result {
+            let mut health = service.index_health_snapshot();
+            health.status = crate::language_service::IndexHealthStatus::Error;
+            health.active_workers = 0;
+            health.current_file = None;
+            health.message = format!("Code intelligence refresh failed: {}", error);
+            service.set_index_health(health.clone());
+            emit_index_status(&app_handle, health);
         }
     });
 }

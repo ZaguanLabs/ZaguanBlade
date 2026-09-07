@@ -31,6 +31,7 @@ pub mod core_state;
 pub mod credential_store;
 pub mod document_service;
 pub mod integrations;
+mod index_policy;
 pub mod environment;
 pub mod ephemeral_commands;
 pub mod ephemeral_documents;
@@ -251,6 +252,7 @@ pub fn run() {
             commands::screenshot::capture_window_region,
             // Settings
             commands::integrations::get_integration_settings,
+            commands::integrations::get_symbols_index_status,
             commands::integrations::save_integration_settings,
             commands::integrations::prepare_integration_test,
             commands::integrations::run_integration_test,

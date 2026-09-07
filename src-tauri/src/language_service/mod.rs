@@ -22,3 +22,5 @@ pub use service::{
     RelatedSymbol, SymbolGraph, SymbolPath, SymbolPathEdge, SymbolTrace, SymbolTraceDirection,
     SymbolTraceEdge, SymbolTraceNode,
 };
+
+pub(crate) use service::LanguageError;

@@ -827,6 +827,21 @@
         "delete": "Borrar credencial guardada",
         "stored": "Credencial guardada.",
         "deleted": "Credencial guardada borrada."
+      },
+      "index": {
+        "title": "Índice de símbolos integrado",
+        "help": "Proporciona navegación por símbolos, inspección de grafos y contexto estructural. Al desactivarlo, se detiene la indexación y se ocultan las herramientas que dependen de él. La edición, la búsqueda de texto, Git y el historial siguen disponibles. La caché se conserva; al reactivarlo, se incorporan los cambios realizados mientras estaba desactivado.",
+        "globalDefault": "Activar de forma predeterminada",
+        "workspaceOverride": "Este espacio de trabajo",
+        "inherit": "Heredar el valor global",
+        "enabled": "Activado",
+        "disabled": "Desactivado",
+        "stopping": "Deteniendo la indexación…",
+        "checking": "Comprobando…",
+        "unavailable": "Estado no disponible",
+        "saveHelp": "Guarda para aplicar estos ajustes. Al reactivar el índice, se inicia su actualización. Añadir un servidor MCP no cambia esta preferencia.",
+        "currentStatus": "Estado efectivo guardado: {{status}}",
+        "graphDisabled": "Grafo de símbolos no disponible: revisa los ajustes del índice"
       }
     },
     "retryLoading": "Volver a cargar los ajustes",
@@ -884,7 +899,9 @@
       "rebuildingIntegrity": "Reconstruyendo el índice de símbolos tras problemas de integridad del grafo ({{missingSources}} orígenes ausentes, {{missingTargets}} destinos ausentes, {{filesMissingRoots}} archivos sin raíz)",
       "partialIntegrity": "Inteligencia de código parcial: se detectaron problemas de integridad del grafo ({{missingSources}} orígenes ausentes, {{missingTargets}} destinos ausentes, {{filesMissingRoots}} archivos sin raíz)",
       "readyResolved": "Inteligencia de código lista: {{resolved}}/{{total}} relaciones entre símbolos resueltas",
-      "refreshFailed": "La actualización de la inteligencia de código falló: {{error}}"
+      "refreshFailed": "La actualización de la inteligencia de código falló: {{error}}",
+      "disabled": "Índice de símbolos desactivado",
+      "stopping": "Deteniendo el índice de símbolos…"
     },
     "languages": {
       "plainText": "Texto sin formato",

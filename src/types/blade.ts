@@ -293,6 +293,8 @@ export type LanguageEvent =
     | { type: "ZlpResponse"; payload: { original_request_id: string; result: any } };
 
 export type IndexHealthStatus =
+    | "disabled"
+    | "stopping"
     | "unknown"
     | "checking"
     | "fresh"

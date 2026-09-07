@@ -88,6 +88,44 @@ fn build_context_pack_internal(
         );
     }
 
+    let index_enabled = match crate::index_policy::enabled(workspace_root) {
+        Ok(enabled) => enabled,
+        Err(error) => return error_payload("index_unavailable", &error),
+    };
+    if !index_enabled {
+        let mut payload = error_payload("symbols_index_disabled", crate::index_policy::DISABLED);
+        payload.error = None;
+        payload.queries_used = queries.clone();
+        payload.workspace = Some(build_workspace_payload(
+            workspace_root,
+            active_file.and_then(|path| normalize_workspace_path(workspace_root, path)),
+            normalize_workspace_paths(workspace_root, open_files),
+        ));
+        payload.primary_files = crate::index_policy::file_context_paths(
+            workspace_root,
+            &queries.join(" "),
+            active_file,
+            open_files,
+            request.max_results.unwrap_or(8),
+        )
+        .into_iter()
+        .map(|path| crate::blade_protocol::ContextFileResult {
+            path,
+            score: 1,
+            reason: "File path or open editor context; no symbol index used".into(),
+            why: Vec::new(),
+            suggested_ranges: Vec::new(),
+        })
+        .collect();
+        payload.summary = "File-based context: the built-in Symbols Index is disabled. Paths are hints, not structural matches.".into();
+        payload.recommended_next_step =
+            "Read relevant files or use rg to locate the implementation.".into();
+        payload.index_health = Some(IndexHealthSnapshot {
+            status: IndexHealthStatus::Disabled,
+            ..Default::default()
+        });
+        return payload;
+    }
     let max_results = request.max_results.unwrap_or(8).clamp(1, 20);
     let include_tests = request.include_tests.unwrap_or(true);
     let include_docs = request.include_docs.unwrap_or(true);
@@ -277,6 +315,14 @@ pub fn error_payload(code: &str, message: &str) -> ContextPackPayload {
 pub(crate) fn language_service_for_workspace(
     workspace_root: &Path,
 ) -> Result<LanguageService, String> {
+    if !crate::index_policy::enabled(workspace_root)? {
+        return Err(crate::index_policy::DISABLED.into());
+    }
+    if crate::index_policy::stopping(workspace_root) {
+        return Err(crate::index_policy::STOPPING.into());
+    }
+    let lifetime = crate::index_policy::register(workspace_root)?;
+    let _creating = lifetime.enter().map_err(|error| error.to_string())?;
     let db_path = get_zblade_dir(workspace_root)
         .join("index")
         .join("symbols.db");
@@ -284,8 +330,14 @@ pub(crate) fn language_service_for_workspace(
         SymbolStore::new(&db_path)
             .map_err(|error| format!("Failed to open symbol index: {}", error))?,
     );
-    LanguageService::new(workspace_root.to_path_buf(), symbol_store)
-        .map_err(|error| format!("Failed to initialize language service: {}", error))
+    LanguageService::with_lifetime(
+        std::sync::Arc::new(crate::document_service::DocumentService::new(
+            workspace_root.to_path_buf(),
+        )),
+        symbol_store,
+        lifetime.clone(),
+    )
+    .map_err(|error| format!("Failed to initialize language service: {}", error))
 }
 
 fn normalized_queries(query: &str, queries: &[String]) -> Vec<String> {
@@ -462,7 +514,9 @@ fn structured_project_source(
                 | IndexHealthStatus::Indexing => "medium",
                 IndexHealthStatus::Unknown
                 | IndexHealthStatus::Checking
-                | IndexHealthStatus::Error => "low",
+                | IndexHealthStatus::Error
+                | IndexHealthStatus::Disabled
+                | IndexHealthStatus::Stopping => "low",
             };
             (
                 "structured_index",
