@@ -8,6 +8,7 @@
     "preview": "vite preview",
     "lint": "eslint",
     "test": "bun test src/**/*.test.ts",
+    "test:protocols": "cargo test --manifest-path scripts/protocol-compatibility/Cargo.toml --locked",
     "size:report": "bun scripts/benchmark/size-report.ts --out=benchmark-results/size.json --dist=dist",
     "size:check": "bun scripts/benchmark/check-size-budgets.ts --report=benchmark-results/size.json",
     "tauri": "RAYON_NUM_THREADS=8 bunx tauri"

@@ -1,0 +1,19 @@
+[package]
+name = "zblade-protocol-compatibility"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+
+# Keep SDK evaluation separate from the application dependency graph until the
+# runtime adapters are ready. These are the feature sets intended for adoption.
+[dev-dependencies]
+rmcp = { version = "=3.2.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest", "auth", "elicitation"] }
+agent-client-protocol = { version = "=2.1.0", default-features = false }
+tokio = { version = "=1.52.3", features = ["rt-multi-thread", "macros", "io-util", "time", "process"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+serde_json = "1"
+
+[[test]]
+name = "protocols"
+path = "tests/protocols.rs"
