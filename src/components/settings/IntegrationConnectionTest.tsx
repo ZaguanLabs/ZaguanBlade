@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { ConfirmModal } from '../ui/Modal';
 import type { IntegrationDefinition, IntegrationLaunchReview, IntegrationProbeResult } from '../../types/integrations';
 import { IntegrationProbeRequest, integrationProbeErrorKey } from '../../utils/integrationProbe';
+import { IntegrationToolCatalog } from './IntegrationToolCatalog';
 
 export interface ConnectionTestContext {
     revision?: string | null;
@@ -76,6 +77,7 @@ export function IntegrationConnectionTest({ entry, revision, workspacePath, canT
                 ? t('settings.integrations.test.mcpResult', { count: result.tools, resources: t(result.resources ? 'common.yes' : 'common.no'), prompts: t(result.prompts ? 'common.yes' : 'common.no') })
                 : t('settings.integrations.test.acpResult', { count: result.authentication_methods })}</p>
         </div> : null}
+        {result?.catalog && result.catalog.integration_id === entry.id ? <IntegrationToolCatalog key={result.catalog.revision} catalog={result.catalog} serverName={entry.name} /> : null}
         <ConfirmModal isOpen={!!review} title={t('settings.integrations.test.reviewTitle', { name: entry.name })}
             confirmLabel={t('settings.integrations.test.allowOnce')} onConfirm={() => void run()} onCancel={cancel}
             message={<div className="space-y-3">

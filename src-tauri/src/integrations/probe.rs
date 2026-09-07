@@ -1,6 +1,9 @@
 //! Short-lived protocol probes. No tools, prompts, sessions, authentication or
 //! editor callbacks are executed. Reader budget also bounds unterminated frames.
-use super::RuntimeError;
+use super::{
+    catalog::{CatalogBuilder, McpCatalog},
+    RuntimeError,
+};
 use rmcp::model::{PaginatedRequestParams, ProtocolVersion};
 use rmcp::{ClientHandler, ClientLifecycleMode, ClientServiceExt};
 use serde::Serialize;
@@ -13,6 +16,7 @@ pub const MAX_OUTPUT_BYTES: u64 = 4 * 1024 * 1024;
 pub struct ProbeResult {
     pub protocol_version: String,
     pub tools: usize,
+    pub catalog: Option<McpCatalog>,
     pub resources: bool,
     pub prompts: bool,
     pub authentication_methods: usize,
@@ -22,6 +26,7 @@ struct ProbeClient;
 impl ClientHandler for ProbeClient {}
 
 pub async fn mcp(
+    integration_id: uuid::Uuid,
     read: impl AsyncRead + Send + Unpin + 'static,
     write: impl AsyncWrite + Send + Unpin + 'static,
 ) -> Result<ProbeResult, RuntimeError> {
@@ -44,10 +49,12 @@ pub async fn mcp(
     let mut result = ProbeResult {
         protocol_version: info.protocol_version.to_string(),
         tools: 0,
+        catalog: None,
         resources: info.capabilities.resources.is_some(),
         prompts: info.capabilities.prompts.is_some(),
         authentication_methods: 0,
     };
+    let mut catalog = CatalogBuilder::new(integration_id);
     if info.capabilities.tools.is_some() {
         let mut cursor = None;
         let mut seen = std::collections::HashSet::new();
@@ -56,9 +63,8 @@ pub async fn mcp(
                 .list_tools(Some(PaginatedRequestParams::default().with_cursor(cursor)))
                 .await
                 .map_err(|_| RuntimeError::ProtocolFailed)?;
-            result.tools += response.tools.len();
-            if result.tools > 512 {
-                return Err(RuntimeError::OutputLimit);
+            for tool in response.tools {
+                catalog.push(tool)?;
             }
             cursor = response.next_cursor;
             let Some(next) = cursor.as_ref() else { break };
@@ -67,6 +73,9 @@ pub async fn mcp(
             }
         }
     }
+    let catalog = catalog.finish()?;
+    result.tools = catalog.tools().len();
+    result.catalog = Some(catalog);
     let _ = tokio::time::timeout(std::time::Duration::from_secs(1), service.cancel()).await;
     Ok(result)
 }
@@ -107,6 +116,7 @@ pub async fn acp(
                     Ok(ProbeResult {
                         protocol_version: response.protocol_version.to_string(),
                         tools: 0,
+                        catalog: None,
                         resources: false,
                         prompts: false,
                         authentication_methods: response.auth_methods.len(),
@@ -127,7 +137,11 @@ mod tests {
     use serde_json::{json, Value};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    async fn mcp_fixture(modern: bool, repeat_cursor: bool) -> Result<ProbeResult, RuntimeError> {
+    async fn mcp_fixture(
+        modern: bool,
+        repeat_cursor: bool,
+        duplicate_name: bool,
+    ) -> Result<ProbeResult, RuntimeError> {
         let (client, server) = tokio::io::duplex(16384);
         let (read, write) = tokio::io::split(client);
         let peer = tokio::spawn(async move {
@@ -160,7 +174,13 @@ mod tests {
                         if pages == 2 {
                             assert_eq!(request["params"]["cursor"], "next");
                         }
-                        let mut result = json!({"tools":[{"name":format!("tool{pages}"), "inputSchema":{"type":"object"}}]});
+                        let name = if duplicate_name {
+                            "repeated".into()
+                        } else {
+                            format!("tool{pages}")
+                        };
+                        let mut result = json!({"tools":[{"name":name, "description":"Fixture tool", "inputSchema":{"type":"object", "additionalProperties":false},
+                            "outputSchema":{"type":"object"}, "annotations":{"readOnlyHint":true}}]});
                         if repeat_cursor || pages == 1 {
                             result["nextCursor"] = json!("next");
                         }
@@ -180,9 +200,12 @@ mod tests {
                     .unwrap();
             }
         });
-        let result = tokio::time::timeout(std::time::Duration::from_secs(3), mcp(read, write))
-            .await
-            .unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            mcp(uuid::Uuid::nil(), read, write),
+        )
+        .await
+        .unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(3), peer)
             .await
             .unwrap()
@@ -193,8 +216,17 @@ mod tests {
     #[tokio::test]
     async fn modern_and_legacy_discovery_paginate_without_executing_tools() {
         for modern in [false, true] {
-            let result = mcp_fixture(modern, false).await.unwrap();
+            let result = mcp_fixture(modern, false, false).await.unwrap();
             assert_eq!(result.tools, 2);
+            let catalog = result.catalog.as_ref().unwrap();
+            assert_eq!(catalog.tools()[0].definition.name, "tool1");
+            assert_eq!(catalog.tools()[1].definition.name, "tool2");
+            assert_eq!(
+                catalog.tools()[0].definition.input_schema["additionalProperties"],
+                json!(false)
+            );
+            assert!(catalog.tools()[0].definition.output_schema.is_some());
+            assert!(catalog.tools()[0].definition.annotations.is_some());
             assert!(result.resources);
             assert!(!result.prompts);
             assert_eq!(
@@ -207,9 +239,19 @@ mod tests {
     #[tokio::test]
     async fn repeated_pagination_cursor_is_bounded() {
         assert_eq!(
-            mcp_fixture(false, true).await.unwrap_err(),
+            mcp_fixture(false, true, false).await.unwrap_err(),
             RuntimeError::OutputLimit
         );
+    }
+
+    #[tokio::test]
+    async fn duplicate_names_across_pages_reject_the_entire_catalog() {
+        for modern in [false, true] {
+            assert_eq!(
+                mcp_fixture(modern, false, true).await.unwrap_err(),
+                RuntimeError::InvalidCatalog
+            );
+        }
     }
 
     #[tokio::test]
@@ -267,12 +309,13 @@ mod tests {
                 .write_all(&vec![b'x'; MAX_OUTPUT_BYTES as usize + 1])
                 .await;
         });
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_secs(3), mcp(read, write))
-                .await
-                .unwrap()
-                .is_err()
-        );
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            mcp(uuid::Uuid::nil(), read, write)
+        )
+        .await
+        .unwrap()
+        .is_err());
         peer.await.unwrap();
     }
 }

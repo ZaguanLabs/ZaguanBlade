@@ -207,7 +207,7 @@ impl IntegrationRuntime {
             let result = if is_acp {
                 probe::acp(read, write).await
             } else {
-                probe::mcp(read, write).await
+                probe::mcp(integration, read, write).await
             };
             process.shutdown().await;
             result

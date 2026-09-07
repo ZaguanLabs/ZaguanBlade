@@ -801,7 +801,9 @@
           "unsupported_version": "El programa ha devuelto una versión del protocolo no compatible.",
           "output_limit": "El programa ha superado el límite de descubrimiento.",
           "timed_out": "La prueba de conexión ha agotado el tiempo de espera y se ha detenido.",
-          "cancelled": "Se ha cancelado la prueba de conexión."
+          "cancelled": "Se ha cancelado la prueba de conexión.",
+          "invalid_catalog": "El servidor ha devuelto un catálogo de herramientas no válido, por ejemplo, con nombres duplicados o no válidos. Revisa el servidor y repite la prueba.",
+          "catalog_changed": "El catálogo de herramientas ha cambiado. Repite la prueba de conexión."
         },
         "mcpResult_other": "{{count}} herramientas; recursos: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "El agente anuncia {{count}} métodos de autenticación. No se ha iniciado ninguna sesión.",
@@ -842,6 +844,21 @@
         "saveHelp": "Guarda para aplicar estos ajustes. Al reactivar el índice, se inicia su actualización. Añadir un servidor MCP no cambia esta preferencia.",
         "currentStatus": "Estado efectivo guardado: {{status}}",
         "graphDisabled": "Grafo de símbolos no disponible: revisa los ajustes del índice"
+      },
+      "catalog": {
+        "title": "Herramientas descubiertas en {{name}}",
+        "help": "Este catálogo procede de la prueba de conexión finalizada. Las descripciones y anotaciones las proporciona el servidor y no conceden permiso para ejecutar herramientas. El acceso desde las conversaciones aún no está disponible.",
+        "search": "Buscar herramientas",
+        "details": "Inspeccionar el esquema y los metadatos",
+        "alias": "Identificador de enrutamiento: {{alias}}",
+        "count_one": "{{count}} herramienta encontrada",
+        "count_other": "{{count}} herramientas encontradas",
+        "empty": "El servidor no ha anunciado ninguna herramienta.",
+        "noMatches": "Ninguna herramienta coincide con la búsqueda.",
+        "pages": "Páginas del catálogo de herramientas",
+        "previous": "Anterior",
+        "next": "Siguiente",
+        "page": "Página {{page}} de {{pages}}"
       }
     },
     "retryLoading": "Volver a cargar los ajustes",

@@ -51,4 +51,26 @@ export interface IntegrationProbeResult {
     resources: boolean;
     prompts: boolean;
     authentication_methods: number;
+    catalog?: McpCatalog | null;
+}
+
+export interface McpCatalogTool {
+    alias: string;
+    definition: {
+        name: string;
+        title?: string;
+        description?: string;
+        inputSchema: Record<string, unknown>;
+        outputSchema?: Record<string, unknown>;
+        annotations?: Record<string, unknown>;
+        icons?: Array<Record<string, unknown>>;
+        _meta?: Record<string, unknown>;
+    };
+}
+
+export interface McpCatalog {
+    schema_version: 1;
+    integration_id: string;
+    revision: string;
+    tools: McpCatalogTool[];
 }

@@ -805,7 +805,9 @@
           "unsupported_version": "The program returned an unsupported protocol version.",
           "output_limit": "The program exceeded the discovery limit.",
           "timed_out": "The connection test timed out and was stopped.",
-          "cancelled": "The connection test was cancelled."
+          "cancelled": "The connection test was cancelled.",
+          "invalid_catalog": "The server returned an invalid tool catalog, such as duplicate or invalid tool names. Check the server and test again.",
+          "catalog_changed": "The tool catalog has changed. Run a new connection test."
         },
         "mcpResult_other": "{{count}} tools; resources: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "{{count}} authentication methods advertised. No session was started.",
@@ -846,6 +848,21 @@
         "saveHelp": "Save to apply these settings. Re-enabling starts an index refresh. Adding an MCP server does not change this preference.",
         "currentStatus": "Saved effective status: {{status}}",
         "graphDisabled": "Symbol graph unavailable — check index settings"
+      },
+      "catalog": {
+        "title": "Tools discovered from {{name}}",
+        "help": "This catalog comes from the completed connection test. Server descriptions and annotations are supplied by the server; they do not grant permission to run tools. Conversation access is not available yet.",
+        "search": "Search tools",
+        "details": "Inspect schema and metadata",
+        "alias": "Routing identifier: {{alias}}",
+        "count_one": "{{count}} matching tool",
+        "count_other": "{{count}} matching tools",
+        "empty": "The server advertised no tools.",
+        "noMatches": "No tools match this search.",
+        "pages": "Tool catalog pages",
+        "previous": "Previous",
+        "next": "Next",
+        "page": "Page {{page}} of {{pages}}"
       }
     },
     "retryLoading": "Reload settings",

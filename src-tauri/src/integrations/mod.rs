@@ -1,6 +1,7 @@
 //! Integration configuration, identities and supervised protocol probes.
 //! Saving configuration never starts a process or grants launch permission.
 
+pub mod catalog;
 pub mod config;
 pub mod credentials;
 pub mod identity;
@@ -25,6 +26,8 @@ pub enum RuntimeError {
     Busy,
     LaunchFailed,
     ProtocolFailed,
+    InvalidCatalog,
+    CatalogChanged,
     UnsupportedVersion,
     OutputLimit,
     TimedOut,
