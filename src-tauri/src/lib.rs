@@ -29,6 +29,7 @@ pub mod conversation_memory;
 pub mod conversation_store;
 pub mod core_state;
 pub mod credential_store;
+pub mod document_service;
 pub mod environment;
 pub mod ephemeral_commands;
 pub mod ephemeral_documents;

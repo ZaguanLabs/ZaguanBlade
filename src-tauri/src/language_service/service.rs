@@ -9,7 +9,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, RwLock};
 
-use crate::buffer_snapshot::{BufferSnapshot, BufferSnapshotSource, BufferSnapshotStore};
+use crate::buffer_snapshot::{BufferSnapshot, BufferSnapshotSource};
+use crate::document_service::DocumentService;
 use crate::gitignore_filter::GitignoreFilter;
 use crate::project_settings;
 use crate::symbol_index::store::{
@@ -49,7 +50,7 @@ pub struct LanguageService {
     symbol_store: Arc<SymbolStore>,
     /// Shared in-memory worktree snapshot/index
     worktree_store: RwLock<Option<Arc<WorktreeStore>>>,
-    buffer_snapshots: BufferSnapshotStore,
+    documents: Arc<DocumentService>,
     overlays: RwLock<HashMap<String, OverlayDocument>>,
 
     /// In-memory cache of recently parsed files
@@ -316,6 +317,7 @@ struct CachedFile {
 #[derive(Clone)]
 struct OverlayDocument {
     _version: Option<i32>,
+    content_hash: String,
     symbols: Vec<Symbol>,
     relationships: Vec<SymbolRelationship>,
     anchors: Vec<SemanticAnchor>,
@@ -1040,16 +1042,38 @@ impl LanguageService {
         workspace_root: PathBuf,
         symbol_store: Arc<SymbolStore>,
     ) -> Result<Self, LanguageError> {
-        Ok(Self {
-            workspace_root,
+        Self::with_documents(Arc::new(DocumentService::new(workspace_root)), symbol_store)
+    }
+
+    /// Attach code intelligence to independently owned editor documents.
+    pub(crate) fn with_documents(
+        documents: Arc<DocumentService>,
+        symbol_store: Arc<SymbolStore>,
+    ) -> Result<Self, LanguageError> {
+        let service = Self {
+            workspace_root: documents.workspace_root().to_path_buf(),
             symbol_store,
             worktree_store: RwLock::new(None),
-            buffer_snapshots: BufferSnapshotStore::new(),
+            documents,
             overlays: RwLock::new(HashMap::new()),
-
             file_cache: RwLock::new(HashMap::new()),
             index_health: RwLock::new(IndexHealthSnapshot::default()),
-        })
+        };
+        // Documents can arrive before deferred index startup. Build their overlays
+        // without requiring the editor to resend unchanged buffer contents.
+        for path in service.documents.live_paths()? {
+            if let Err(error) = service.sync_document_overlay(&path) {
+                eprintln!(
+                    "[LanguageService] Could not parse live document {}: {}",
+                    path, error
+                );
+            }
+        }
+        Ok(service)
+    }
+
+    pub(crate) fn uses_documents(&self, documents: &Arc<DocumentService>) -> bool {
+        Arc::ptr_eq(&self.documents, documents)
     }
 
     pub fn set_worktree_store(&self, store: Arc<WorktreeStore>) {
@@ -1195,10 +1219,7 @@ impl LanguageService {
         record: &crate::symbol_index::store::IndexedFileRecord,
         refresh_metadata_when_hash_matches: bool,
     ) -> Result<bool, LanguageError> {
-        if self
-            .buffer_snapshots
-            .contains_live(&self.snapshot_key(file_path))
-        {
+        if self.documents.live_snapshot(file_path)?.is_some() {
             return Ok(false);
         }
 
@@ -3542,6 +3563,8 @@ impl LanguageService {
         file_path: &str,
         limit: usize,
     ) -> Result<Vec<SemanticAnchor>, LanguageError> {
+        let key = self.snapshot_key(file_path);
+        let file_path = key.as_str();
         if let Some(document) = self.overlays.read().unwrap().get(file_path) {
             return Ok(document.anchors.iter().take(limit).cloned().collect());
         }
@@ -3567,6 +3590,8 @@ impl LanguageService {
         line: u32,
         character: u32,
     ) -> Result<Option<Symbol>, LanguageError> {
+        let key = self.snapshot_key(file_path);
+        let file_path = key.as_str();
         if let Some(document) = self.overlays.read().unwrap().get(file_path) {
             let mut matches = document
                 .symbols
@@ -3605,6 +3630,8 @@ impl LanguageService {
     }
 
     pub fn get_file_module_symbol(&self, file_path: &str) -> Result<Option<Symbol>, LanguageError> {
+        let key = self.snapshot_key(file_path);
+        let file_path = key.as_str();
         if let Some(document) = self.overlays.read().unwrap().get(file_path) {
             return Ok(document
                 .symbols
@@ -3940,6 +3967,8 @@ impl LanguageService {
 
     /// Get all symbols in a file
     pub fn get_file_symbols(&self, file_path: &str) -> Result<Vec<Symbol>, LanguageError> {
+        let key = self.snapshot_key(file_path);
+        let file_path = key.as_str();
         if let Some(document) = self.overlays.read().unwrap().get(file_path) {
             return Ok(self.filter_visible_symbols(file_path, document.symbols.clone()));
         }
@@ -3962,9 +3991,9 @@ impl LanguageService {
     fn update_overlay(
         &self,
         file_path: &str,
-        version: Option<i32>,
-        content: &str,
+        snapshot: &Arc<BufferSnapshot>,
     ) -> Result<(), LanguageError> {
+        let content = snapshot.content();
         let language = Language::from_path(file_path).ok_or_else(|| {
             LanguageError::NotSupported(format!("Unknown language for: {file_path}"))
         })?;
@@ -3985,112 +4014,111 @@ impl LanguageService {
         )?;
         let anchors = extract_semantic_anchors(file_path, content);
 
-        self.overlays.write().unwrap().insert(
-            file_path.to_string(),
-            OverlayDocument {
-                _version: version,
-                symbols,
-                relationships,
-                anchors,
-            },
-        );
+        self.documents.with_live_snapshot(file_path, |current| {
+            if current.is_some_and(|current| Arc::ptr_eq(current, snapshot)) {
+                self.overlays.write().unwrap().insert(
+                    file_path.to_string(),
+                    OverlayDocument {
+                        _version: snapshot.version(),
+                        content_hash: snapshot.hash().to_string(),
+                        symbols,
+                        relationships,
+                        anchors,
+                    },
+                );
+            }
+        })?;
         Ok(())
     }
 
-    /// Notify that a document was opened
-    pub fn did_open(&self, file_path: &str, content: &str) -> Result<(), LanguageError> {
-        let snapshot_key = self.snapshot_key(file_path);
+    /// Update only parsed overlays; editor storage is owned by DocumentService.
+    pub(crate) fn sync_document_overlay(&self, file_path: &str) -> Result<(), LanguageError> {
+        let key = self.snapshot_key(file_path);
+        let Some(snapshot) = self.documents.live_snapshot(file_path)? else {
+            self.retire_closed_overlay(file_path)?;
+            return Ok(());
+        };
+        if should_allow_non_indexed_live_sync(&key) {
+            return Ok(());
+        }
         if self
-            .buffer_snapshots
-            .get(&snapshot_key)
-            .map(|snapshot| snapshot.is_live() && snapshot.content() == content)
-            .unwrap_or(false)
+            .overlays
+            .read()
+            .unwrap()
+            .get(&key)
+            .is_some_and(|overlay| overlay.content_hash == snapshot.hash())
         {
             return Ok(());
         }
-
-        self.buffer_snapshots
-            .upsert_live(&snapshot_key, None, content);
-
-        if should_allow_non_indexed_live_sync(file_path) {
-            return Ok(());
-        }
-
-        self.update_overlay(file_path, None, content)
+        self.update_overlay(&key, &snapshot)
     }
 
-    /// Notify that a document changed
+    /// Notify that a document was opened (also used by standalone language clients).
+    pub fn did_open(&self, file_path: &str, content: &str) -> Result<(), LanguageError> {
+        self.documents.sync(file_path, None, content)?;
+        self.sync_document_overlay(file_path)
+    }
+
     pub fn did_change(
         &self,
         file_path: &str,
         version: i32,
         content: &str,
     ) -> Result<(), LanguageError> {
-        let snapshot_key = self.snapshot_key(file_path);
-        if let Some(snapshot) = self.buffer_snapshots.get(&snapshot_key) {
-            if snapshot.is_live() {
-                if snapshot
-                    .version()
-                    .map(|existing_version| version < existing_version)
-                    .unwrap_or(false)
-                {
-                    return Ok(());
-                }
+        self.documents.sync(file_path, Some(version), content)?;
+        self.sync_document_overlay(file_path)
+    }
 
-                if snapshot.content() == content {
-                    if snapshot.version() != Some(version) {
-                        self.buffer_snapshots
-                            .upsert_live(&snapshot_key, Some(version), content);
-                    }
-                    return Ok(());
-                }
+    /// Retire derived state only if the document has not been reopened meanwhile.
+    pub(crate) fn retire_closed_overlay(&self, file_path: &str) -> Result<(), LanguageError> {
+        let key = self.snapshot_key(file_path);
+        self.documents.with_live_snapshot(file_path, |current| {
+            if current.is_none() {
+                self.file_cache.write().unwrap().remove(&key);
+                self.overlays.write().unwrap().remove(&key);
             }
-        }
-
-        self.buffer_snapshots
-            .upsert_live(&snapshot_key, Some(version), content);
-
-        if should_allow_non_indexed_live_sync(file_path) {
-            return Ok(());
-        }
-
-        self.update_overlay(file_path, Some(version), content)
+        })?;
+        Ok(())
     }
 
-    /// Notify that a document was closed
     pub fn did_close(&self, file_path: &str) -> Result<(), LanguageError> {
-        // Remove from cache
-        {
-            let mut cache = self.file_cache.write().unwrap();
-            cache.remove(file_path);
-        }
-        self.buffer_snapshots.remove(&self.snapshot_key(file_path));
-        self.overlays.write().unwrap().remove(file_path);
-
-        Ok(())
+        self.documents.close(file_path)?;
+        self.retire_closed_overlay(file_path)
     }
 
-    /// Persist a saved document into the index and retire any unsaved overlay.
+    /// Index saved bytes without overwriting a newer, still-unsaved editor buffer.
     pub fn did_save(&self, file_path: &str, content: &str) -> Result<(), LanguageError> {
-        if should_allow_non_indexed_live_sync(file_path) {
-            self.overlays.write().unwrap().remove(file_path);
-            self.buffer_snapshots.remove(&self.snapshot_key(file_path));
-            return Ok(());
-        }
+        self.documents.saved(file_path, content)?;
+        self.index_saved_document(file_path, content)
+    }
 
-        self.index_file_content(file_path, None, content)?;
-        self.overlays.write().unwrap().remove(file_path);
-        self.buffer_snapshots.remove(&self.snapshot_key(file_path));
-        Ok(())
+    /// Refresh derived state after the independent document service handles a save.
+    pub(crate) fn index_saved_document(
+        &self,
+        file_path: &str,
+        content: &str,
+    ) -> Result<(), LanguageError> {
+        let key = self.snapshot_key(file_path);
+        if !should_allow_non_indexed_live_sync(&key) {
+            self.index_file_content(&key, None, content)?;
+        }
+        self.sync_document_overlay(&key)
     }
 
     /// Remove a file from the symbol index and cache
     pub fn remove_file(&self, file_path: &str) -> Result<(), LanguageError> {
+        self.documents.close(file_path)?;
+        self.remove_deleted_file_index(file_path)
+    }
+
+    pub(crate) fn remove_deleted_file_index(&self, file_path: &str) -> Result<(), LanguageError> {
+        let key = self.snapshot_key(file_path);
+        let file_path = key.as_str();
         {
             let mut cache = self.file_cache.write().unwrap();
             cache.remove(file_path);
         }
-        self.buffer_snapshots.remove(&self.snapshot_key(file_path));
+        self.retire_closed_overlay(file_path)?;
 
         self.symbol_store.delete_file_symbols(file_path)?;
         self.symbol_store.delete_indexed_file(file_path)?;
@@ -4311,10 +4339,7 @@ impl LanguageService {
     }
 
     fn ensure_file_fresh(&self, file_path: &str) -> Result<(), LanguageError> {
-        if self
-            .buffer_snapshots
-            .contains_live(&self.snapshot_key(file_path))
-        {
+        if self.documents.live_snapshot(file_path)?.is_some() {
             return Ok(());
         }
 
@@ -5530,9 +5555,14 @@ impl LanguageService {
         version: Option<i32>,
         content: &str,
     ) -> Result<Vec<Symbol>, LanguageError> {
-        let snapshot =
-            self.buffer_snapshots
-                .upsert_live(&self.snapshot_key(file_path), version, content);
+        // Saved/indexed bytes are not an editor update. In particular, a delayed
+        // save must not replace a newer live document with older disk content.
+        let snapshot = Arc::new(BufferSnapshot::new(
+            file_path,
+            version,
+            content,
+            BufferSnapshotSource::Disk,
+        ));
         let hash = snapshot.hash().to_string();
 
         // Check cache first
@@ -5638,55 +5668,20 @@ impl LanguageService {
     }
 
     fn snapshot_key(&self, file_path: &str) -> String {
-        let path = Path::new(file_path);
-        if path.is_absolute() {
-            self.path_to_workspace_relative(path)
-        } else {
-            file_path.replace('\\', "/")
-        }
+        self.documents.snapshot_key(file_path)
     }
 
     fn load_snapshot_for_indexing(
         &self,
         file_path: &str,
     ) -> Result<Arc<BufferSnapshot>, LanguageError> {
-        let key = self.snapshot_key(file_path);
-        if let Some(snapshot) = self.buffer_snapshots.get(&key) {
-            if snapshot.is_live() {
-                return Ok(snapshot);
-            }
-        }
-
-        let full_path = self.resolve_path(file_path);
-        let content = std::fs::read_to_string(&full_path)?;
-        // Build a TRANSIENT disk snapshot for indexing — do NOT cache it in
-        // `buffer_snapshots`. That store is never evicted, so caching every indexed
-        // file's content (including the multi-MB anchor-only register headers we
-        // still load for hashing) accumulated GIGABYTES of live memory on huge
-        // repos — the kernel held ~5 GiB resident after indexing — and defeated the
-        // byte-budget batching (the batch's snapshot was dropped but the cache kept
-        // a copy). This snapshot lives only as long as the file's batch. The cache
-        // is still consulted above for a LIVE (open/edited) buffer, which stays
-        // authoritative.
-        Ok(Arc::new(BufferSnapshot::new(
-            file_path,
-            None,
-            content,
-            BufferSnapshotSource::Disk,
-        )))
+        // DocumentService retains live buffers only; scanning a repository does
+        // not accumulate disk snapshots in a workspace-lifetime cache.
+        Ok(self.documents.read(file_path)?)
     }
 
     fn load_buffer_snapshot(&self, file_path: &str) -> Result<Arc<BufferSnapshot>, LanguageError> {
-        let key = self.snapshot_key(file_path);
-        if let Some(snapshot) = self.buffer_snapshots.get(&key) {
-            if snapshot.is_live() {
-                return Ok(snapshot);
-            }
-        }
-
-        let full_path = self.resolve_path(file_path);
-        let content = std::fs::read_to_string(&full_path)?;
-        Ok(self.buffer_snapshots.upsert_disk(&key, &content))
+        Ok(self.documents.read(file_path)?)
     }
 
     /// Get statistics about the index
@@ -21122,7 +21117,11 @@ func helper() {}
             .unwrap();
 
         let snapshot_key = service.snapshot_key(path);
-        let snapshot = service.buffer_snapshots.get(&snapshot_key).unwrap();
+        let snapshot = service
+            .documents
+            .live_snapshot(&snapshot_key)
+            .unwrap()
+            .unwrap();
         assert_eq!(snapshot.version(), Some(2));
         assert_eq!(
             snapshot.content(),
@@ -21133,7 +21132,11 @@ func helper() {}
             .did_change(path, 3, "{ \"name\": \"demo\", \"private\": true }")
             .unwrap();
 
-        let snapshot = service.buffer_snapshots.get(&snapshot_key).unwrap();
+        let snapshot = service
+            .documents
+            .live_snapshot(&snapshot_key)
+            .unwrap()
+            .unwrap();
         assert_eq!(snapshot.version(), Some(3));
         assert_eq!(
             snapshot.content(),
@@ -21158,6 +21161,95 @@ func helper() {}
             service.get_file_content("copied.md").unwrap(),
             "# Copied Document\n\nThe file now has content.\n"
         );
+    }
+
+    #[test]
+    fn shared_documents_survive_language_service_replacement() {
+        let (service, temp_dir) = create_test_service();
+        let documents = Arc::clone(&service.documents);
+        let store = Arc::clone(&service.symbol_store);
+        drop(service);
+        documents
+            .sync("late.ts", Some(2), "export function liveBeforeIndex() {}\n")
+            .unwrap();
+        // Opening/editing the document did not require any LanguageService.
+        let service = LanguageService::with_documents(Arc::clone(&documents), store).unwrap();
+        let absolute = temp_dir.path().join("late.ts");
+        assert_eq!(
+            service
+                .get_file_content(&absolute.to_string_lossy())
+                .unwrap(),
+            "export function liveBeforeIndex() {}\n"
+        );
+        assert!(service
+            .get_file_symbols("late.ts")
+            .unwrap()
+            .iter()
+            .any(|symbol| symbol.name == "liveBeforeIndex"));
+        assert!(service
+            .get_file_symbols(&absolute.to_string_lossy())
+            .unwrap()
+            .iter()
+            .any(|symbol| symbol.name == "liveBeforeIndex"));
+        assert_eq!(
+            service
+                .get_symbol_at(&absolute.to_string_lossy(), 0, 20)
+                .unwrap()
+                .unwrap()
+                .name,
+            "liveBeforeIndex"
+        );
+        assert!(service
+            .get_file_module_symbol(&absolute.to_string_lossy())
+            .unwrap()
+            .is_some());
+        drop(service);
+        assert!(documents.read("late.ts").unwrap().is_live());
+    }
+
+    #[test]
+    fn delayed_save_preserves_newer_live_content_and_symbols() {
+        let (service, temp_dir) = create_test_service();
+        let saved = "export function savedVersion() {}\n";
+        let live = "export function newerUnsavedVersion() {}\n";
+        fs::write(temp_dir.path().join("save.ts"), saved).unwrap();
+        service.did_change("save.ts", 2, live).unwrap();
+        service.did_save("save.ts", saved).unwrap();
+        assert_eq!(service.get_file_content("save.ts").unwrap(), live);
+        assert!(service
+            .get_file_symbols("save.ts")
+            .unwrap()
+            .iter()
+            .any(|symbol| symbol.name == "newerUnsavedVersion"));
+        assert!(service
+            .get_file_symbols_raw("save.ts")
+            .unwrap()
+            .iter()
+            .any(|symbol| symbol.name == "savedVersion"));
+        service.did_close("save.ts").unwrap();
+        assert_eq!(service.get_file_content("save.ts").unwrap(), saved);
+    }
+
+    #[test]
+    fn obsolete_overlay_cannot_replace_a_newer_or_closed_document() {
+        let (service, _temp_dir) = create_test_service();
+        let old = service
+            .documents
+            .sync("race.ts", Some(1), "export function oldVersion() {}\n")
+            .unwrap();
+        service
+            .did_change("race.ts", 2, "export function newVersion() {}\n")
+            .unwrap();
+        // Simulate an older parse finishing after the newer notification.
+        service.update_overlay("race.ts", &old).unwrap();
+        assert!(service
+            .get_file_symbols("race.ts")
+            .unwrap()
+            .iter()
+            .any(|symbol| symbol.name == "newVersion"));
+        service.did_close("race.ts").unwrap();
+        service.update_overlay("race.ts", &old).unwrap();
+        assert!(!service.overlays.read().unwrap().contains_key("race.ts"));
     }
 
     #[test]

@@ -587,18 +587,27 @@ pub async fn dispatch(
                     content,
                     version,
                 } => {
+                    // Capture workspace ownership before scheduling work. Editor
+                    // synchronization must not create the symbol database.
+                    let documents = state.document_service();
                     let blocking_app_handle = app_handle.clone();
                     let sync_path = path.clone();
                     let sync_content = content.clone();
                     match tokio::task::spawn_blocking(move || {
+                        let documents = documents?;
+                        let version = i32::try_from(version).map_err(|_| {
+                            "Document version exceeds the supported range".to_string()
+                        })?;
+                        documents
+                            .sync(&sync_path, Some(version), &sync_content)
+                            .map_err(|error| error.to_string())?;
                         let state = blocking_app_handle.state::<AppState>();
-                        let service = state.language_service()?;
-                        if version <= 1 {
-                            service.did_open(&sync_path, &sync_content)
-                        } else {
-                            service.did_change(&sync_path, version as i32, &sync_content)
+                        if let Some(service) = state.language_service_for_documents(&documents)? {
+                            service
+                                .sync_document_overlay(&sync_path)
+                                .map_err(|error| error.to_string())?;
                         }
-                        .map_err(|error| error.to_string())
+                        Ok::<(), String>(())
                     })
                     .await
                     {
@@ -619,14 +628,21 @@ pub async fn dispatch(
                     Ok(())
                 }
                 blade_protocol::EditorIntent::CloseDocument { path } => {
+                    let documents = state.document_service();
                     let blocking_app_handle = app_handle.clone();
                     let close_path = path.clone();
                     match tokio::task::spawn_blocking(move || {
+                        let documents = documents?;
+                        documents
+                            .close(&close_path)
+                            .map_err(|error| error.to_string())?;
                         let state = blocking_app_handle.state::<AppState>();
-                        let service = state.language_service()?;
-                        service
-                            .did_close(&close_path)
-                            .map_err(|error| error.to_string())
+                        if let Some(service) = state.language_service_for_documents(&documents)? {
+                            service
+                                .retire_closed_overlay(&close_path)
+                                .map_err(|error| error.to_string())?;
+                        }
+                        Ok::<(), String>(())
                     })
                     .await
                     {

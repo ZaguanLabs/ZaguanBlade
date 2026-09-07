@@ -27,9 +27,15 @@ pub(crate) fn sync_after_write<R: Runtime>(
     invalidate_recent_file_tool_cache(app_handle);
 
     let state = app_handle.state::<AppState>();
-    match state.language_service() {
-        Ok(service) => {
-            if let Err(error) = service.did_save(&path.to_string_lossy(), content) {
+    let result = state.document_service().and_then(|documents| {
+        documents
+            .saved(&path.to_string_lossy(), content)
+            .map_err(|error| error.to_string())?;
+        state.language_service_for_documents(&documents)
+    });
+    match result {
+        Ok(Some(service)) => {
+            if let Err(error) = service.index_saved_document(&path.to_string_lossy(), content) {
                 eprintln!(
                     "[FILE SYNC] Failed to refresh language snapshot for {}: {}",
                     path.display(),
@@ -37,9 +43,10 @@ pub(crate) fn sync_after_write<R: Runtime>(
                 );
             }
         }
+        Ok(None) => {}
         Err(error) => {
             eprintln!(
-                "[FILE SYNC] Failed to get language service for {}: {}",
+                "[FILE SYNC] Failed to synchronize document state for {}: {}",
                 path.display(),
                 error
             );
@@ -67,9 +74,15 @@ pub(crate) fn sync_after_delete<R: Runtime>(app_handle: &tauri::AppHandle<R>, pa
     invalidate_recent_file_tool_cache(app_handle);
 
     let state = app_handle.state::<AppState>();
-    match state.language_service() {
-        Ok(service) => {
-            if let Err(error) = service.remove_file(&path.to_string_lossy()) {
+    let result = state.document_service().and_then(|documents| {
+        documents
+            .close(&path.to_string_lossy())
+            .map_err(|error| error.to_string())?;
+        state.language_service_for_documents(&documents)
+    });
+    match result {
+        Ok(Some(service)) => {
+            if let Err(error) = service.remove_deleted_file_index(&path.to_string_lossy()) {
                 eprintln!(
                     "[FILE SYNC] Failed to remove language snapshot for {}: {}",
                     path.display(),
@@ -77,9 +90,10 @@ pub(crate) fn sync_after_delete<R: Runtime>(app_handle: &tauri::AppHandle<R>, pa
                 );
             }
         }
+        Ok(None) => {}
         Err(error) => {
             eprintln!(
-                "[FILE SYNC] Failed to get language service for {}: {}",
+                "[FILE SYNC] Failed to synchronize document state for {}: {}",
                 path.display(),
                 error
             );

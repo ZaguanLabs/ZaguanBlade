@@ -99,6 +99,7 @@ pub struct AppState {
     pub startup_services_started: AtomicBool, // Delay heavy startup work until frontend is ready
     pub fs_watcher: Mutex<Option<RecommendedWatcher>>, // Workspace file watcher
     pub history_service: RwLock<Option<std::sync::Arc<crate::history::HistoryService>>>, // File history service
+    pub documents: RwLock<Option<Arc<crate::document_service::DocumentService>>>,
     pub language_service: RwLock<Option<std::sync::Arc<crate::language_service::LanguageService>>>, // v1.3: Unified Language Service
     pub worktree: RwLock<Option<std::sync::Arc<WorktreeStore>>>, // Shared workspace snapshot/index
     pub uncommitted_changes: UncommittedChangeTracker, // Track AI changes pending accept/reject
@@ -186,6 +187,7 @@ impl AppState {
             protocol_version_emitted: AtomicBool::new(false),
             startup_services_started: AtomicBool::new(false),
             history_service: RwLock::new(None),
+            documents: RwLock::new(None),
             language_service: RwLock::new(None),
             worktree: RwLock::new(None),
             uncommitted_changes: UncommittedChangeTracker::new(),
@@ -287,23 +289,53 @@ impl AppState {
         Ok(guard.get_or_insert_with(|| store).clone())
     }
 
+    /// Live documents have no dependency on the symbol database or index workers.
+    pub fn document_service(
+        &self,
+    ) -> Result<Arc<crate::document_service::DocumentService>, String> {
+        get_or_try_init_arc(&self.documents, "workspace documents", || {
+            let root = self
+                .workspace_root()
+                .ok_or_else(|| "No workspace open".to_string())?;
+            Ok(crate::document_service::DocumentService::new(root))
+        })
+    }
+
+    /// Return only an already-started index attached to this exact document set.
+    /// Delayed editor work must not initialize services for a different workspace.
+    pub(crate) fn language_service_for_documents(
+        &self,
+        documents: &Arc<crate::document_service::DocumentService>,
+    ) -> Result<Option<Arc<crate::language_service::LanguageService>>, String> {
+        Ok(self
+            .language_service
+            .read()
+            .map_err(|_| "Language service lock is unavailable".to_string())?
+            .as_ref()
+            .filter(|service| service.uses_documents(documents))
+            .cloned())
+    }
+
     pub fn language_service(
         &self,
     ) -> Result<Arc<crate::language_service::LanguageService>, String> {
         get_or_try_init_arc(&self.language_service, "language service", || {
-            let project_data_dir = self.ensure_project_data_dir()?;
-            let db_path = project_data_dir.join("index").join("symbols.db");
+            let documents = self.document_service()?;
+            let db_path = documents
+                .workspace_root()
+                .join(".zblade")
+                .join("index")
+                .join("symbols.db");
             if let Some(parent) = db_path.parent() {
                 std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
             }
 
-            let workspace_root = self.workspace_root().unwrap_or_else(|| PathBuf::from("."));
             let symbol_store = Arc::new(
                 crate::symbol_index::store::SymbolStore::new(&db_path)
                     .map_err(|error| format!("Failed to create SymbolStore: {}", error))?,
             );
             let service =
-                crate::language_service::LanguageService::new(workspace_root, symbol_store)
+                crate::language_service::LanguageService::with_documents(documents, symbol_store)
                     .map_err(|error| format!("Failed to initialize LanguageService: {}", error))?;
             if let Ok(worktree) = self.worktree() {
                 service.set_worktree_store(worktree);
@@ -332,6 +364,10 @@ impl AppState {
             .language_service
             .write()
             .map_err(|e| format!("Failed to write language service: {}", e))? = None;
+        *self
+            .documents
+            .write()
+            .map_err(|e| format!("Failed to write workspace documents: {}", e))? = None;
         *self
             .worktree
             .write()
