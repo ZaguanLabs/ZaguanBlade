@@ -252,6 +252,10 @@ pub fn run() {
             // Settings
             commands::integrations::get_integration_settings,
             commands::integrations::save_integration_settings,
+            commands::integrations::prepare_integration_test,
+            commands::integrations::run_integration_test,
+            commands::integrations::cancel_integration_test,
+            commands::integrations::set_integration_secret,
             commands::settings_remote::get_remote_ai_settings,
             commands::settings_remote::save_remote_ai_settings,
             commands::sso::start_sso_login,

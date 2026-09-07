@@ -35,3 +35,18 @@ export interface IntegrationConfigSnapshot {
 export interface WorkspaceIntegrationSettings {
     disabled_ids: string[];
 }
+
+export interface IntegrationLaunchReview {
+    ticket_id: string;
+    executable: string;
+    cwd: string;
+    args: string[];
+}
+
+export interface IntegrationProbeResult {
+    protocol_version: string;
+    tools: number;
+    resources: boolean;
+    prompts: boolean;
+    authentication_methods: number;
+}

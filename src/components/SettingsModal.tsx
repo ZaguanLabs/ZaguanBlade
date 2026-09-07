@@ -438,7 +438,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                                 </button> : null}
                                 <fieldset disabled={isSaving || !isLoaded} className="min-w-0 disabled:opacity-60">
                                     {activeSection === 'integrations' && (
-                                        <IntegrationSettings config={settings.integrationConfig} onChange={integrationConfig => {
+                                        <IntegrationSettings config={settings.integrationConfig} revision={integrationRevision}
+                                            workspacePath={workspacePath} canTest={isLoaded && !hasChanges && !isSaving} onChange={integrationConfig => {
                                             setSettings(previous => ({ ...previous, integrationConfig }));
                                             setHasChanges(true);
                                         }} />

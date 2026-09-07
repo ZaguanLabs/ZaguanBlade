@@ -1,8 +1,10 @@
-import { useId } from 'react';
+import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, Trash2 } from 'lucide-react';
 import type { IntegrationConfig, IntegrationDefinition, IntegrationProcess } from '../../types/integrations';
 import { newIntegrationProcess, removeIntegration, replaceIntegration } from '../../utils/integrationSettings';
+import { IntegrationConnectionTest, type ConnectionTestContext } from './IntegrationConnectionTest';
+import { IntegrationEnvironment, IntegrationSecrets } from './IntegrationEnvironment';
 
 const inputClass = 'w-full rounded-md border border-(--border-default) bg-(--bg-input) px-3 py-2 text-sm text-(--fg-primary) focus:outline-none focus:border-(--border-focus)';
 const buttonClass = 'inline-flex items-center gap-2 rounded-md border border-(--border-default) px-3 py-2 text-sm text-(--fg-secondary) hover:bg-(--bg-surface-hover) disabled:opacity-50';
@@ -40,17 +42,20 @@ function ProcessFields({ process, onChange }: { process: IntegrationProcess; onC
                 placeholder={t('settings.integrations.workspaceDirectory')}
                 onChange={event => onChange({ ...process, cwd: event.target.value || null })} />
         </label>
+        <IntegrationEnvironment env={process.env} onChange={env => onChange({ ...process, env })} />
     </div>;
 }
 
-function DefinitionFields({ entry, onChange, onRemove, config }: {
+function DefinitionFields({ entry, onChange, onRemove, config, testContext }: {
     entry: IntegrationDefinition;
     onChange: (entry: IntegrationDefinition) => void;
     onRemove: () => void;
     config: IntegrationConfig;
+    testContext: ConnectionTestContext;
 }) {
     const { t } = useTranslation();
     const connection = entry.connection;
+    const [credentialVersion, setCredentialVersion] = useState(0);
     return <section className="rounded-lg border border-(--border-default) bg-(--bg-panel) p-4 space-y-4">
         <div className="flex items-center justify-between gap-3">
             <span className="text-xs text-(--fg-tertiary)">{t('settings.integrations.notConnected')}</span>
@@ -95,10 +100,13 @@ function DefinitionFields({ entry, onChange, onRemove, config }: {
                 </label>)}
             </fieldset> : null}
         </>}
+        <IntegrationSecrets entry={entry} revision={testContext.revision} canSave={testContext.canTest}
+            onStored={() => setCredentialVersion(version => version + 1)} />
+        <IntegrationConnectionTest key={credentialVersion} entry={entry} {...testContext} />
     </section>;
 }
 
-export function IntegrationSettings({ config, onChange }: { config: IntegrationConfig; onChange: (config: IntegrationConfig) => void }) {
+export function IntegrationSettings({ config, onChange, ...testContext }: ConnectionTestContext & { config: IntegrationConfig; onChange: (config: IntegrationConfig) => void }) {
     const { t } = useTranslation();
     const add = (protocol: 'mcp' | 'acp', atlas = false) => {
         const entry: IntegrationDefinition = {
@@ -120,7 +128,7 @@ export function IntegrationSettings({ config, onChange }: { config: IntegrationC
         {(['mcp', 'acp'] as const).map(protocol => <div key={protocol} className="space-y-3">
             <h4 className="text-sm font-semibold text-(--fg-primary)">{t(`settings.integrations.${protocol === 'mcp' ? 'servers' : 'agents'}`)}</h4>
             {config.entries.filter(entry => entry.connection.protocol === protocol).map(entry => <DefinitionFields key={entry.id}
-                entry={entry} config={config} onChange={updated => onChange(replaceIntegration(config, updated))}
+                entry={entry} config={config} testContext={testContext} onChange={updated => onChange(replaceIntegration(config, updated))}
                 onRemove={() => onChange(removeIntegration(config, entry.id))} />)}
             {!config.entries.some(entry => entry.connection.protocol === protocol) ? <p className="text-sm text-(--fg-tertiary)">
                 {t(`settings.integrations.${protocol === 'mcp' ? 'noServers' : 'noAgents'}`)}

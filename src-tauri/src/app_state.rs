@@ -70,6 +70,7 @@ impl FrontendWatchdogState {
 }
 
 pub struct AppState {
+    pub integrations: Arc<crate::integrations::runtime::IntegrationRuntime>,
     pub chat_manager: Mutex<ChatManager>,
     pub conversation: Mutex<ConversationHistory>,
     pub conversation_store: Mutex<Option<conversation_store::ConversationStore>>,
@@ -162,6 +163,10 @@ impl AppState {
 
         Self {
             chat_manager: Mutex::new(ChatManager::new(50)),
+            integrations: Arc::new(crate::integrations::runtime::IntegrationRuntime::new(
+                config::default_global_config_dir(),
+                Arc::new(crate::integrations::credentials::OsSecrets),
+            )),
             conversation: Mutex::new(ConversationHistory::new()),
             conversation_store: Mutex::new(None),
             workspace: Mutex::new(workspace_manager),
@@ -352,6 +357,15 @@ impl AppState {
     }
 
     pub fn reset_project_services(&self) -> Result<(), String> {
+        // Cancel integration work before potentially slow service teardown.
+        if let Some(documents) = self
+            .documents
+            .read()
+            .map_err(|e| format!("Failed to read workspace documents: {}", e))?
+            .as_ref()
+        {
+            documents.retire();
+        }
         *self
             .conversation_store
             .lock()
@@ -364,10 +378,14 @@ impl AppState {
             .language_service
             .write()
             .map_err(|e| format!("Failed to write language service: {}", e))? = None;
-        *self
+        if let Some(documents) = self
             .documents
             .write()
-            .map_err(|e| format!("Failed to write workspace documents: {}", e))? = None;
+            .map_err(|e| format!("Failed to write workspace documents: {}", e))?
+            .take()
+        {
+            documents.retire();
+        }
         *self
             .worktree
             .write()

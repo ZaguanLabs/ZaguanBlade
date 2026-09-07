@@ -49,6 +49,10 @@ ignore = "0.4.33"
 similar = "3.2.0"
 gix = "0.86.0"
 keyring = "4.2.0"
+rmcp = { version = "=3.2.0", default-features = false, features = ["client", "transport-async-rw"] }
+agent-client-protocol = { version = "=2.1.0", default-features = false }
+tokio-util = { version = "0.7", features = ["compat", "rt"] }
+process-wrap = { version = "=9.1.0", default-features = false, features = ["tokio1", "process-group", "job-object", "kill-on-drop", "creation-flags"] }
 
 # Tree-sitter for AST parsing (ZLP - Zaguán Language Protocol)
 tree-sitter = "0.26.13"

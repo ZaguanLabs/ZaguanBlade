@@ -15,6 +15,7 @@ use std::sync::{Arc, RwLock};
 pub struct DocumentService {
     workspace_root: PathBuf,
     identity: crate::integrations::identity::WorkspaceIdentity,
+    cancellation: tokio_util::sync::CancellationToken,
     live: RwLock<HashMap<String, Arc<BufferSnapshot>>>,
 }
 
@@ -24,6 +25,7 @@ impl DocumentService {
             .unwrap_or_else(|_| normalize_path(&workspace_root));
         Self {
             identity: crate::integrations::identity::WorkspaceIdentity::new(&workspace_root),
+            cancellation: tokio_util::sync::CancellationToken::new(),
             workspace_root,
             live: RwLock::new(HashMap::new()),
         }
@@ -35,6 +37,15 @@ impl DocumentService {
 
     pub fn identity(&self) -> &crate::integrations::identity::WorkspaceIdentity {
         &self.identity
+    }
+
+    pub fn cancellation(&self) -> tokio_util::sync::CancellationToken {
+        self.cancellation.clone()
+    }
+
+    /// Retire this generation even if in-flight work still holds its documents.
+    pub fn retire(&self) {
+        self.cancellation.cancel();
     }
 
     pub(crate) fn snapshot_key(&self, file_path: &str) -> String {
