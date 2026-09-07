@@ -3,6 +3,7 @@ pub mod cache;
 pub mod chat;
 pub mod files;
 pub mod history;
+pub mod integrations;
 pub mod misc;
 pub mod project;
 pub mod remote_control;

@@ -21,6 +21,7 @@ export interface LocalAiConfig {
 }
 
 export interface BackendSettings {
+    integrations?: import('./integrations').WorkspaceIntegrationSettings;
     storage: {
         mode: 'local' | 'server';
         sync_metadata: boolean;

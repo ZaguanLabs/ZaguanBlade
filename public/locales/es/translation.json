@@ -460,7 +460,8 @@
       "storage": "Almacenamiento",
       "context": "Contexto",
       "about": "Acerca de",
-      "remote": "Remoto"
+      "remote": "Remoto",
+      "integrations": "MCP / ACP"
     },
     "configurationSection": {
       "title": "Configuración",
@@ -720,7 +721,60 @@
         "invalidToken": "Token de bot no válido",
         "missingBotDetails": "Telegram aceptó el token, pero no devolvió los datos del bot. Vuelve a intentarlo o genera un token nuevo con BotFather."
       }
-    }
+    },
+    "integrations": {
+      "title": "MCP / ACP",
+      "description": "Guarda los datos de conexión de servidores MCP y agentes ACP. Guardar una definición no inicia la conexión.",
+      "scope": "Las definiciones se guardan en este equipo y se comparten entre tus espacios de trabajo. Las nuevas definiciones están desactivadas.",
+      "servers": "Servidores MCP",
+      "agents": "Agentes ACP",
+      "noServers": "No hay servidores MCP configurados.",
+      "noAgents": "No hay agentes ACP configurados.",
+      "addServer": "Añadir servidor MCP",
+      "addAgent": "Añadir agente ACP",
+      "addAtlas": "Añadir Atlas Scout",
+      "newServer": "Servidor MCP",
+      "newAgent": "Agente ACP",
+      "notConnected": "Sin conexión",
+      "name": "Nombre",
+      "transport": "Tipo de conexión",
+      "stdio": "Proceso local (stdio)",
+      "http": "Streamable HTTP",
+      "command": "Ejecutable",
+      "arguments": "Argumentos",
+      "argumentsHelp": "Introduce un argumento por campo. No añadas comillas de shell a las rutas que contengan espacios.",
+      "argumentNumber": "Argumento {{number}}",
+      "removeArgument": "Eliminar argumento {{number}}",
+      "addArgument": "Añadir argumento",
+      "directory": "Directorio de trabajo (opcional)",
+      "workspaceDirectory": "Usar el espacio de trabajo activo",
+      "url": "URL del servidor",
+      "remove": "Eliminar",
+      "removeDefinition": "Eliminar {{name}}",
+      "forwardedServers": "Servidores MCP disponibles para las nuevas sesiones del agente",
+      "errors": {
+        "unsupported_version": "Esta versión del archivo de configuración de integraciones no es compatible. Actualiza Blade antes de editarlo.",
+        "invalid_config": "El archivo de configuración de integraciones tiene un formato incorrecto o contiene campos desconocidos. Corrige el archivo y vuelve a cargar los ajustes.",
+        "invalid_id": "Una integración tiene un identificador no válido. Elimina esa definición y vuelve a añadirla.",
+        "duplicate_id": "Los identificadores de las integraciones deben ser únicos. Elimina la definición duplicada y vuelve a añadirla.",
+        "invalid_name": "Introduce un nombre breve, sin saltos de línea, para cada integración.",
+        "invalid_command": "Introduce un ejecutable para cada servidor local y agente. Escribe los argumentos en campos separados.",
+        "invalid_arguments": "Hay un argumento no válido o demasiado largo. Usa como máximo 256 argumentos de hasta 8192 bytes cada uno.",
+        "invalid_directory": "Introduce un directorio de trabajo válido o deja el campo vacío para usar el espacio de trabajo.",
+        "invalid_environment": "El nombre o el valor de una variable de entorno no es válido.",
+        "invalid_url": "Introduce una URL HTTP o HTTPS sin nombre de usuario, contraseña ni fragmento.",
+        "invalid_headers": "Las cabeceras HTTP no son válidas. Las cabeceras de autenticación deben hacer referencia a un secreto almacenado.",
+        "invalid_reference": "Un agente ACP hace referencia a un servidor MCP que no existe o aparece más de una vez.",
+        "too_large": "La configuración de integraciones es demasiado grande. Usa como máximo 128 definiciones y un archivo de menos de 1 MiB.",
+        "read_failed": "No se ha podido leer la configuración de integraciones. Comprueba el acceso al archivo e inténtalo de nuevo.",
+        "write_failed": "No se ha podido completar el guardado de las integraciones. Comprueba el acceso al archivo y el espacio libre en disco; después, vuelve a abrir los ajustes para comprobar la versión guardada.",
+        "conflict": "La configuración de integraciones se ha modificado desde otra instancia. Cierra y vuelve a abrir los ajustes; después, aplica de nuevo tus cambios.",
+        "desktop_only": "La configuración de integraciones solo se puede gestionar desde la ventana local de Blade.",
+        "unknown": "No se ha podido actualizar la configuración de integraciones. Vuelve a abrir los ajustes e inténtalo de nuevo."
+      }
+    },
+    "retryLoading": "Volver a cargar los ajustes",
+    "loadingNotice": "Los ajustes aún no se han cargado."
   },
   "activityBar": {
     "explorer": "Explorador",

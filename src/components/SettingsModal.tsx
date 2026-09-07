@@ -1,11 +1,16 @@
 'use client';
-import React, { useId, useState, useEffect, useCallback } from 'react';
+import React, { useId, useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
 import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, ChevronDown, Info, Loader2, Code, Key, CheckCircle2, Palette, Check, Smartphone, Eye, EyeOff } from 'lucide-react';
 import type { BackendSettings, LocalAiConfig, RemoteAiConfig } from '../types/settings';
+import type { IntegrationConfig, IntegrationConfigSnapshot } from '../types/integrations';
+import { IntegrationSettings } from './settings/IntegrationSettings';
+import { emptyIntegrationConfig, integrationErrorKey } from '../utils/integrationSettings';
+import { saveSettingsChanges, type SettingsPayload } from '../utils/settingsPersistence';
+import { projectSettingsFromBackend, projectSettingsToBackend, type ProjectPreferences } from '../utils/projectSettings';
 import i18n, { normalizeAppLanguage, supportedAppLanguages, languageI18nKey, type AppLanguage } from '../i18n';
 import { QRCodeSVG } from 'qrcode.react';
 import zbladeLogoUrl from '../assets/zblade-in-app-logo.png';
@@ -22,27 +27,8 @@ function normalizeOpenAiCompatUrl(url: string): string {
     return trimmed.replace(/\/v1$/i, '').replace(/\/+$/, '');
 }
 
-interface SettingsState {
-    storage: {
-        mode: StorageMode;
-        syncMetadata: boolean;
-        cache: {
-            enabled: boolean;
-            maxSizeMb: number;
-        };
-    };
-    context: {
-        maxTokens: number;
-        compression: {
-            enabled: boolean;
-            model: 'local' | 'remote';
-        };
-    };
-    privacy: {
-        telemetry: boolean;
-    };
-    editor: {};
-    skills: BackendSettings['skills'];
+interface SettingsState extends ProjectPreferences {
+    integrationConfig: IntegrationConfig;
     configuration: {
         theme: string;
         markdownView: string;
@@ -65,12 +51,12 @@ interface SettingsState {
         openaiCompatUrl: string;
         hiddenModels: string[];
     };
-    allowGitIgnoredFiles?: boolean;  // Per-project setting
-    autoApproveRunCommands?: boolean;
-    warmupContextPrefetch?: boolean;  // Per-project setting
+
 }
 
 const defaultSettings: SettingsState = {
+    integrationConfig: emptyIntegrationConfig,
+    workspaceIntegrations: { disabled_ids: [] },
     storage: {
         mode: 'local',
         syncMetadata: true,
@@ -184,62 +170,6 @@ function frontendLocalToBackend(frontend: SettingsState): LocalAiConfig {
     };
 }
 
-function backendToFrontend(backend: BackendSettings): Omit<SettingsState, 'account' | 'localAi' | 'configuration'> {
-    return {
-        storage: {
-            mode: backend.storage.mode,
-            syncMetadata: backend.storage.sync_metadata,
-            cache: {
-                enabled: backend.storage.cache.enabled,
-                maxSizeMb: backend.storage.cache.max_size_mb,
-            },
-        },
-        context: {
-            maxTokens: backend.context.max_tokens,
-            compression: {
-                enabled: backend.context.compression.enabled,
-                model: backend.context.compression.model,
-            },
-        },
-        privacy: {
-            telemetry: backend.privacy.telemetry,
-        },
-        editor: {},
-        skills: backend.skills ?? { config: [] },
-        allowGitIgnoredFiles: backend.allow_gitignored_files,
-        autoApproveRunCommands: backend.auto_approve_run_commands,
-        warmupContextPrefetch: backend.warmup_context_prefetch ?? true,
-    };
-}
-
-function frontendToBackend(frontend: SettingsState): BackendSettings {
-    return {
-        storage: {
-            mode: frontend.storage.mode,
-            sync_metadata: frontend.storage.syncMetadata,
-            cache: {
-                enabled: frontend.storage.cache.enabled,
-                max_size_mb: frontend.storage.cache.maxSizeMb,
-            },
-        },
-        context: {
-            max_tokens: frontend.context.maxTokens,
-            compression: {
-                enabled: frontend.context.compression.enabled,
-                model: frontend.context.compression.model,
-            },
-        },
-        privacy: {
-            telemetry: false,
-        },
-        editor: {},
-        skills: frontend.skills,
-        allow_gitignored_files: frontend.allowGitIgnoredFiles || false,
-        auto_approve_run_commands: frontend.autoApproveRunCommands || false,
-        warmup_context_prefetch: frontend.warmupContextPrefetch ?? true,
-    };
-}
-
 interface SettingsModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -248,7 +178,7 @@ interface SettingsModalProps {
     onRefreshModels?: () => Promise<import('../types/chat').ModelInfo[]>;
 }
 
-export type SettingsSection = 'configuration' | 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor' | 'remote' | 'about';
+export type SettingsSection = 'integrations' | 'configuration' | 'account' | 'localai' | 'storage' | 'context' | 'privacy' | 'editor' | 'remote' | 'about';
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialSection, workspacePath, onRefreshModels }) => {
     const { t } = useTranslation();
@@ -262,15 +192,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
     const [isSaving, setIsSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+    const [integrationRevision, setIntegrationRevision] = useState<string | null>(null);
+    const [isLoaded, setIsLoaded] = useState(false);
+    const [reloadCount, setReloadCount] = useState(0);
+    const settingsSession = useRef(0);
 
     // Intercept close requests: if there are unsaved changes, confirm before discarding.
     const requestClose = useCallback(() => {
+        if (isSaving) return;
         if (hasChanges) {
             setShowDiscardConfirm(true);
         } else {
             onClose();
         }
-    }, [hasChanges, onClose]);
+    }, [hasChanges, isSaving, onClose]);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -289,55 +224,57 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
     useEffect(() => {
         if (!isOpen) return;
 
+        const session = ++settingsSession.current;
+        let cancelled = false;
         const loadSettings = async () => {
             setIsLoading(true);
+            setIsLoaded(false);
+            setIsSaving(false);
             setError(null);
+            setHasChanges(false);
+            setIntegrationRevision(null);
             try {
-                // Load split settings (remote account + local AI)
-                const [remoteSettings, localSettings] = await Promise.all([
+                const [remoteSettings, localSettings, integrations] = await Promise.all([
                     invoke<RemoteAiConfig>('get_remote_ai_settings'),
                     invoke<LocalAiConfig>('get_local_ai_settings'),
+                    invoke<IntegrationConfigSnapshot>('get_integration_settings')
+                        .catch(error => { throw new Error(i18n.t(integrationErrorKey(error))); }),
                 ]);
                 let mergedSettings = {
                     ...defaultSettings,
                     ...backendRemoteToFrontend(remoteSettings),
                     ...backendLocalToFrontend(localSettings),
+                    integrationConfig: integrations.config,
                 };
-
-                // Load Project Settings (if workspace open)
                 if (workspacePath) {
                     try {
                         const backendSettings = await invoke<BackendSettings>('load_project_settings', {
                             projectPath: workspacePath,
                         });
-                        mergedSettings = {
-                            ...mergedSettings,
-                            ...backendToFrontend(backendSettings),
-                        };
-                        console.debug('[Settings] Loaded project settings:', backendSettings);
-                    } catch (e) {
-                        console.error('[Settings] Failed to load project settings:', e);
-                        // Don't fail completely, just use defaults for project
+                        mergedSettings = { ...mergedSettings, ...projectSettingsFromBackend(backendSettings) };
+                    } catch (error) {
+                        // A new workspace has no settings yet. Corrupt or unreadable
+                        // files must be reported instead of overwritten with defaults.
+                        if (error !== 'Settings file does not exist') throw error;
                     }
                 }
-
+                if (cancelled || session !== settingsSession.current) return;
                 setSettings(mergedSettings);
                 setLoadedSettings(mergedSettings);
-                setHasChanges(false);
+                setIntegrationRevision(integrations.revision);
+                setIsLoaded(true);
                 setShowDiscardConfirm(false);
-                console.debug('[Settings] Loaded settings:', mergedSettings);
-            } catch (e) {
-                console.error('[Settings] Failed to load global settings:', e);
-                setError(formatUnknownBackendError(e));
-                setSettings(defaultSettings);
-                setLoadedSettings(defaultSettings);
+            } catch (error) {
+                if (!cancelled && session === settingsSession.current) {
+                    setError(formatUnknownBackendError(error));
+                }
             } finally {
-                setIsLoading(false);
+                if (!cancelled && session === settingsSession.current) setIsLoading(false);
             }
         };
-
-        loadSettings();
-    }, [isOpen, workspacePath]);
+        void loadSettings();
+        return () => { cancelled = true; ++settingsSession.current; };
+    }, [isOpen, workspacePath, reloadCount]);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -362,7 +299,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
     }, []);
 
     const handleSave = () => {
-        if (isSaving || !hasChanges) return;
+        if (isSaving || isLoading || !isLoaded || !hasChanges || integrationRevision === null) return;
+        const session = settingsSession.current;
 
         const settingsSnapshot = settings;
         const loadedSettingsSnapshot = loadedSettings;
@@ -371,82 +309,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
 
         setIsSaving(true);
         setError(null);
-        setHasChanges(false);
-        onClose();
 
         void (async () => {
             try {
-                const remoteSettings = frontendRemoteToBackend(settingsSnapshot);
-                const previousRemoteSettings = frontendRemoteToBackend(loadedSettingsSnapshot);
-                const localSettings = frontendLocalToBackend(settingsSnapshot);
-                const previousLocalSettings = frontendLocalToBackend(loadedSettingsSnapshot);
-                const projectSettings = frontendToBackend(settingsSnapshot);
-                const previousProjectSettings = frontendToBackend(loadedSettingsSnapshot);
+                const payload = (value: SettingsState): SettingsPayload => ({
+                    remote: frontendRemoteToBackend(value),
+                    local: frontendLocalToBackend(value),
+                    project: projectSettingsToBackend(value),
+                    integrations: value.integrationConfig,
+                });
+                await saveSettingsChanges(payload(settingsSnapshot), payload(loadedSettingsSnapshot), workspacePathSnapshot, integrationRevision, {
+                    invoke: async <T,>(command: string, args: Record<string, unknown>): Promise<T> => {
+                        try { return await invoke<T>(command, args); }
+                        catch (error) {
+                            if (command === 'save_integration_settings') throw new Error(i18n.t(integrationErrorKey(error)));
+                            throw error;
+                        }
+                    },
+                    emit: event => emit(event),
+                    changeLanguage: language => i18n.changeLanguage(normalizeAppLanguage(language)),
+                    integrationSaved: revision => {
+                        if (session === settingsSession.current) setIntegrationRevision(revision);
+                    },
+                    refreshModels,
+                });
 
-                const remoteSettingsChanged = JSON.stringify(remoteSettings) !== JSON.stringify(previousRemoteSettings);
-                const localSettingsChanged = JSON.stringify(localSettings) !== JSON.stringify(previousLocalSettings);
-                const projectSettingsChanged = JSON.stringify(projectSettings) !== JSON.stringify(previousProjectSettings);
-                const themeChanged = remoteSettings.theme !== previousRemoteSettings.theme;
-                const languageChanged = remoteSettings.language !== previousRemoteSettings.language;
-                const remoteAccountChanged =
-                    remoteSettings.api_key !== previousRemoteSettings.api_key
-                    || remoteSettings.user_id !== previousRemoteSettings.user_id
-                    || remoteSettings.user_email !== previousRemoteSettings.user_email
-                    || remoteSettings.tier !== previousRemoteSettings.tier;
-                const remoteConfigurationChanged =
-                    remoteSettings.markdown_view !== previousRemoteSettings.markdown_view
-                    || remoteSettings.editor_font_size !== previousRemoteSettings.editor_font_size
-                    || remoteSettings.chat_font_size !== previousRemoteSettings.chat_font_size
-                    || languageChanged;
-
-                if (remoteSettingsChanged) {
-                    await invoke('save_remote_ai_settings', {
-                        settings: remoteSettings,
-                    });
+                if (session === settingsSession.current) {
+                    setLoadedSettings(settingsSnapshot);
+                    setHasChanges(false);
+                    onClose();
                 }
-
-                if (localSettingsChanged) {
-                    await invoke('save_local_ai_settings', {
-                        settings: localSettings,
-                    });
-                }
-
-                // Save Project Settings (if workspace is open)
-                if (workspacePathSnapshot && projectSettingsChanged) {
-                    await invoke('save_project_settings', {
-                        projectPath: workspacePathSnapshot,
-                        settings: projectSettings,
-                    });
-                }
-
-                if (themeChanged) {
-                    await emit('theme-changed');
-                }
-
-                if (languageChanged) {
-                    await i18n.changeLanguage(normalizeAppLanguage(remoteSettings.language));
-                }
-
-                if (remoteAccountChanged || remoteConfigurationChanged) {
-                    await emit('remote-settings-changed');
-                }
-
-                if (localSettingsChanged) {
-                    await emit('local-ai-settings-changed');
-                }
-
-                if (projectSettingsChanged) {
-                    await emit('project-settings-changed');
-                }
-
-                if (refreshModels && localSettingsChanged) {
-                    await refreshModels();
-                }
-
-                setLoadedSettings(settingsSnapshot);
-                console.debug('[Settings] Saved settings');
-            } catch (e) {
-                console.error('[Settings] Failed to save in background:', e);
+            } catch (error) {
+                if (session === settingsSession.current) setError(formatUnknownBackendError(error));
+            } finally {
+                if (session === settingsSession.current) setIsSaving(false);
             }
         })();
     };
@@ -456,6 +352,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
     const sections: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
         { id: 'configuration', label: t('settings.navigation.configuration'), icon: <Palette className="w-4 h-4" aria-hidden="true" /> },
         { id: 'account', label: t('settings.navigation.account'), icon: <Key className="w-4 h-4" aria-hidden="true" /> },
+        { id: 'integrations', label: t('settings.navigation.integrations'), icon: <Server className="w-4 h-4" aria-hidden="true" /> },
         { id: 'localai', label: t('settings.navigation.localAi'), icon: <Server className="w-4 h-4" aria-hidden="true" /> },
         { id: 'storage', label: t('settings.navigation.storage'), icon: <Database className="w-4 h-4" aria-hidden="true" /> },
         ...(workspacePath ? [
@@ -536,67 +433,78 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                                         {error}
                                     </div>
                                 )}
-                                {activeSection === 'configuration' && (
-                                    <ConfigurationSettings
-                                        settings={settings.configuration}
-                                        autoApproveRunCommands={settings.autoApproveRunCommands || false}
-                                        onChange={(updates) => updateSettings('configuration', updates)}
-                                        onAutoApproveRunCommandsChange={(value) => {
-                                            setSettings(prev => ({ ...prev, autoApproveRunCommands: value }));
+                                {!isLoaded ? <button type="button" className="mb-4 text-sm text-(--accent-ai)" onClick={() => setReloadCount(value => value + 1)}>
+                                    {t('settings.retryLoading')}
+                                </button> : null}
+                                <fieldset disabled={isSaving || !isLoaded} className="min-w-0 disabled:opacity-60">
+                                    {activeSection === 'integrations' && (
+                                        <IntegrationSettings config={settings.integrationConfig} onChange={integrationConfig => {
+                                            setSettings(previous => ({ ...previous, integrationConfig }));
                                             setHasChanges(true);
-                                        }}
-                                    />
-                                )}
-                                {activeSection === 'storage' && (
-                                    <StorageSettings
-                                        settings={settings.storage}
-                                        onChange={(updates) => updateSettings('storage', updates)}
-                                    />
-                                )}
-                                {activeSection === 'localai' && (
-                                    <LocalAiSettings
-                                        settings={settings.localAi}
-                                        onChange={(updates) => updateSettings('localAi', updates)}
-                                        onRefreshModels={onRefreshModels}
-                                    />
-                                )}
-                                {activeSection === 'context' && (
-                                    <ContextSettings
-                                        settings={settings.context}
-                                        onChange={(updates) => updateSettings('context', updates)}
-                                        allowGitIgnoredFiles={settings.allowGitIgnoredFiles || false}
-                                        onAllowGitIgnoredFilesChange={(value) => {
-                                            setSettings(prev => ({ ...prev, allowGitIgnoredFiles: value }));
-                                            setHasChanges(true);
-                                        }}
-                                        warmupContextPrefetch={settings.warmupContextPrefetch ?? true}
-                                        onWarmupContextPrefetchChange={(value) => {
-                                            setSettings(prev => ({ ...prev, warmupContextPrefetch: value }));
-                                            setHasChanges(true);
-                                        }}
-                                    />
-                                )}
-                                {activeSection === 'privacy' && (
-                                    <PrivacySettings
-                                        settings={settings.privacy}
-                                        onChange={(updates) => updateSettings('privacy', updates)}
-                                    />
-                                )}
-                                {activeSection === 'account' && (
-                                    <AccountSettings
-                                        settings={settings.account}
-                                        onChange={(updates) => updateSettings('account', updates)}
-                                        onConnected={syncSavedRemoteAccount}
-                                    />
-                                )}
-                                {activeSection === 'editor' && (
-                                    <EditorSettings
-                                        settings={settings.editor}
-                                        onChange={(updates) => updateSettings('editor', updates)}
-                                    />
-                                )}
-                                {activeSection === 'remote' && <RemoteSettings />}
-                                {activeSection === 'about' && <AboutSettings />}
+                                        }} />
+                                    )}
+                                    {activeSection === 'configuration' && (
+                                        <ConfigurationSettings
+                                            settings={settings.configuration}
+                                            autoApproveRunCommands={settings.autoApproveRunCommands || false}
+                                            onChange={(updates) => updateSettings('configuration', updates)}
+                                            onAutoApproveRunCommandsChange={(value) => {
+                                                setSettings(prev => ({ ...prev, autoApproveRunCommands: value }));
+                                                setHasChanges(true);
+                                            }}
+                                        />
+                                    )}
+                                    {activeSection === 'storage' && (
+                                        <StorageSettings
+                                            settings={settings.storage}
+                                            onChange={(updates) => updateSettings('storage', updates)}
+                                        />
+                                    )}
+                                    {activeSection === 'localai' && (
+                                        <LocalAiSettings
+                                            settings={settings.localAi}
+                                            onChange={(updates) => updateSettings('localAi', updates)}
+                                            onRefreshModels={onRefreshModels}
+                                        />
+                                    )}
+                                    {activeSection === 'context' && (
+                                        <ContextSettings
+                                            settings={settings.context}
+                                            onChange={(updates) => updateSettings('context', updates)}
+                                            allowGitIgnoredFiles={settings.allowGitIgnoredFiles || false}
+                                            onAllowGitIgnoredFilesChange={(value) => {
+                                                setSettings(prev => ({ ...prev, allowGitIgnoredFiles: value }));
+                                                setHasChanges(true);
+                                            }}
+                                            warmupContextPrefetch={settings.warmupContextPrefetch ?? true}
+                                            onWarmupContextPrefetchChange={(value) => {
+                                                setSettings(prev => ({ ...prev, warmupContextPrefetch: value }));
+                                                setHasChanges(true);
+                                            }}
+                                        />
+                                    )}
+                                    {activeSection === 'privacy' && (
+                                        <PrivacySettings
+                                            settings={settings.privacy}
+                                            onChange={(updates) => updateSettings('privacy', updates)}
+                                        />
+                                    )}
+                                    {activeSection === 'account' && (
+                                        <AccountSettings
+                                            settings={settings.account}
+                                            onChange={(updates) => updateSettings('account', updates)}
+                                            onConnected={syncSavedRemoteAccount}
+                                        />
+                                    )}
+                                    {activeSection === 'editor' && (
+                                        <EditorSettings
+                                            settings={settings.editor}
+                                            onChange={(updates) => updateSettings('editor', updates)}
+                                        />
+                                    )}
+                                    {activeSection === 'remote' && <RemoteSettings />}
+                                    {activeSection === 'about' && <AboutSettings />}
+                                </fieldset>
                             </>
                         )}
                     </ScrollArea>
@@ -605,7 +513,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                 {/* Footer */}
                 <div className="flex items-center justify-between gap-3 px-6 py-3 border-t border-(--border-default) bg-[color-mix(in_srgb,var(--bg-panel)_84%,var(--bg-surface))]">
                     <div className="text-xs text-(--fg-tertiary)">
-                        {hasChanges ? t('settings.unsavedChangesNotice') : t('settings.allChangesSaved')}
+                        {!isLoaded ? t('settings.loadingNotice') : hasChanges ? t('settings.unsavedChangesNotice') : t('settings.allChangesSaved')}
                     </div>
                     <div className="flex items-center gap-2">
                         <button
@@ -618,7 +526,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                         <button
                             type="button"
                             onClick={handleSave}
-                            disabled={!hasChanges || isSaving}
+                            disabled={!hasChanges || isSaving || isLoading || !isLoaded}
                             className="flex items-center gap-2 rounded-[calc(var(--panel-radius)*0.65)] bg-(--accent-ai) px-4 py-2 text-sm font-medium text-(--fg-bright) transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                             {isSaving && <Loader2 aria-hidden="true" className="w-4 h-4 animate-spin" />}

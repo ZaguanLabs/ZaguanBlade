@@ -14,20 +14,27 @@ use std::sync::{Arc, RwLock};
 
 pub struct DocumentService {
     workspace_root: PathBuf,
+    identity: crate::integrations::identity::WorkspaceIdentity,
     live: RwLock<HashMap<String, Arc<BufferSnapshot>>>,
 }
 
 impl DocumentService {
     pub fn new(workspace_root: PathBuf) -> Self {
+        let workspace_root = std::fs::canonicalize(&workspace_root)
+            .unwrap_or_else(|_| normalize_path(&workspace_root));
         Self {
-            workspace_root: std::fs::canonicalize(&workspace_root)
-                .unwrap_or_else(|_| normalize_path(&workspace_root)),
+            identity: crate::integrations::identity::WorkspaceIdentity::new(&workspace_root),
+            workspace_root,
             live: RwLock::new(HashMap::new()),
         }
     }
 
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
+    }
+
+    pub fn identity(&self) -> &crate::integrations::identity::WorkspaceIdentity {
+        &self.identity
     }
 
     pub(crate) fn snapshot_key(&self, file_path: &str) -> String {

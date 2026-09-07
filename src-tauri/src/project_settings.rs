@@ -145,6 +145,8 @@ pub struct ProjectSettings {
     pub editor: EditorSettings,
     #[serde(default)]
     pub skills: SkillsSettings,
+    #[serde(default)]
+    pub integrations: crate::integrations::config::WorkspaceIntegrationSettings,
     /// Whether to allow access to files matched by .gitignore patterns
     /// Default: false (respect .gitignore for security)
     #[serde(default = "default_false")]
@@ -168,6 +170,7 @@ impl Default for ProjectSettings {
             privacy: PrivacySettings::default(),
             editor: EditorSettings::default(),
             skills: SkillsSettings::default(),
+            integrations: crate::integrations::config::WorkspaceIntegrationSettings::default(),
             allow_gitignored_files: false,
             auto_approve_run_commands: false,
             warmup_context_prefetch: true,

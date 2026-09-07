@@ -30,6 +30,7 @@ pub mod conversation_store;
 pub mod core_state;
 pub mod credential_store;
 pub mod document_service;
+pub mod integrations;
 pub mod environment;
 pub mod ephemeral_commands;
 pub mod ephemeral_documents;
@@ -249,6 +250,8 @@ pub fn run() {
             commands::screenshot::capture_window,
             commands::screenshot::capture_window_region,
             // Settings
+            commands::integrations::get_integration_settings,
+            commands::integrations::save_integration_settings,
             commands::settings_remote::get_remote_ai_settings,
             commands::settings_remote::save_remote_ai_settings,
             commands::sso::start_sso_login,

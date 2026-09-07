@@ -464,7 +464,8 @@
       "storage": "Storage",
       "context": "Context",
       "about": "About",
-      "remote": "Remote"
+      "remote": "Remote",
+      "integrations": "MCP / ACP"
     },
     "configurationSection": {
       "title": "Configuration",
@@ -724,7 +725,60 @@
         "invalidToken": "Invalid bot token",
         "missingBotDetails": "Telegram accepted the token but returned no bot details. Try again, or generate a new token with BotFather."
       }
-    }
+    },
+    "integrations": {
+      "title": "MCP / ACP",
+      "description": "Save connection details for MCP servers and ACP agents. Saving a definition does not start a connection.",
+      "scope": "Definitions are stored on this computer and shared across your workspaces. New definitions are disabled.",
+      "servers": "MCP servers",
+      "agents": "ACP agents",
+      "noServers": "No MCP servers configured.",
+      "noAgents": "No ACP agents configured.",
+      "addServer": "Add MCP server",
+      "addAgent": "Add ACP agent",
+      "addAtlas": "Add Atlas Scout",
+      "newServer": "MCP server",
+      "newAgent": "ACP agent",
+      "notConnected": "Not connected",
+      "name": "Name",
+      "transport": "Connection type",
+      "stdio": "Local process (stdio)",
+      "http": "Streamable HTTP",
+      "command": "Executable",
+      "arguments": "Arguments",
+      "argumentsHelp": "One argument per field. Do not add shell quotes around paths with spaces.",
+      "argumentNumber": "Argument {{number}}",
+      "removeArgument": "Remove argument {{number}}",
+      "addArgument": "Add argument",
+      "directory": "Working directory (optional)",
+      "workspaceDirectory": "Use the active workspace",
+      "url": "Server URL",
+      "remove": "Remove",
+      "removeDefinition": "Remove {{name}}",
+      "forwardedServers": "MCP servers to offer to new agent sessions",
+      "errors": {
+        "unsupported_version": "This integration settings version is not supported. Update Blade before editing this file.",
+        "invalid_config": "The integration settings file is malformed or contains unknown fields. Correct the file and reload Settings.",
+        "invalid_id": "An integration has an invalid ID. Remove that definition and add it again.",
+        "duplicate_id": "Integration IDs must be unique. Remove the duplicate definition and add it again.",
+        "invalid_name": "Enter a short name without line breaks for every integration.",
+        "invalid_command": "Enter an executable for every local server and agent. Put its arguments in separate fields.",
+        "invalid_arguments": "An argument is invalid or too long. Use at most 256 arguments, each up to 8,192 bytes.",
+        "invalid_directory": "Enter a valid working directory or leave the field empty to use the workspace.",
+        "invalid_environment": "An environment variable name or value is invalid.",
+        "invalid_url": "Enter an HTTP or HTTPS server URL without an embedded username, password or fragment.",
+        "invalid_headers": "HTTP headers are invalid. Authentication headers must reference a stored secret.",
+        "invalid_reference": "An ACP agent references an MCP server that does not exist or is listed more than once.",
+        "too_large": "Integration settings are too large. Use at most 128 definitions and a file smaller than 1 MiB.",
+        "read_failed": "Could not read integration settings. Check file access and try again.",
+        "write_failed": "Could not finish saving integration settings. Check file access and available disk space, then reopen Settings to verify the saved version.",
+        "conflict": "Integration settings changed elsewhere. Close and reopen Settings, then apply your edits again.",
+        "desktop_only": "Integration settings can only be managed from the local Blade window.",
+        "unknown": "Could not update integration settings. Reopen Settings and try again."
+      }
+    },
+    "retryLoading": "Reload settings",
+    "loadingNotice": "Settings have not finished loading."
   },
   "activityBar": {
     "explorer": "Explorer",
