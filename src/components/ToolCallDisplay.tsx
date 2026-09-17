@@ -406,6 +406,16 @@ const ToolCallDisplayComponent: React.FC<ToolCallDisplayProps> = ({
 
     // Get friendly tool name
     const getFriendlyToolName = (name: string, args?: Record<string, unknown>): string => {
+        if (name === 'load_skill') {
+            const skillId = asString(args?.skill_id ?? args?.id ?? args?.name).trim();
+            if (skillId) {
+                return t('toolCall.tools.loadSkillWithName', {
+                    skillId,
+                    defaultValue: `Loading Skill (${skillId})`,
+                });
+            }
+        }
+
         // Special handling for apply_patch to show patch count
         if (name === 'apply_patch' && args) {
             const patches = args.patches as Array<unknown> | undefined;
@@ -422,6 +432,7 @@ const ToolCallDisplayComponent: React.FC<ToolCallDisplayProps> = ({
             'edit_file': { key: 'toolCall.tools.editFile', fallback: 'Editing File' },
             'read_file': { key: 'toolCall.tools.readFile', fallback: 'Reading File' },
             'write_file': { key: 'toolCall.tools.writeFile', fallback: 'Writing File' },
+            'load_skill': { key: 'toolCall.tools.loadSkill', fallback: 'Loading Skill' },
             'fast_context': { key: 'toolCall.tools.fastContext', fallback: 'Planning Context' },
             'edit_impact': { key: 'toolCall.tools.editImpact', fallback: 'Analyzing Edit Impact' },
             'symbol_search': { key: 'toolCall.tools.symbolSearch', fallback: 'Searching Symbols' },

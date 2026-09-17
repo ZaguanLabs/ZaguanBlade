@@ -988,6 +988,8 @@
       "editFile": "Editando archivo",
       "readFile": "Leyendo archivo",
       "writeFile": "Escribiendo archivo",
+      "loadSkill": "Cargando habilidad",
+      "loadSkillWithName": "Cargando habilidad ({{skillId}})",
       "fastContext": "Preparando contexto",
       "editImpact": "Analizando el impacto de la edición",
       "symbolSearch": "Buscando símbolos",

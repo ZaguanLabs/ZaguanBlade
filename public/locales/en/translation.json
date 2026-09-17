@@ -992,6 +992,8 @@
       "editFile": "Editing File",
       "readFile": "Reading File",
       "writeFile": "Writing File",
+      "loadSkill": "Loading Skill",
+      "loadSkillWithName": "Loading Skill ({{skillId}})",
       "fastContext": "Planning Context",
       "editImpact": "Analyzing Edit Impact",
       "symbolSearch": "Searching Symbols",

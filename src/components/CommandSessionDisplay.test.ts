@@ -32,6 +32,14 @@ function renderSession(args: unknown, result?: string, status: NonNullable<ToolC
         })));
 }
 
+function renderTool(name: string, args: unknown, language = 'en') {
+    return renderToStaticMarkup(createElement(I18nextProvider, { i18n: locales[language] },
+        createElement(ToolCallDisplay, {
+            toolCall: { id: `call-${name}`, type: 'function', function: { name, arguments: JSON.stringify(args) } },
+            status: 'complete',
+        })));
+}
+
 function workEntry(args: unknown, result?: string, status: NonNullable<ToolCall['status']> = 'complete') {
     appI18n.addResourceBundle('en', 'translation', en, true, true);
     return deriveChatWorkEntries([{
@@ -163,6 +171,19 @@ describe('command session chat rendering', () => {
                 status: 'complete',
             })));
         assert.match(html, /Finished/);
+    });
+});
+
+describe('skill loading chat rendering', () => {
+    it('uses a localized label with the selected skill identifier', () => {
+        assert.match(renderTool('load_skill', { skill_id: 'frontend-design' }), /Loading Skill \(frontend-design\)/);
+        assert.match(renderTool('load_skill', { skill_id: 'frontend-design' }, 'es'), /Cargando habilidad \(frontend-design\)/);
+    });
+
+    it('uses the label without empty parentheses when a legacy call lacks a skill identifier', () => {
+        const html = renderTool('load_skill', {});
+        assert.match(html, /Loading Skill/);
+        assert.doesNotMatch(html, /Loading Skill \(\)/);
     });
 });
 
