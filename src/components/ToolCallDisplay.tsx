@@ -2,6 +2,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ToolCall } from '../types/chat';
+import { McpToolResult } from './McpToolResult';
 import { CommandSessionDisplay } from './CommandSessionDisplay';
 import { Zap, CheckCircle2, XCircle, Loader2, Copy, Check, ChevronRight, ChevronDown, RotateCcw, StopCircle, FileSearch, ShieldAlert, GitBranch } from 'lucide-react';
 
@@ -566,6 +567,10 @@ const ToolCallDisplayComponent: React.FC<ToolCallDisplayProps> = ({
     const resultCount = isComplete && isSymbolResultTool(toolCall.function.name)
         ? symbolResultCount(jsonResult)
         : null;
+
+    if (toolCall.function.name.startsWith('mcp_')) {
+        return <McpToolResult alias={toolCall.function.name} raw={result ?? toolCall.result} status={status} />;
+    }
 
     if (toolCall.function.name === 'command_session') {
         return <CommandSessionDisplay id={toolCall.id} args={parsedArgs} status={status} result={result ?? toolCall.result} />;

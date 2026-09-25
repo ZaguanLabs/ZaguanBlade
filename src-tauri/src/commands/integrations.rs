@@ -306,3 +306,94 @@ pub fn get_mcp_catalog(
         .connections
         .catalog(connection_id, &documents)
 }
+
+// Conversation decisions are desktop-only and resolve backend-owned contexts.
+// The webview cannot choose arguments, a connection, or a workspace generation.
+fn current_mcp_turn(
+    state: &AppState,
+) -> Result<Option<std::sync::Arc<crate::integrations::native_turn::NativeMcpTurn>>, RuntimeError> {
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    let turn = state
+        .chat_manager
+        .lock()
+        .map_err(|_| RuntimeError::Busy)?
+        .native_mcp
+        .clone();
+    let conversation = state.conversation.lock().map_err(|_| RuntimeError::Busy)?;
+    Ok(turn.filter(|turn| turn.matches(&documents, &conversation.metadata.id)))
+}
+#[tauri::command]
+pub fn get_mcp_turn_state(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<crate::integrations::native_turn::TurnState>, RuntimeError> {
+    runtime_desktop_only(&window)?;
+    current_mcp_turn(&state)?
+        .map(|turn| turn.state())
+        .transpose()
+}
+#[tauri::command]
+pub async fn respond_mcp_tool_call(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    turn_id: Uuid,
+    request_id: Uuid,
+    allow: bool,
+) -> Result<(), RuntimeError> {
+    runtime_desktop_only(&window)?;
+    if state.remote_control.is_configured().await {
+        return Err(RuntimeError::PermissionDenied);
+    }
+    let turn = current_mcp_turn(&state)?
+        .filter(|turn| turn.id == turn_id)
+        .ok_or(RuntimeError::ApprovalExpired)?;
+    turn.respond(request_id, allow)
+}
+#[tauri::command]
+pub async fn get_mcp_result_artifact(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    reference: crate::integrations::result_artifact::ArtifactRef,
+) -> Result<serde_json::Value, RuntimeError> {
+    runtime_desktop_only(&window)?;
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    if state
+        .conversation
+        .lock()
+        .map_err(|_| RuntimeError::Busy)?
+        .metadata
+        .id
+        != reference.conversation_id.to_string()
+    {
+        return Err(RuntimeError::PermissionDenied);
+    }
+    let runtime = state.integrations.clone();
+    let reading_documents = documents.clone();
+    let reading_reference = reference.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        runtime.read_result_artifact(
+            &reading_documents.identity().workspace_id,
+            &reading_reference,
+        )
+    })
+    .await
+    .map_err(|_| RuntimeError::ArtifactUnavailable)??;
+    if documents.cancellation().is_cancelled() {
+        return Err(RuntimeError::WorkspaceChanged);
+    }
+    if state
+        .conversation
+        .lock()
+        .map_err(|_| RuntimeError::Busy)?
+        .metadata
+        .id
+        != reference.conversation_id.to_string()
+    {
+        return Err(RuntimeError::PermissionDenied);
+    }
+    Ok(result)
+}

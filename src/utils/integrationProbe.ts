@@ -4,7 +4,7 @@ const errors = new Set(['desktop_only', 'config_changed', 'workspace_changed', '
     'executable_not_found', 'invalid_directory', 'secret_unavailable', 'secret_missing', 'invalid_secret',
     'approval_expired', 'busy', 'launch_failed', 'protocol_failed', 'unsupported_version', 'output_limit',
     'timed_out', 'cancelled', 'invalid_catalog', 'catalog_changed', 'integration_disabled', 'policy_unavailable', 'connection_not_ready',
-    'permission_required', 'permission_denied', 'invalid_arguments', 'unsupported_result']);
+    'permission_required', 'permission_denied', 'invalid_arguments', 'unsupported_result', 'artifact_unavailable', 'call_limit']);
 
 export function integrationProbeErrorKey(error: unknown): string {
     return `settings.integrations.test.errors.${typeof error === 'string' && errors.has(error) ? error : 'protocol_failed'}`;

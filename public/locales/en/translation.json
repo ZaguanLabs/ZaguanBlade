@@ -814,7 +814,9 @@
           "permission_required": "Approve this tool call before running it. Connecting a server does not authorize its tools.",
           "permission_denied": "This tool call was not authorized for the current conversation.",
           "invalid_arguments": "The tool call arguments or request identity are invalid.",
-          "unsupported_result": "The server requested an unsupported interaction or background task. The call may have had effects and was not retried."
+          "unsupported_result": "The server requested an unsupported interaction or background task. The call may have had effects and was not retried.",
+          "artifact_unavailable": "The full result is unavailable; the transcript preview is still retained.",
+          "call_limit": "This turn has reached its MCP call limit or repeated a call identifier."
         },
         "mcpResult_other": "{{count}} tools; resources: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "{{count}} authentication methods advertised. No session was started.",
@@ -858,7 +860,7 @@
       },
       "catalog": {
         "title": "Tools discovered from {{name}}",
-        "help": "This catalog comes from the completed connection test. Server descriptions and annotations are supplied by the server; they do not grant permission to run tools. Conversation access is not available yet.",
+        "help": "This snapshot comes from the connection test. Connect the server to make its tools available to new native conversations. Server descriptions and annotations do not grant permission to run tools.",
         "search": "Search tools",
         "details": "Inspect schema and metadata",
         "alias": "Routing identifier: {{alias}}",
@@ -870,11 +872,11 @@
         "previous": "Previous",
         "next": "Next",
         "page": "Page {{page}} of {{pages}}",
-        "liveHelp": "Tools discovered on the current connection. Refresh to check for changes. Server descriptions and annotations do not grant permission to run tools. Conversation access is not available yet."
+        "liveHelp": "Tools on the current connection. Refresh to check for changes; new user turns use the updated catalog. Descriptions and annotations do not grant permission to run tools."
       },
       "connection": {
         "title": "Live MCP connection",
-        "help": "Keep this local server connected in the current workspace. Closing Settings leaves it running. Tool execution in conversations is still being implemented.",
+        "help": "Connected tools are available in new Ollama and OpenAI-compatible conversations, with approval for each call. Zaguán cloud conversations are not supported yet. Closing Settings leaves the server running.",
         "connect": "Connect",
         "disconnect": "Disconnect",
         "refresh": "Refresh tools",
@@ -889,7 +891,7 @@
         "statusUnavailable": "Connection status unavailable",
         "reviewTitle": "Connect to {{name}}",
         "allow": "Allow this connection",
-        "reviewHelp": "This starts the program below with your user permissions and configured environment. It can access files and the network. It stays running until you disconnect, close the workspace, exit Blade, or change its saved configuration, credentials or workspace policy. This approval starts one connection; it does not authorize tool calls."
+        "reviewHelp": "This starts the program below with your user permissions and configured environment. It can access files and the network. It stays running until you disconnect, close the workspace, exit Blade, or change its saved configuration, credentials or workspace policy. This approval starts one connection; it does not authorize tool calls. Tool names, descriptions and schemas may be shared with the selected native model provider."
       }
     },
     "retryLoading": "Reload settings",
@@ -1591,5 +1593,43 @@
     "bladeTerminalFailed": "Failed to execute command in Blade terminal: {{error}}",
     "cancelledByUser": "Command cancelled by user.",
     "terminalExitedEarly": "Command terminal exited before completion (exit {{code}})."
+  },
+  "mcpChat": {
+    "title": "MCP tools",
+    "catalog": "MCP: {{count}} tools in this turn (limit {{limit}})",
+    "catalogHelp": "The catalog is fixed for this user turn. Connect or refresh servers in Settings, then send a new message to use the updated catalog. Tool schemas are shared with the selected model provider.",
+    "excluded": {
+      "schema": "Schema is not supported by this provider adapter.",
+      "budget": "Excluded by the tool count or schema size limit."
+    },
+    "blocked": {
+      "remote": "MCP conversation tools are unavailable while remote control is configured.",
+      "provider": "This model does not support native tool calls.",
+      "budget": "The combined tool catalog exceeds this provider’s limit.",
+      "uncertain": "An MCP call has an uncertain outcome. Further MCP calls are blocked for this turn; check the external service before trying again.",
+      "model_changed": "The selected model changed. This turn was stopped; send a new message to continue with the new model."
+    },
+    "approval": "Allow {{server}} to run {{tool}}?",
+    "approvalHelp": "This external tool may access files or services. Approval applies only to these arguments and this call, and expires after 60 seconds.",
+    "arguments": "Review arguments",
+    "deny": "Deny",
+    "allow": "Allow once",
+    "tool": "MCP tool",
+    "waiting": "Waiting for approval or the external tool response.",
+    "outcome": {
+      "completed": "External tool responded.",
+      "unknown": "Outcome unknown. The external operation may have taken effect. Check before retrying.",
+      "not_started": "External tool was not started."
+    },
+    "invalidResult": "The MCP result could not be displayed.",
+    "toolError": "The server reported a tool error.",
+    "truncated": "The text preview was shortened. Open the full result to inspect the saved response.",
+    "nonText": "The response includes {{count}} non-text content blocks. Open the full result to inspect them.",
+    "fullResult": "Open full result (JSON)",
+    "artifactUnavailable": "The full result is unavailable; the transcript preview is still retained.",
+    "catalog_one": "MCP: {{count}} tool in this turn (limit {{limit}})",
+    "catalog_other": "MCP: {{count}} tools in this turn (limit {{limit}})",
+    "nonText_one": "The response includes one non-text content block. Open the full result to inspect it.",
+    "nonText_other": "The response includes {{count}} non-text content blocks. Open the full result to inspect them."
   }
 }

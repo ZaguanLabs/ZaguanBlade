@@ -9,9 +9,12 @@ pub mod credentials;
 pub mod identity;
 pub(crate) mod invocation;
 pub mod mcp_session;
+pub(crate) mod native_catalog;
+pub(crate) mod native_turn;
 pub(crate) mod permissions;
 pub mod probe;
 pub mod process;
+pub(crate) mod result_artifact;
 pub mod runtime;
 pub mod store;
 
@@ -44,4 +47,6 @@ pub enum RuntimeError {
     PermissionDenied,
     InvalidArguments,
     UnsupportedResult,
+    ArtifactUnavailable,
+    CallLimit,
 }

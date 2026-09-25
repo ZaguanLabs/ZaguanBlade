@@ -810,7 +810,9 @@
           "permission_required": "Autoriza esta llamada antes de ejecutarla. Conectar un servidor no autoriza el uso de sus herramientas.",
           "permission_denied": "Esta llamada a la herramienta no está autorizada para la conversación actual.",
           "invalid_arguments": "Los argumentos o la identidad de la solicitud de la herramienta no son válidos.",
-          "unsupported_result": "El servidor ha solicitado una interacción o tarea en segundo plano no compatible. La llamada puede haber producido efectos y no se ha vuelto a ejecutar."
+          "unsupported_result": "El servidor ha solicitado una interacción o tarea en segundo plano no compatible. La llamada puede haber producido efectos y no se ha vuelto a ejecutar.",
+          "artifact_unavailable": "El resultado completo no está disponible; se conserva la vista previa en la conversación.",
+          "call_limit": "Este turno ha alcanzado el límite de llamadas MCP o ha repetido un identificador de llamada."
         },
         "mcpResult_other": "{{count}} herramientas; recursos: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "El agente anuncia {{count}} métodos de autenticación. No se ha iniciado ninguna sesión.",
@@ -854,7 +856,7 @@
       },
       "catalog": {
         "title": "Herramientas descubiertas en {{name}}",
-        "help": "Este catálogo procede de la prueba de conexión finalizada. Las descripciones y anotaciones las proporciona el servidor y no conceden permiso para ejecutar herramientas. El acceso desde las conversaciones aún no está disponible.",
+        "help": "Esta vista procede de la prueba de conexión. Conecta el servidor para que sus herramientas estén disponibles en las nuevas conversaciones nativas. Las descripciones y anotaciones del servidor no conceden permiso para ejecutar herramientas.",
         "search": "Buscar herramientas",
         "details": "Inspeccionar el esquema y los metadatos",
         "alias": "Identificador de enrutamiento: {{alias}}",
@@ -866,11 +868,11 @@
         "previous": "Anterior",
         "next": "Siguiente",
         "page": "Página {{page}} de {{pages}}",
-        "liveHelp": "Herramientas descubiertas en la conexión actual. Actualiza el catálogo para comprobar si hay cambios. Las descripciones y anotaciones del servidor no conceden permiso para ejecutar herramientas. El acceso desde las conversaciones aún no está disponible."
+        "liveHelp": "Herramientas de la conexión actual. Actualiza para comprobar si hay cambios; los nuevos turnos usarán el catálogo actualizado. Las descripciones y anotaciones no conceden permiso para ejecutar herramientas."
       },
       "connection": {
         "title": "Conexión MCP activa",
-        "help": "Mantén este servidor local conectado en el espacio de trabajo actual. Cerrar Ajustes no detiene el servidor. La ejecución de herramientas en las conversaciones sigue en desarrollo.",
+        "help": "Las herramientas conectadas están disponibles en las nuevas conversaciones de Ollama y proveedores compatibles con OpenAI, con permiso para cada llamada. Las conversaciones de Zaguán en la nube aún no son compatibles. El servidor sigue en ejecución al cerrar Ajustes.",
         "connect": "Conectar",
         "disconnect": "Desconectar",
         "refresh": "Actualizar herramientas",
@@ -885,7 +887,7 @@
         "statusUnavailable": "Estado de la conexión no disponible",
         "reviewTitle": "Conectar con {{name}}",
         "allow": "Permitir esta conexión",
-        "reviewHelp": "Se iniciará el programa indicado con tus permisos de usuario y las variables de entorno configuradas. Puede acceder a archivos y a la red. Seguirá ejecutándose hasta que lo desconectes, cierres el espacio de trabajo, salgas de Blade o cambies su configuración guardada, sus credenciales o las restricciones del espacio de trabajo. Esta autorización permite iniciar una conexión, pero no ejecutar herramientas."
+        "reviewHelp": "Se iniciará el programa indicado con tus permisos de usuario y las variables de entorno configuradas. Puede acceder a archivos y a la red. Seguirá ejecutándose hasta que lo desconectes, cierres el espacio de trabajo, salgas de Blade o cambies su configuración guardada, sus credenciales o las restricciones del espacio de trabajo. Esta autorización permite iniciar una conexión, pero no ejecutar herramientas. Los nombres, las descripciones y los esquemas de las herramientas pueden compartirse con el proveedor del modelo nativo seleccionado."
       }
     },
     "retryLoading": "Volver a cargar los ajustes",
@@ -1587,5 +1589,43 @@
     "bladeTerminalFailed": "No se pudo ejecutar el comando en la terminal Blade: {{error}}",
     "cancelledByUser": "Comando cancelado por el usuario.",
     "terminalExitedEarly": "La terminal del comando terminó antes de completarse (salida {{code}})."
+  },
+  "mcpChat": {
+    "title": "Herramientas MCP",
+    "catalog": "MCP: {{count}} herramientas en este turno (límite: {{limit}})",
+    "catalogHelp": "El catálogo se mantiene fijo durante este turno. Conecta o actualiza los servidores en Ajustes y envía un nuevo mensaje para usar el catálogo actualizado. Los esquemas de las herramientas se comparten con el proveedor del modelo seleccionado.",
+    "excluded": {
+      "schema": "Este adaptador de proveedor no admite el esquema.",
+      "budget": "Excluida por el límite de herramientas o de tamaño de los esquemas."
+    },
+    "blocked": {
+      "remote": "Las herramientas MCP de la conversación no están disponibles mientras el control remoto esté configurado.",
+      "provider": "Este modelo no admite llamadas nativas a herramientas.",
+      "budget": "El catálogo combinado de herramientas supera el límite de este proveedor.",
+      "uncertain": "No se conoce el resultado de una llamada MCP. Se han bloqueado las demás llamadas MCP de este turno; comprueba el servicio externo antes de volver a intentarlo.",
+      "model_changed": "Has cambiado el modelo seleccionado. Se ha detenido este turno; envía un nuevo mensaje para continuar con el nuevo modelo."
+    },
+    "approval": "¿Permitir que {{server}} ejecute {{tool}}?",
+    "approvalHelp": "Esta herramienta externa puede acceder a archivos o servicios. El permiso se aplica solo a estos argumentos y a esta llamada, y caduca a los 60 segundos.",
+    "arguments": "Revisar argumentos",
+    "deny": "Denegar",
+    "allow": "Permitir una vez",
+    "tool": "Herramienta MCP",
+    "waiting": "Esperando el permiso o la respuesta de la herramienta externa.",
+    "outcome": {
+      "completed": "La herramienta externa ha respondido.",
+      "unknown": "Resultado desconocido. La operación externa puede haberse realizado. Compruébalo antes de volver a intentarlo.",
+      "not_started": "No se ha iniciado la herramienta externa."
+    },
+    "invalidResult": "No se ha podido mostrar el resultado MCP.",
+    "toolError": "El servidor ha indicado un error de la herramienta.",
+    "truncated": "Se ha acortado la vista previa del texto. Abre el resultado completo para consultar la respuesta guardada.",
+    "nonText": "La respuesta incluye {{count}} bloques de contenido no textual. Abre el resultado completo para consultarlos.",
+    "fullResult": "Abrir resultado completo (JSON)",
+    "artifactUnavailable": "El resultado completo no está disponible; se conserva la vista previa en la conversación.",
+    "catalog_one": "MCP: {{count}} herramienta en este turno (límite: {{limit}})",
+    "catalog_other": "MCP: {{count}} herramientas en este turno (límite: {{limit}})",
+    "nonText_one": "La respuesta incluye un bloque de contenido no textual. Abre el resultado completo para consultarlo.",
+    "nonText_other": "La respuesta incluye {{count}} bloques de contenido no textual. Abre el resultado completo para consultarlos."
   }
 }

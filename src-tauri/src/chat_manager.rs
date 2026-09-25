@@ -465,6 +465,8 @@ struct OllamaChatChunk {
 }
 
 pub struct ChatManager {
+    pub(crate) native_mcp: Option<Arc<crate::integrations::native_turn::NativeMcpTurn>>,
+    pub(crate) turn_generation: uuid::Uuid,
     pub streaming: bool,
     pub rx: Option<mpsc::Receiver<ProviderEvent>>,
     pub xml_buffer: String,
@@ -554,6 +556,8 @@ impl ChatManager {
             active_request_id: None,
             ws_conversation_messages: Arc::new(Mutex::new(Vec::new())),
             staged_active_file_identity: None,
+            native_mcp: None,
+            turn_generation: uuid::Uuid::new_v4(),
         }
     }
 
@@ -833,6 +837,8 @@ impl ChatManager {
         mode: Option<String>,
         composite_tools_enabled: bool,
     ) -> Result<(), String> {
+        self.turn_generation = uuid::Uuid::new_v4();
+        self.pending_results.clear();
         self.reasoning_parser.reset();
         self.xml_buffer.clear();
         self.accumulated_tool_calls.clear();
@@ -1693,15 +1699,32 @@ impl ChatManager {
 
         let tool_cache_key = local_tool_support_cache_key("ollama", &model_name);
         let include_tools = !model_disables_tools(&tool_cache_key);
+        if !include_tools {
+            if let Some(turn) = &self.native_mcp {
+                turn.block("provider");
+            }
+        }
+        let mcp_schemas = self
+            .native_mcp
+            .as_ref()
+            .map(|turn| turn.schemas())
+            .unwrap_or_default();
+        let has_mcp_tools = !mcp_schemas.is_empty();
         let request = OllamaChatRequest {
             model: model_name.clone(),
             messages,
             stream: true,
             tools: include_tools.then(|| {
-                crate::index_policy::filter_tools(
+                let mut tools = crate::index_policy::filter_tools(
                     get_tool_definitions_for_model(&model_name, composite_tools_enabled),
                     crate::index_policy::enabled(Path::new(&workspace_root)).unwrap_or(false),
-                )
+                );
+                if tools.len() + mcp_schemas.len() <= 128 {
+                    tools.extend(mcp_schemas.clone());
+                } else if let Some(turn) = &self.native_mcp {
+                    turn.block("budget");
+                }
+                tools
             }),
             options: Some(OllamaOptions {
                 temperature: gemma4_temperature(&model_name),
@@ -1759,7 +1782,7 @@ impl ChatManager {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
 
-                if include_tools && is_tools_unsupported_error(status, &body) {
+                if include_tools && !has_mcp_tools && is_tools_unsupported_error(status, &body) {
                     remember_model_disables_tools(&tool_cache_key);
 
                     let retry_request = OllamaChatRequest {
@@ -2158,7 +2181,21 @@ impl ChatManager {
                     messages.push(OpenAIMessage {
                         role: "assistant".to_string(),
                         content,
-                        tool_calls: msg.tool_calls.clone(),
+                        // Keep MCP's UI status and result envelope in the tool
+                        // response, not in the provider's function-call object.
+                        tool_calls: msg.tool_calls.as_ref().map(|calls| {
+                            calls
+                                .iter()
+                                .map(|call| {
+                                    let mut call = call.clone();
+                                    if call.function.name.starts_with("mcp_") {
+                                        call.status = None;
+                                        call.result = None;
+                                    }
+                                    call
+                                })
+                                .collect()
+                        }),
                         tool_call_id: None,
                     });
                 }
@@ -2183,15 +2220,32 @@ impl ChatManager {
 
         let tool_cache_key = local_tool_support_cache_key("openai-compat", &model_name);
         let include_tools = !model_disables_tools(&tool_cache_key);
+        if !include_tools {
+            if let Some(turn) = &self.native_mcp {
+                turn.block("provider");
+            }
+        }
+        let mcp_schemas = self
+            .native_mcp
+            .as_ref()
+            .map(|turn| turn.schemas())
+            .unwrap_or_default();
+        let has_mcp_tools = !mcp_schemas.is_empty();
         let request_body = OpenAIRequest {
             model: model_name.clone(),
             messages,
             stream: true,
             tools: include_tools.then(|| {
-                crate::index_policy::filter_tools(
+                let mut tools = crate::index_policy::filter_tools(
                     get_tool_definitions_for_model(&model_name, composite_tools_enabled),
                     crate::index_policy::enabled(Path::new(&workspace_root)).unwrap_or(false),
-                )
+                );
+                if tools.len() + mcp_schemas.len() <= 128 {
+                    tools.extend(mcp_schemas.clone());
+                } else if let Some(turn) = &self.native_mcp {
+                    turn.block("budget");
+                }
+                tools
             }),
             temperature: gemma4_temperature(&model_name),
             top_p: gemma4_top_p(&model_name),
@@ -2262,7 +2316,7 @@ impl ChatManager {
                 let status = response.status();
                 let text = response.text().await.unwrap_or_default();
 
-                if include_tools && is_tools_unsupported_error(status, &text) {
+                if include_tools && !has_mcp_tools && is_tools_unsupported_error(status, &text) {
                     remember_model_disables_tools(&tool_cache_key);
                     let retry_request = OpenAIRequest {
                         tools: None,
@@ -2515,6 +2569,55 @@ impl ChatManager {
         Ok(())
     }
 
+    pub(crate) fn record_tool_results(
+        &mut self,
+        results: &[(ToolCall, crate::tools::ToolResult)],
+        conversation: &mut ConversationHistory,
+        is_local_mode: bool,
+    ) {
+        // Store tool results in conversation history
+        // RFC: Large Tool Result Handling - truncate in local mode
+        for (_call, result) in results.iter() {
+            if _call.function.name.starts_with("mcp_")
+                && conversation.iter().any(|message| {
+                    message.role == ChatRole::Tool
+                        && message.tool_call_id.as_deref() == Some(&_call.id)
+                })
+            {
+                continue;
+            }
+            let full_content = if _call.function.name.starts_with("mcp_") {
+                result.content.clone()
+            } else {
+                result.to_tool_content_for_tool(&_call.function.name)
+            };
+            let content = if is_local_mode && !_call.function.name.starts_with("mcp_") {
+                result.to_tool_content_truncated_for_tool(&_call.function.name)
+            } else {
+                full_content.clone()
+            };
+            let mut tool_msg = ChatMessage::new(ChatRole::Tool, content);
+            if is_local_mode {
+                tool_msg.backend_content = Some(full_content);
+            }
+            tool_msg.tool_call_id = Some(_call.id.clone());
+            conversation.push(tool_msg);
+        }
+
+        // Update tool call status in the assistant message and store for emission
+        // RFC: Large Tool Result Handling - truncate in local mode
+        if let Some(updated_assistant) =
+            conversation.update_tool_call_status_with_truncation(results, is_local_mode)
+        {
+            self.pending_results
+                .push_back(DrainResult::ToolStatusUpdate(updated_assistant));
+            self.updated_assistant_message = None;
+        } else {
+            self.updated_assistant_message = None;
+        }
+        self.sync_ws_conversation_messages(conversation);
+    }
+
     pub fn continue_tool_batch(
         &mut self,
         batch: PendingToolBatch,
@@ -2562,37 +2665,22 @@ impl ChatManager {
             );
         }
 
-        // Store tool results in conversation history
-        // RFC: Large Tool Result Handling - truncate in local mode
-        for (_call, result) in batch.file_results.iter() {
-            let full_content = result.to_tool_content_for_tool(&_call.function.name);
-            let content = if is_local_mode {
-                result.to_tool_content_truncated_for_tool(&_call.function.name)
-            } else {
-                full_content.clone()
-            };
-            let mut tool_msg = ChatMessage::new(ChatRole::Tool, content);
-            if is_local_mode {
-                tool_msg.backend_content = Some(full_content);
-            }
-            tool_msg.tool_call_id = Some(_call.id.clone());
-            conversation.push(tool_msg);
-        }
-
-        // Update tool call status in the assistant message and store for emission
-        // RFC: Large Tool Result Handling - truncate in local mode
-        if let Some(updated_assistant) =
-            conversation.update_tool_call_status_with_truncation(&batch.file_results, is_local_mode)
-        {
-            self.pending_results
-                .push_back(DrainResult::ToolStatusUpdate(updated_assistant));
-            self.updated_assistant_message = None;
-        } else {
-            self.updated_assistant_message = None;
-        }
-        self.sync_ws_conversation_messages(conversation);
-
+        self.record_tool_results(&batch.file_results, conversation, is_local_mode);
         let selected = resolve_model_selection(models, selected_model);
+        if self
+            .native_mcp
+            .as_ref()
+            .is_some_and(|turn| turn.has_tools())
+            && (selected.provider != self.active_provider
+                || selected.model_id_for_request.to_lowercase() != self.active_model_id)
+        {
+            if let Some(turn) = &self.native_mcp {
+                turn.block("model_changed");
+            }
+            self.request_stop();
+            return Ok(());
+        }
+
         self.update_stream_profile(selected.provider, &selected.model_id_for_request);
 
         match selected.provider {
@@ -3465,6 +3553,9 @@ impl ChatManager {
 
     /// Request to stop the current streaming response
     pub fn begin_stop(&mut self) -> bool {
+        if let Some(turn) = &self.native_mcp {
+            turn.cancel.cancel();
+        }
         let was_active = self.abort_handle.is_some()
             || self.streaming
             || self.rx.is_some()
@@ -3488,6 +3579,17 @@ impl ChatManager {
         let was_active = self.begin_stop();
         self.abort_stream_task();
         was_active
+    }
+
+    /// Invalidate callbacks and queued updates when the conversation is replaced
+    /// or cleared. Stopping within the same conversation keeps result delivery.
+    pub(crate) fn invalidate_turn(&mut self) {
+        if let Some(turn) = self.native_mcp.take() {
+            turn.cancel.cancel();
+        }
+        self.turn_generation = uuid::Uuid::new_v4();
+        self.pending_results.clear();
+        self.updated_assistant_message = None;
     }
 
     pub fn stop_requested(&self) -> bool {

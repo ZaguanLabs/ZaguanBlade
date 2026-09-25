@@ -1,3 +1,4 @@
+import { McpTurnPanel } from '../../components/McpTurnPanel';
 import React, { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatMessage as ChatMessageType, ChatMode, ComposerMention, HookApprovalRequest, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../../types/chat';
@@ -237,6 +238,8 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             style={{ '--markdown-font-size': 'var(--chat-content-font-size, 13px)' } as React.CSSProperties}
         >
             <ChatHeader activeTab={activeTab} onTabChange={setActiveTab} onNewConversation={handleNewConversation} />
+
+            {activeTab === 'chat' && <McpTurnPanel workspaceRoot={workspaceRoot} />}
 
             {activeTab === 'chat' ? (
                 <ChatViewport

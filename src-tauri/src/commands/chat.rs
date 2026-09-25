@@ -21,6 +21,7 @@ pub(crate) async fn graceful_close_active_chat_session(state: &AppState) {
         let mut mgr = state.chat_manager.lock().unwrap();
         let close_target = mgr.stop_signal_target();
         let was_active = mgr.begin_stop();
+        mgr.invalidate_turn();
         if was_active {
             mgr.abort_stream_task();
         }

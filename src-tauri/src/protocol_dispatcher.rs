@@ -237,6 +237,16 @@ pub async fn dispatch(
                     Ok(())
                 }
                 blade_protocol::ChatIntent::ClearHistory {} => {
+                    {
+                        let mut manager = state.chat_manager.lock().map_err(|_| {
+                            blade_protocol::BladeError::Internal {
+                                trace_id: intent_id.to_string(),
+                                message: "chat state unavailable".into(),
+                            }
+                        })?;
+                        manager.request_stop();
+                        manager.invalidate_turn();
+                    }
                     let mut conversation = state.conversation.lock().map_err(|e| {
                         blade_protocol::BladeError::Internal {
                             trace_id: intent_id.to_string(),

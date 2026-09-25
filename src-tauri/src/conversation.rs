@@ -130,7 +130,9 @@ impl ConversationHistory {
                                     "error".to_string()
                                 });
                                 // RFC: Large Tool Result Handling - truncate in local mode
-                                tc.result = Some(if truncate {
+                                tc.result = Some(if call.function.name.starts_with("mcp_") {
+                                    result.content.clone()
+                                } else if truncate {
                                     result.to_tool_content_truncated_for_tool(&call.function.name)
                                 } else {
                                     result.to_tool_content_for_tool(&call.function.name)

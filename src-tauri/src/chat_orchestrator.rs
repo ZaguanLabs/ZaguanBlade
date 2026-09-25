@@ -550,6 +550,7 @@ pub async fn handle_send_message<R: Runtime>(
 
     // 2. Start Stream
     let models = load_available_models(&state).await?;
+    let mcp_remote_blocked = state.remote_control.is_configured().await;
     let is_local_model = state.is_local_model_active().await;
     let workspace_path = {
         let workspace = state
@@ -616,7 +617,7 @@ pub async fn handle_send_message<R: Runtime>(
         );
     }
 
-    {
+    let orchestration_generation = {
         let mut mgr = state
             .chat_manager
             .lock()
@@ -676,6 +677,30 @@ pub async fn handle_send_message<R: Runtime>(
         // consumed (taken) when the Zaguan workspace payload is built.
         mgr.stage_active_file_identity(active_file_identity);
 
+        if let Some(previous) = mgr.native_mcp.take() {
+            previous.cancel.cancel();
+        }
+        let selection = crate::providers::resolve_model_selection(&models, selected_model);
+        if window.label() == "main"
+            && matches!(
+                selection.provider,
+                crate::providers::ProviderId::Ollama | crate::providers::ProviderId::OpenAiCompat
+            )
+        {
+            if let (Ok(documents), Ok(conversation_id)) = (
+                state.document_service(),
+                uuid::Uuid::parse_str(&conversation.metadata.id),
+            ) {
+                mgr.native_mcp = crate::integrations::native_turn::NativeMcpTurn::new(
+                    state.integrations.clone(),
+                    documents,
+                    conversation_id,
+                    mcp_remote_blocked,
+                )
+                .ok();
+            }
+        }
+
         mgr.start_stream(
             actual_message,
             &mut conversation,
@@ -695,7 +720,8 @@ pub async fn handle_send_message<R: Runtime>(
         .map_err(|e| e.to_string())?;
 
         blade_event_scheduler::reset_chat_stream();
-    }
+        mgr.turn_generation
+    };
 
     // 3. Event-Driven Processing (Background Task)
     // Only processes events when there's actual streaming activity
@@ -725,6 +751,9 @@ pub async fn handle_send_message<R: Runtime>(
                 finish_reason,
             ) = {
                 let mut mgr = state.chat_manager.lock().unwrap();
+                if mgr.turn_generation != orchestration_generation {
+                    break;
+                }
                 let mut conversation = state.conversation.lock().unwrap();
                 let res = mgr.drain_events(&mut conversation);
                 (
@@ -1279,6 +1308,43 @@ pub async fn handle_send_message<R: Runtime>(
                     Some(app_handle.clone()),
                 );
 
+                let all_calls = calls.clone();
+                let (external, calls): (Vec<_>, Vec<_>) = calls
+                    .into_iter()
+                    .partition(|call| call.function.name.starts_with("mcp_"));
+                let native_turn = state.chat_manager.lock().unwrap().native_mcp.clone();
+                let mut external_results = Vec::new();
+                for call in external {
+                    let result = match &native_turn {
+                        Some(turn) => turn.execute(&call).await,
+                        None => crate::tools::ToolResult { success: false, content: serde_json::json!({"mcp_result_version":1,"alias":call.function.name,"result":{"error":"permission_denied","outcome":"not_started","retry":false}}).to_string(), error: None, skipped: false },
+                    };
+                    external_results.push((call, result));
+                }
+                {
+                    let mut mgr = state.chat_manager.lock().unwrap();
+                    if mgr.turn_generation != orchestration_generation {
+                        break;
+                    }
+                    let mut conversation = state.conversation.lock().unwrap();
+                    if native_turn.as_ref().is_some_and(|turn| {
+                        turn.conversation.to_string() != conversation.metadata.id
+                    }) {
+                        break;
+                    }
+                    // Persist external outcomes before other tools or approvals can
+                    // block. Continuation deduplicates these tool messages.
+                    if !external_results.is_empty() {
+                        mgr.record_tool_results(&external_results, &mut conversation, true);
+                    }
+                    if mgr.stop_requested()
+                        || native_turn.as_ref().is_some_and(|turn| !turn.is_current())
+                    {
+                        mgr.request_stop();
+                        continue;
+                    }
+                }
+
                 let blocking_app_handle = app_handle.clone();
                 let blocking_ws_root = ws_root.clone();
                 let batch_opt = tokio::task::spawn_blocking(move || {
@@ -1315,7 +1381,20 @@ pub async fn handle_send_message<R: Runtime>(
                 };
 
                 let mut batch_to_run = None;
-                let pending = pending_opt.or(batch_opt);
+                let mut pending = pending_opt.or(batch_opt);
+                if !external_results.is_empty() {
+                    let batch =
+                        pending.get_or_insert_with(|| crate::ai_workflow::PendingToolBatch {
+                            calls: Vec::new(),
+                            file_results: Vec::new(),
+                            commands: Vec::new(),
+                            changes: Vec::new(),
+                            confirms: Vec::new(),
+                            loop_detected: false,
+                        });
+                    batch.calls = all_calls;
+                    batch.file_results.extend(external_results);
+                }
 
                 if let Some(batch) = pending {
                     // Check if there are actions requiring approval (commands, confirms)
@@ -1627,6 +1706,9 @@ pub async fn handle_send_message<R: Runtime>(
                             let selected_model_idx = *state.selected_model_index.lock().unwrap();
                             let http = reqwest::Client::new();
 
+                            if mgr.turn_generation != orchestration_generation {
+                                break;
+                            }
                             mgr.continue_tool_batch(
                                 batch,
                                 &mut conversation,
@@ -1691,6 +1773,9 @@ pub async fn handle_send_message<R: Runtime>(
                             let selected_model_idx = *state.selected_model_index.lock().unwrap();
                             let http = reqwest::Client::new();
 
+                            if mgr.turn_generation != orchestration_generation {
+                                break;
+                            }
                             mgr.continue_tool_batch(
                                 batch,
                                 &mut conversation,

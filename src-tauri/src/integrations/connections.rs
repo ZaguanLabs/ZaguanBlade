@@ -1256,6 +1256,28 @@ for line in sys.stdin:
         assert!(!result.is_error);
         assert!(result.result.get("structuredContent").is_some());
         assert!(!result.text.is_empty());
+        let turn = super::super::native_turn::NativeMcpTurn::new(
+            fixture.runtime.clone(),
+            fixture.documents.clone(),
+            Uuid::new_v4(),
+            false,
+        )
+        .unwrap();
+        assert!(turn
+            .schemas()
+            .iter()
+            .any(|schema| schema["function"]["name"] == tool.alias));
+        let call: crate::protocol::ToolCall = serde_json::from_value(json!({"id":"native-atlas","type":"function","function":{"name":tool.alias,"arguments":"{\"query\":\"mode\"}"}})).unwrap();
+        let task = tokio::spawn({
+            let turn = turn.clone();
+            async move { turn.execute(&call).await }
+        });
+        let request = native_pending(&turn).await;
+        turn.respond(request, true).unwrap();
+        let result = task.await.unwrap();
+        assert!(result.success);
+        let result: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        assert!(result["result"]["artifact"].is_object());
         fixture
             .runtime
             .connections
@@ -1698,6 +1720,450 @@ for line in sys.stdin:
             Err(RuntimeError::WorkspaceChanged)
         ));
         assert_eq!(fixture.call_count(), 0);
+        fixture.runtime.shutdown().await;
+    }
+
+    fn native_call(
+        turn: &super::super::native_turn::NativeMcpTurn,
+        id: &str,
+    ) -> crate::protocol::ToolCall {
+        serde_json::from_value(json!({"id":id,"type":"function","function":{"name":turn.schemas()[0]["function"]["name"],"arguments":"{\"query\":\"native\"}"}})).unwrap()
+    }
+    async fn native_pending(turn: &super::super::native_turn::NativeMcpTurn) -> Uuid {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(review) = turn.state().unwrap().pending.first() {
+                    return review.request_id;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+    #[tokio::test]
+    async fn native_conversation_consent_artifacts_and_remote_gate() {
+        use super::super::{native_turn::NativeMcpTurn, result_artifact::ArtifactRef};
+        for mode in ["normal", "modern", "tool_error"] {
+            let fixture = Fixture::new(mode);
+            fixture.connect().await;
+            fixture.phase(ConnectionPhase::Connected).await;
+            let conversation = Uuid::new_v4();
+            let turn = NativeMcpTurn::new(
+                fixture.runtime.clone(),
+                fixture.documents.clone(),
+                conversation,
+                false,
+            )
+            .unwrap();
+            assert_eq!(turn.schemas().len(), 1);
+            let call = native_call(&turn, "native-1");
+            let task = tokio::spawn({
+                let turn = turn.clone();
+                let call = call.clone();
+                async move { turn.execute(&call).await }
+            });
+            let request = native_pending(&turn).await;
+            assert_eq!(fixture.call_count(), 0);
+            turn.respond(request, false).unwrap();
+            let denied = task.await.unwrap();
+            let denied: serde_json::Value = serde_json::from_str(&denied.content).unwrap();
+            assert_eq!(denied["result"]["outcome"], "not_started");
+            assert_eq!(fixture.call_count(), 0);
+            let mut call = call;
+            call.id = "native-2".into();
+            let task = tokio::spawn({
+                let turn = turn.clone();
+                let call = call.clone();
+                async move { turn.execute(&call).await }
+            });
+            let request = native_pending(&turn).await;
+            turn.respond(request, true).unwrap();
+            assert_eq!(
+                turn.respond(request, true),
+                Err(RuntimeError::ApprovalExpired)
+            );
+            let result = task.await.unwrap();
+            assert_eq!(result.success, mode != "tool_error");
+            let envelope: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+            assert_eq!(envelope["tool"], "search");
+            let reference: ArtifactRef =
+                serde_json::from_value(envelope["result"]["artifact"].clone()).unwrap();
+            let stored = fixture
+                .runtime
+                .read_result_artifact(&fixture.documents.identity().workspace_id, &reference)
+                .unwrap();
+            assert_eq!(
+                stored["result"]["structuredContent"]["arguments"]["query"],
+                "native"
+            );
+            assert_eq!(stored["scope"]["conversation_id"], conversation.to_string());
+            assert!(fixture
+                .runtime
+                .read_result_artifact("wrong-workspace", &reference)
+                .is_err());
+            assert!(!turn.execute(&call).await.success);
+            assert_eq!(fixture.call_count(), 1);
+            let remote = NativeMcpTurn::new(
+                fixture.runtime.clone(),
+                fixture.documents.clone(),
+                conversation,
+                true,
+            )
+            .unwrap();
+            assert!(remote.schemas().is_empty());
+            assert_eq!(remote.state().unwrap().blocked, Some("remote"));
+            assert!(!remote.execute(&call).await.success);
+            fixture.runtime.shutdown().await;
+        }
+    }
+    #[tokio::test]
+    async fn native_cancel_pending_and_unknown_calls_do_not_repeat() {
+        use super::super::native_turn::NativeMcpTurn;
+        let fixture = Fixture::new("slow_call");
+        fixture.connect().await;
+        fixture.phase(ConnectionPhase::Connected).await;
+        let pending_turn = NativeMcpTurn::new(
+            fixture.runtime.clone(),
+            fixture.documents.clone(),
+            Uuid::new_v4(),
+            false,
+        )
+        .unwrap();
+        let call = native_call(&pending_turn, "cancel-before");
+        let task = tokio::spawn({
+            let turn = pending_turn.clone();
+            async move { turn.execute(&call).await }
+        });
+        let request = native_pending(&pending_turn).await;
+        pending_turn.cancel.cancel();
+        assert_eq!(
+            pending_turn.respond(request, true),
+            Err(RuntimeError::Cancelled)
+        );
+        let result: serde_json::Value = serde_json::from_str(&task.await.unwrap().content).unwrap();
+        assert_eq!(result["result"]["outcome"], "not_started");
+        assert_eq!(fixture.call_count(), 0);
+        let turn = NativeMcpTurn::new(
+            fixture.runtime.clone(),
+            fixture.documents.clone(),
+            Uuid::new_v4(),
+            false,
+        )
+        .unwrap();
+        let mut call = native_call(&turn, "cancel-after");
+        let task = tokio::spawn({
+            let turn = turn.clone();
+            let call = call.clone();
+            async move { turn.execute(&call).await }
+        });
+        let request = native_pending(&turn).await;
+        turn.respond(request, true).unwrap();
+        fixture.called().await;
+        turn.cancel.cancel();
+        let result: serde_json::Value = serde_json::from_str(&task.await.unwrap().content).unwrap();
+        assert_eq!(result["result"]["outcome"], "unknown");
+        assert_eq!(turn.state().unwrap().blocked, Some("uncertain"));
+        assert!(turn.state().unwrap().pending.is_empty());
+        call.id = "model-retry".into();
+        assert!(!turn.execute(&call).await.success);
+        assert_eq!(fixture.call_count(), 1);
+        fixture.runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn native_provider_wire_conversation_uses_approved_mcp_with_index_disabled() {
+        use super::super::native_turn::NativeMcpTurn;
+        use crate::{
+            ai_workflow::PendingToolBatch,
+            chat_manager::{ChatManager, DrainResult},
+            config::ApiConfig,
+            conversation::ConversationHistory,
+            models::registry::ModelInfo,
+            protocol::{ChatMessage, ChatRole},
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for provider in ["ollama", "openai-compat"] {
+            let fixture = Fixture::new("normal");
+            let mut settings = crate::project_settings::ProjectSettings::default();
+            settings.integrations.symbols_index_enabled = Some(false);
+            crate::project_settings::save_project_settings(fixture.root.path(), &settings).unwrap();
+            fixture.connect().await;
+            fixture.phase(ConnectionPhase::Connected).await;
+            let mut history = ConversationHistory::new();
+            let turn = NativeMcpTurn::new(
+                fixture.runtime.clone(),
+                fixture.documents.clone(),
+                Uuid::parse_str(&history.metadata.id).unwrap(),
+                false,
+            )
+            .unwrap();
+            let alias = turn.schemas()[0]["function"]["name"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server_alias = alias.clone();
+            let peer = tokio::spawn(async move {
+                let mut requests = Vec::new();
+                for round in 0..2 {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut bytes = Vec::new();
+                    let (header_end, length) = loop {
+                        let mut buffer = [0; 4096];
+                        let count = socket.read(&mut buffer).await.unwrap();
+                        assert!(count > 0);
+                        bytes.extend_from_slice(&buffer[..count]);
+                        if let Some(start) = bytes.windows(4).position(|slice| slice == b"\r\n\r\n")
+                        {
+                            let header = String::from_utf8_lossy(&bytes[..start]).to_lowercase();
+                            let length = header
+                                .lines()
+                                .find_map(|line| line.strip_prefix("content-length:"))
+                                .unwrap()
+                                .trim()
+                                .parse::<usize>()
+                                .unwrap();
+                            break (start + 4, length);
+                        }
+                    };
+                    while bytes.len() < header_end + length {
+                        let mut buffer = [0; 4096];
+                        let count = socket.read(&mut buffer).await.unwrap();
+                        assert!(count > 0);
+                        bytes.extend_from_slice(&buffer[..count]);
+                    }
+                    let request: serde_json::Value =
+                        serde_json::from_slice(&bytes[header_end..header_end + length]).unwrap();
+                    requests.push(request);
+                    let response = if provider == "ollama" {
+                        if round == 0 {
+                            json!({"model":"mcp-fixture","message":{"role":"assistant","content":"","tool_calls":[{"id":"native-wire","type":"function","function":{"name":server_alias,"arguments":{"query":"wire"}}}]},"done":true,"done_reason":"stop"}).to_string() + "\n"
+                        } else {
+                            json!({"model":"mcp-fixture","message":{"role":"assistant","content":"Read the MCP result."},"done":true,"done_reason":"stop"}).to_string() + "\n"
+                        }
+                    } else {
+                        let delta = if round == 0 {
+                            json!({"tool_calls":[{"index":0,"id":"native-wire","type":"function","function":{"name":server_alias,"arguments":"{\"query\":\"wire\"}"}}]})
+                        } else {
+                            json!({"content":"Read the MCP result."})
+                        };
+                        format!(
+                            "data: {}\n\ndata: [DONE]\n\n",
+                            json!({"choices":[{"index":0,"delta":delta,"finish_reason":if round==0 {"tool_calls"} else {"stop"}}]})
+                        )
+                    };
+                    let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", if provider=="ollama" {"application/x-ndjson"} else {"text/event-stream"}, response.len(), response);
+                    socket.write_all(reply.as_bytes()).await.unwrap();
+                }
+                requests
+            });
+            let config = ApiConfig {
+                ollama_url: url.clone(),
+                openai_compat_url: url,
+                ..Default::default()
+            };
+            let models = vec![ModelInfo {
+                id: format!("{provider}/mcp-fixture"),
+                name: "Fixture".into(),
+                description: String::new(),
+                provider: Some(provider.into()),
+                reasoning_effort: None,
+                api_id: None,
+            }];
+            let workspace = fixture.root.path().to_path_buf();
+            let mut manager = ChatManager::new(50);
+            manager.native_mcp = Some(turn.clone());
+            history.push(ChatMessage::new(
+                ChatRole::User,
+                "Use the connected tool".into(),
+            ));
+            manager
+                .start_stream(
+                    "Use the connected tool".into(),
+                    &mut history,
+                    &config,
+                    &models,
+                    0,
+                    Some(&workspace),
+                    None,
+                    None,
+                    None,
+                    None,
+                    reqwest::Client::new(),
+                    Some("local".into()),
+                    None,
+                    true,
+                )
+                .unwrap();
+            let calls = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    match manager.drain_events(&mut history) {
+                        DrainResult::ToolCalls(calls, _) => break calls,
+                        DrainResult::Error(error) => panic!("provider error: {error}"),
+                        _ => tokio::time::sleep(Duration::from_millis(10)).await,
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].function.name, alias);
+            let task = tokio::spawn({
+                let turn = turn.clone();
+                let call = calls[0].clone();
+                async move { turn.execute(&call).await }
+            });
+            let review = native_pending(&turn).await;
+            assert_eq!(fixture.call_count(), 0);
+            turn.respond(review, true).unwrap();
+            let result = task.await.unwrap();
+            assert!(result.success);
+            let results = vec![(calls[0].clone(), result)];
+            manager.record_tool_results(&results, &mut history, true);
+            let batch = PendingToolBatch {
+                calls,
+                file_results: results,
+                commands: Vec::new(),
+                changes: Vec::new(),
+                confirms: Vec::new(),
+                loop_detected: false,
+            };
+            manager
+                .continue_tool_batch(
+                    batch,
+                    &mut history,
+                    &config,
+                    &models,
+                    0,
+                    Some(&workspace),
+                    true,
+                    reqwest::Client::new(),
+                )
+                .unwrap();
+            let requests = tokio::time::timeout(Duration::from_secs(10), peer)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(requests.len(), 2);
+            let assistant = requests[1]["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|message| {
+                    message
+                        .get("tool_calls")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|calls| !calls.is_empty())
+                })
+                .unwrap();
+            assert!(assistant["tool_calls"][0].get("result").is_none());
+            assert!(assistant["tool_calls"][0].get("status").is_none());
+            for request in &requests {
+                let tools = request["tools"].as_array().unwrap();
+                assert!(tools.iter().any(|tool| tool["function"]["name"] == alias));
+                assert!(!tools
+                    .iter()
+                    .any(|tool| tool["function"]["name"] == "symbol_search"));
+            }
+            let results: Vec<_> = requests[1]["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|message| message["role"] == "tool")
+                .collect();
+            assert_eq!(
+                results.len(),
+                1,
+                "immediate persistence must not duplicate continuation results"
+            );
+            let content: serde_json::Value =
+                serde_json::from_str(results[0]["content"].as_str().unwrap()).unwrap();
+            assert_eq!(content["mcp_result_version"], 1);
+            assert_eq!(content["result"]["outcome"], "completed");
+            assert!(content["result"]["projection"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("wire"));
+            assert!(!fixture
+                .root
+                .path()
+                .join(".zblade/index/symbols.db")
+                .exists());
+            manager.request_stop();
+            fixture.runtime.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn native_catalog_snapshot_and_pending_requests_retire_safely() {
+        use super::super::native_turn::NativeMcpTurn;
+        let fixture = Fixture::new("normal");
+        let connection = fixture.connect().await;
+        fixture.phase(ConnectionPhase::Connected).await;
+        let turn = NativeMcpTurn::new(
+            fixture.runtime.clone(),
+            fixture.documents.clone(),
+            Uuid::new_v4(),
+            false,
+        )
+        .unwrap();
+        let call = native_call(&turn, "abandoned");
+        let task = tokio::spawn({
+            let turn = turn.clone();
+            async move { turn.execute(&call).await }
+        });
+        let request = native_pending(&turn).await;
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(turn.state().unwrap().pending.is_empty());
+        assert_eq!(
+            turn.respond(request, true),
+            Err(RuntimeError::ApprovalExpired)
+        );
+        let before = turn.schemas();
+        fixture
+            .runtime
+            .connections
+            .refresh(connection.connection_id, &fixture.documents)
+            .unwrap();
+        fixture.phase(ConnectionPhase::Connected).await;
+        assert_eq!(
+            turn.schemas(),
+            before,
+            "a live refresh cannot remap an in-flight catalog"
+        );
+        let call = native_call(&turn, "stale");
+        let result: serde_json::Value =
+            serde_json::from_str(&turn.execute(&call).await.content).unwrap();
+        assert_eq!(result["result"]["error"], "catalog_changed");
+        assert_eq!(fixture.call_count(), 0);
+        let turn = NativeMcpTurn::new(
+            fixture.runtime.clone(),
+            fixture.documents.clone(),
+            Uuid::new_v4(),
+            false,
+        )
+        .unwrap();
+        let call = native_call(&turn, "disconnected");
+        let task = tokio::spawn({
+            let turn = turn.clone();
+            async move { turn.execute(&call).await }
+        });
+        native_pending(&turn).await;
+        fixture
+            .runtime
+            .connections
+            .disconnect(connection.connection_id, &fixture.documents)
+            .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(result["result"]["outcome"], "not_started");
+        assert!(turn.state().unwrap().pending.is_empty());
         fixture.runtime.shutdown().await;
     }
 }
