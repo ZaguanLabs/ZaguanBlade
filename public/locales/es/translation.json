@@ -806,7 +806,11 @@
           "catalog_changed": "El catálogo de herramientas ha cambiado. Actualízalo o vuelve a conectar.",
           "integration_disabled": "Este servidor está desactivado globalmente o en este espacio de trabajo. Actívalo en los ajustes guardados antes de conectarlo.",
           "policy_unavailable": "No se ha podido leer la configuración de integraciones o las restricciones del espacio de trabajo. Corrige el archivo de ajustes y vuelve a intentarlo.",
-          "connection_not_ready": "Esta conexión ya no está disponible. Comprueba su estado y vuelve a conectarla si es necesario."
+          "connection_not_ready": "Esta conexión ya no está disponible. Comprueba su estado y vuelve a conectarla si es necesario.",
+          "permission_required": "Autoriza esta llamada antes de ejecutarla. Conectar un servidor no autoriza el uso de sus herramientas.",
+          "permission_denied": "Esta llamada a la herramienta no está autorizada para la conversación actual.",
+          "invalid_arguments": "Los argumentos o la identidad de la solicitud de la herramienta no son válidos.",
+          "unsupported_result": "El servidor ha solicitado una interacción o tarea en segundo plano no compatible. La llamada puede haber producido efectos y no se ha vuelto a ejecutar."
         },
         "mcpResult_other": "{{count}} herramientas; recursos: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "El agente anuncia {{count}} métodos de autenticación. No se ha iniciado ninguna sesión.",

@@ -810,7 +810,11 @@
           "catalog_changed": "The tool catalog has changed. Refresh it or reconnect.",
           "integration_disabled": "This server is disabled globally or in this workspace. Enable it in the saved settings before connecting.",
           "policy_unavailable": "Could not read the integration or workspace policy. Correct the settings file and try again.",
-          "connection_not_ready": "This connection is no longer ready. Check its status and reconnect if needed."
+          "connection_not_ready": "This connection is no longer ready. Check its status and reconnect if needed.",
+          "permission_required": "Approve this tool call before running it. Connecting a server does not authorize its tools.",
+          "permission_denied": "This tool call was not authorized for the current conversation.",
+          "invalid_arguments": "The tool call arguments or request identity are invalid.",
+          "unsupported_result": "The server requested an unsupported interaction or background task. The call may have had effects and was not retried."
         },
         "mcpResult_other": "{{count}} tools; resources: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "{{count}} authentication methods advertised. No session was started.",

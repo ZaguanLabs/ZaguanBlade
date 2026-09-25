@@ -1,9 +1,11 @@
-//! Workspace-owned MCP process lifetimes. No tool execution is exposed here.
+//! Workspace-owned MCP process lifetimes and serialized, approved tool calls.
 use super::{
+    call_result::{CallFailure, CallOutcome, McpCallResult},
     catalog::McpCatalog,
     config::{ConnectionConfig, IntegrationDefinition, McpTransport, MAX_CONFIG_BYTES},
     identity::WorkspaceIdentity,
     mcp_session::McpSession,
+    permissions::{ApprovedCall, CallTarget},
     process::{PreparedProcess, SupervisedProcess},
     store::IntegrationStore,
     RuntimeError,
@@ -14,10 +16,13 @@ use std::{
     collections::HashMap,
     io::Read,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -59,9 +64,29 @@ struct Connection {
     definition: IntegrationDefinition,
     documents: Arc<DocumentService>,
     cancel: CancellationToken,
-    refresh: mpsc::Sender<()>,
+    commands: mpsc::Sender<Command>,
+    operation: Arc<Semaphore>,
+    fingerprint: String,
     snapshot: Mutex<Snapshot>,
     worker: Mutex<Option<tokio::task::AbortHandle>>,
+}
+
+enum Command {
+    Refresh(OwnedSemaphorePermit),
+    Call(CallRequest),
+}
+struct CallRequest {
+    approved: ApprovedCall,
+    cancel: CancellationToken,
+    sent: Arc<AtomicBool>,
+    response: oneshot::Sender<Result<McpCallResult, CallFailure>>,
+    _slot: OwnedSemaphorePermit,
+}
+pub(super) struct CallBinding {
+    pub definition: IntegrationDefinition,
+    pub fingerprint: String,
+    pub tool_name: String,
+    pub cancel: CancellationToken,
 }
 impl Connection {
     fn stop(&self, error: Option<RuntimeError>) {
@@ -163,12 +188,14 @@ impl ConnectionRegistry {
             tools: 0,
             error: None,
         };
-        let (refresh, receiver) = mpsc::channel(1);
+        let (commands, receiver) = mpsc::channel(1);
         let connection = Arc::new(Connection {
             definition,
             documents,
             cancel,
-            refresh,
+            commands,
+            operation: Arc::new(Semaphore::new(1)),
+            fingerprint: prepared.fingerprint.clone(),
             worker: Mutex::new(None),
             snapshot: Mutex::new(Snapshot {
                 status: status.clone(),
@@ -325,6 +352,11 @@ impl ConnectionRegistry {
     }
     pub fn refresh(&self, id: Uuid, documents: &DocumentService) -> Result<(), RuntimeError> {
         let entry = self.owned(id, documents)?;
+        let slot = entry
+            .operation
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| RuntimeError::Busy)?;
         {
             let mut snapshot = entry.snapshot.lock().map_err(|_| RuntimeError::Busy)?;
             if snapshot.status.phase != ConnectionPhase::Connected || entry.cancel.is_cancelled() {
@@ -334,12 +366,152 @@ impl ConnectionRegistry {
             snapshot.status.catalog_revision = None;
             snapshot.catalog = None;
         }
-        if entry.refresh.try_send(()).is_err() {
+        if entry.commands.try_send(Command::Refresh(slot)).is_err() {
             entry.stop(Some(RuntimeError::ConnectionNotReady));
             return Err(RuntimeError::ConnectionNotReady);
         }
         Ok(())
     }
+
+    pub(super) fn call_binding(
+        &self,
+        target: &CallTarget,
+        documents: &DocumentService,
+    ) -> Result<CallBinding, RuntimeError> {
+        let entry = self.owned(target.connection_id, documents)?;
+        let tool_name = current_tool(&entry, target)?;
+        Ok(CallBinding {
+            definition: entry.definition.clone(),
+            fingerprint: entry.fingerprint.clone(),
+            tool_name,
+            cancel: entry.cancel.clone(),
+        })
+    }
+
+    pub(super) async fn call(
+        &self,
+        approved: ApprovedCall,
+        documents: &DocumentService,
+    ) -> Result<McpCallResult, CallFailure> {
+        approved.check()?;
+        let entry = self.owned(approved.review().target.connection_id, documents)?;
+        let slot = entry
+            .operation
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| RuntimeError::Busy)?;
+        current_tool(&entry, &approved.review().target)?;
+        let cancel = approved.context().cancel.child_token();
+        // Aborting/dropping the caller cancels actor-owned work too.
+        let _guard = cancel.clone().drop_guard();
+        let sent = Arc::new(AtomicBool::new(false));
+        let (response, result) = oneshot::channel();
+        entry
+            .commands
+            .try_send(Command::Call(CallRequest {
+                approved,
+                cancel,
+                sent: sent.clone(),
+                response,
+                _slot: slot,
+            }))
+            .map_err(|_| RuntimeError::ConnectionNotReady)?;
+        result.await.unwrap_or_else(|_| {
+            Err(CallFailure {
+                code: RuntimeError::ConnectionNotReady,
+                outcome: if sent.load(Ordering::Acquire) {
+                    CallOutcome::Unknown
+                } else {
+                    CallOutcome::NotStarted
+                },
+            })
+        })
+    }
+}
+
+fn current_tool(entry: &Connection, target: &CallTarget) -> Result<String, RuntimeError> {
+    if entry.cancel.is_cancelled() {
+        return Err(RuntimeError::ConnectionNotReady);
+    }
+    let snapshot = entry.snapshot.lock().map_err(|_| RuntimeError::Busy)?;
+    if snapshot.status.phase != ConnectionPhase::Connected {
+        return Err(RuntimeError::ConnectionNotReady);
+    }
+    let catalog = snapshot
+        .catalog
+        .as_ref()
+        .ok_or(RuntimeError::ConnectionNotReady)?;
+    Ok(catalog
+        .resolve(&target.alias, &target.catalog_revision)?
+        .definition
+        .name
+        .to_string())
+}
+
+async fn run_call(
+    connection: &Connection,
+    directory: &Path,
+    session: &McpSession,
+    request: CallRequest,
+) -> Result<(), RuntimeError> {
+    let validation = async {
+        verify(directory, connection).await?;
+        request.approved.check()?;
+        let review = request.approved.review();
+        let name = current_tool(connection, &review.target)?;
+        if name != review.tool_name {
+            return Err(RuntimeError::CatalogChanged);
+        }
+        // Arguments were validated before permission review, and cannot change.
+        let arguments = review
+            .arguments
+            .as_object()
+            .ok_or(RuntimeError::InvalidArguments)?
+            .clone();
+        Ok((name, arguments))
+    };
+    let result = tokio::select! {
+        biased;
+        _ = request.cancel.cancelled() => Err(RuntimeError::Cancelled),
+        result = tokio::time::timeout(DISCOVERY_TIMEOUT, validation) => result.unwrap_or(Err(RuntimeError::TimedOut)),
+    };
+    let result = match result {
+        Ok((name, arguments)) => {
+            let policy = async {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    match tokio::time::timeout(DISCOVERY_TIMEOUT, verify(directory, connection))
+                        .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => return error,
+                        Err(_) => return RuntimeError::TimedOut,
+                    }
+                }
+            };
+            tokio::select! {
+                result = session.call(name, arguments, &request.cancel, &request.sent) =>
+                    result.and_then(|result| McpCallResult::normalize(request.approved.review(), result)),
+                error = policy => Err(error),
+            }
+        }
+        Err(error) => Err(error),
+    };
+    let sent = request.sent.load(Ordering::Acquire);
+    let stop = result.as_ref().err().copied().filter(|_| sent);
+    // Deny further dispatch before exposing an uncertain outcome to the caller.
+    if let Some(error) = stop {
+        connection.stop(Some(error));
+    }
+    let _ = request.response.send(result.map_err(|code| CallFailure {
+        code,
+        outcome: if sent {
+            CallOutcome::Unknown
+        } else {
+            CallOutcome::NotStarted
+        },
+    }));
+    stop.map_or(Ok(()), Err)
 }
 
 pub(super) fn read_policy(
@@ -424,7 +596,7 @@ async fn run(
     connection: Arc<Connection>,
     directory: std::path::PathBuf,
     prepared: PreparedProcess,
-    mut refresh: mpsc::Receiver<()>,
+    mut commands: mpsc::Receiver<Command>,
     expires: Instant,
 ) {
     let _finished = FinishGuard(connection.clone());
@@ -469,8 +641,15 @@ async fn run(
                             if active.is_closed() { return Err(active.close_error()); }
                             tokio::time::timeout(DISCOVERY_TIMEOUT, verify(&directory, &connection)).await.map_err(|_| RuntimeError::TimedOut)??;
                         }
-                        request = refresh.recv() => {
-                            if request.is_none() { return Ok(()); }
+                        request = commands.recv() => {
+                            let Some(request) = request else { return Ok(()); };
+                            let _slot = match request {
+                                Command::Call(request) => {
+                                    run_call(&connection, &directory, active, request).await?;
+                                    continue;
+                                }
+                                Command::Refresh(slot) => slot,
+                            };
                             let discover = async {
                                 verify(&directory, &connection).await?;
                                 let catalog = active.discover(connection.definition.id).await?;
@@ -515,10 +694,15 @@ async fn run(
 mod tests {
     use super::*;
     use crate::integrations::{
+        call_result::CallOutcome,
+        permissions::{CallContext, CallReview},
+    };
+    use crate::integrations::{
         config::{IntegrationConfig, ProcessConfig},
         credentials::SecretStore,
         runtime::IntegrationRuntime,
     };
+    use serde_json::json;
     struct NoSecrets;
     impl SecretStore for NoSecrets {
         fn get(&self, _: Uuid, _: &str) -> Result<Option<String>, RuntimeError> {
@@ -549,6 +733,13 @@ for line in sys.stdin:
         continue
     method=req['method']
     if method=='notifications/initialized': continue
+    if method=='notifications/cancelled':
+        Path('cancel.json').write_text(json.dumps(req))
+        continue
+    if method=='server/discover' and mode=='modern':
+        result={'resultType':'complete','supportedVersions':['2026-07-28'],'ttlMs':0,'cacheScope':'private','capabilities':{'tools':{}}}
+        print(json.dumps({'jsonrpc':'2.0','id':req['id'],'result':result}),flush=True)
+        continue
     if method=='server/discover':
         print(json.dumps({'jsonrpc':'2.0','id':req['id'],'error':{'code':-32601,'message':'legacy'}}),flush=True)
         continue
@@ -557,9 +748,17 @@ for line in sys.stdin:
     elif method=='tools/list':
         pages+=1
         if mode=='slow_refresh' and pages>1: time.sleep(60)
-        result={'tools':[{'name':'search','description':str(pages),'inputSchema':{'type':'object'}}]}
+        result={'tools':[{'name':'search','description':str(pages),'inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True}}]}
+    elif method=='tools/call':
+        with open('calls.jsonl','a') as output: output.write(json.dumps(req)+'\n')
+        if mode=='slow_call': continue
+        if mode=='exit_call': os._exit(0)
+        if mode=='modern': assert req['params']['_meta']['io.modelcontextprotocol/protocolVersion']=='2026-07-28'
+        result={'resultType':'complete','structuredContent':{'name':req['params']['name'],'arguments':req['params']['arguments']},'isError':mode=='tool_error'}
+        if mode=='large_call': result={'content':[{'type':'text','text':'x'*(1024*1024+1)}]}
+        if mode=='input_call': result={'resultType':'input_required','inputRequests':{}}
     else:
-        raise RuntimeError('Only discovery is authorized')
+        raise RuntimeError('Unexpected request')
     print(json.dumps({'jsonrpc':'2.0','id':req['id'],'result':result}),flush=True)
     if mode=='exit' and pages: break
 "#).unwrap();
@@ -637,6 +836,59 @@ for line in sys.stdin:
                 .save(&snapshot.revision, snapshot.config)
                 .unwrap()
                 .revision;
+        }
+    }
+
+    impl Fixture {
+        fn call_context(&self) -> CallContext {
+            CallContext::new(
+                &self.documents,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                "call-1".into(),
+                CancellationToken::new(),
+            )
+            .unwrap()
+        }
+        fn review(&self, context: &CallContext) -> CallReview {
+            let status = self
+                .runtime
+                .connections
+                .status(self.id, &self.documents)
+                .unwrap()
+                .unwrap();
+            let catalog = self
+                .runtime
+                .connections
+                .catalog(status.connection_id, &self.documents)
+                .unwrap();
+            self.runtime
+                .prepare_tool_call(
+                    &self.documents,
+                    context,
+                    CallTarget {
+                        connection_id: status.connection_id,
+                        alias: catalog.tools()[0].alias.clone(),
+                        catalog_revision: catalog.revision().into(),
+                    },
+                    json!({"query":"approved"}),
+                )
+                .unwrap()
+        }
+        async fn called(&self) {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !self.root.path().join("calls.jsonl").exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        fn call_count(&self) -> usize {
+            std::fs::read_to_string(self.root.path().join("calls.jsonl"))
+                .unwrap_or_default()
+                .lines()
+                .count()
         }
     }
 
@@ -973,6 +1225,37 @@ for line in sys.stdin:
             .tools()
             .iter()
             .any(|tool| tool.definition.name == "symbol_search"));
+        let tool = before
+            .tools()
+            .iter()
+            .find(|tool| tool.definition.name == "symbol_search")
+            .unwrap();
+        let context = fixture.call_context();
+        let review = fixture
+            .runtime
+            .prepare_tool_call(
+                &fixture.documents,
+                &context,
+                CallTarget {
+                    connection_id: status.connection_id,
+                    alias: tool.alias.clone(),
+                    catalog_revision: before.revision().into(),
+                },
+                serde_json::json!({"query":"mode"}),
+            )
+            .unwrap();
+        fixture
+            .runtime
+            .decide_tool_call(&context, review.request_id, true)
+            .unwrap();
+        let result = fixture
+            .runtime
+            .execute_tool_call(fixture.documents.clone(), &context, review.request_id)
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.result.get("structuredContent").is_some());
+        assert!(!result.text.is_empty());
         fixture
             .runtime
             .connections
@@ -1018,5 +1301,403 @@ for line in sys.stdin:
                 .prepare(fixture.id, fixture.revision.clone(), &fixture.documents),
             Err(RuntimeError::Cancelled)
         ));
+    }
+    #[tokio::test]
+    async fn calls_require_exact_scope_and_one_use_consent_in_both_protocols() {
+        for mode in ["normal", "modern", "tool_error"] {
+            let fixture = Fixture::new(mode);
+            fixture.connect().await;
+            fixture.phase(ConnectionPhase::Connected).await;
+            let context = fixture.call_context();
+            let mut review = fixture.review(&context);
+            let fail = fixture
+                .runtime
+                .execute_tool_call(fixture.documents.clone(), &context, review.request_id)
+                .await
+                .unwrap_err();
+            assert_eq!(fail.code, RuntimeError::PermissionRequired);
+            assert_eq!(fail.outcome, CallOutcome::NotStarted);
+            let wrong = fixture.call_context();
+            assert_eq!(
+                fixture
+                    .runtime
+                    .decide_tool_call(&wrong, review.request_id, true),
+                Err(RuntimeError::PermissionDenied)
+            );
+            assert_eq!(fixture.call_count(), 0);
+            fixture
+                .runtime
+                .decide_tool_call(&context, review.request_id, true)
+                .unwrap();
+            assert_eq!(
+                fixture
+                    .runtime
+                    .decide_tool_call(&context, review.request_id, false),
+                Err(RuntimeError::ApprovalExpired)
+            );
+            // UI copies cannot mutate the stored invocation.
+            review.arguments = json!({"query":"tampered"});
+            let result = fixture
+                .runtime
+                .execute_tool_call(fixture.documents.clone(), &context, review.request_id)
+                .await
+                .unwrap();
+            assert_eq!(
+                result.result["structuredContent"]["arguments"]["query"],
+                "approved"
+            );
+            assert_eq!(result.tool_name, "search");
+            assert_eq!(result.scope, context.scope);
+            assert_eq!(result.target.alias, review.target.alias);
+            assert_eq!(result.is_error, mode == "tool_error");
+            assert!(result.text.contains("approved"));
+            assert_eq!(
+                fixture
+                    .runtime
+                    .execute_tool_call(fixture.documents.clone(), &context, review.request_id)
+                    .await
+                    .unwrap_err()
+                    .code,
+                RuntimeError::ApprovalExpired
+            );
+            assert_eq!(fixture.call_count(), 1);
+            fixture.runtime.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn denial_turn_cancellation_and_stale_catalog_never_reach_the_peer() {
+        let fixture = Fixture::new("normal");
+        let connection = fixture.connect().await;
+        fixture.phase(ConnectionPhase::Connected).await;
+        let context = fixture.call_context();
+        let review = fixture.review(&context);
+        fixture
+            .runtime
+            .decide_tool_call(&context, review.request_id, false)
+            .unwrap();
+        assert_eq!(
+            fixture
+                .runtime
+                .execute_tool_call(fixture.documents.clone(), &context, review.request_id)
+                .await
+                .unwrap_err()
+                .code,
+            RuntimeError::PermissionDenied
+        );
+        let context = fixture.call_context();
+        let review = fixture.review(&context);
+        fixture
+            .runtime
+            .decide_tool_call(&context, review.request_id, true)
+            .unwrap();
+        context.cancel.cancel();
+        assert_eq!(
+            fixture
+                .runtime
+                .execute_tool_call(fixture.documents.clone(), &context, review.request_id)
+                .await
+                .unwrap_err()
+                .code,
+            RuntimeError::Cancelled
+        );
+        let context = fixture.call_context();
+        let review = fixture.review(&context);
+        fixture
+            .runtime
+            .decide_tool_call(&context, review.request_id, true)
+            .unwrap();
+        fixture
+            .runtime
+            .connections
+            .refresh(connection.connection_id, &fixture.documents)
+            .unwrap();
+        fixture.phase(ConnectionPhase::Connected).await;
+        assert_eq!(
+            fixture
+                .runtime
+                .execute_tool_call(fixture.documents.clone(), &context, review.request_id)
+                .await
+                .unwrap_err()
+                .code,
+            RuntimeError::CatalogChanged
+        );
+        assert_eq!(fixture.call_count(), 0);
+        fixture.runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_rechecks_policy_and_workspace_without_waiting_for_status_poll() {
+        let fixture = Fixture::new("normal");
+        fixture.connect().await;
+        fixture.phase(ConnectionPhase::Connected).await;
+        let context = fixture.call_context();
+        let review = fixture.review(&context);
+        fixture
+            .runtime
+            .decide_tool_call(&context, review.request_id, true)
+            .unwrap();
+        let mut settings = crate::project_settings::ProjectSettings::default();
+        settings.integrations.disabled_ids.push(fixture.id);
+        crate::project_settings::save_project_settings(fixture.root.path(), &settings).unwrap();
+        assert!(fixture
+            .runtime
+            .execute_tool_call(fixture.documents.clone(), &context, review.request_id)
+            .await
+            .is_err());
+        assert_eq!(fixture.call_count(), 0);
+        fixture.documents.retire();
+        assert_eq!(
+            fixture
+                .runtime
+                .decide_tool_call(&context, review.request_id, true),
+            Err(RuntimeError::WorkspaceChanged)
+        );
+        fixture.runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_and_abandoned_calls_close_the_connection_without_replay() {
+        for abandon in [false, true] {
+            let fixture = Fixture::new("slow_call");
+            let status = fixture.connect().await;
+            fixture.phase(ConnectionPhase::Connected).await;
+            let context = fixture.call_context();
+            let review = fixture.review(&context);
+            fixture
+                .runtime
+                .decide_tool_call(&context, review.request_id, true)
+                .unwrap();
+            let runtime = fixture.runtime.clone();
+            let documents = fixture.documents.clone();
+            let caller = context.clone();
+            let task = tokio::spawn(async move {
+                runtime
+                    .execute_tool_call(documents, &caller, review.request_id)
+                    .await
+            });
+            fixture.called().await;
+            assert_eq!(
+                fixture
+                    .runtime
+                    .connections
+                    .refresh(status.connection_id, &fixture.documents),
+                Err(RuntimeError::Busy)
+            );
+            let second = fixture.call_context();
+            let second_review = fixture.review(&second);
+            fixture
+                .runtime
+                .decide_tool_call(&second, second_review.request_id, true)
+                .unwrap();
+            let failed = fixture
+                .runtime
+                .execute_tool_call(fixture.documents.clone(), &second, second_review.request_id)
+                .await
+                .unwrap_err();
+            assert_eq!(failed.code, RuntimeError::Busy);
+            assert_eq!(failed.outcome, CallOutcome::NotStarted);
+            if abandon {
+                task.abort();
+                let _ = task.await;
+            } else {
+                context.cancel.cancel();
+                let failed = task.await.unwrap().unwrap_err();
+                assert_eq!(failed.code, RuntimeError::Cancelled);
+                assert_eq!(failed.outcome, CallOutcome::Unknown);
+            }
+            fixture.phase(ConnectionPhase::Failed).await;
+            assert_eq!(fixture.call_count(), 1);
+            assert!(fixture.root.path().join("cancel.json").exists());
+            fixture.runtime.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn crash_oversize_and_unsupported_input_results_are_uncertain_and_never_retried() {
+        for mode in ["exit_call", "large_call", "input_call"] {
+            let fixture = Fixture::new(mode);
+            fixture.connect().await;
+            fixture.phase(ConnectionPhase::Connected).await;
+            let context = fixture.call_context();
+            let review = fixture.review(&context);
+            fixture
+                .runtime
+                .decide_tool_call(&context, review.request_id, true)
+                .unwrap();
+            let failed = fixture
+                .runtime
+                .execute_tool_call(fixture.documents.clone(), &context, review.request_id)
+                .await
+                .unwrap_err();
+            assert_eq!(failed.outcome, CallOutcome::Unknown);
+            assert_eq!(
+                failed.code,
+                match mode {
+                    "large_call" => RuntimeError::OutputLimit,
+                    "input_call" => RuntimeError::UnsupportedResult,
+                    _ => RuntimeError::ProtocolFailed,
+                }
+            );
+            fixture.phase(ConnectionPhase::Failed).await;
+            assert_eq!(fixture.call_count(), 1);
+            fixture.runtime.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn call_deadline_is_fixed_and_does_not_report_side_effects_as_stopped() {
+        let fixture = Fixture::new("slow_call");
+        fixture.connect().await;
+        fixture.phase(ConnectionPhase::Connected).await;
+        let context = fixture.call_context();
+        let review = fixture.review(&context);
+        fixture
+            .runtime
+            .decide_tool_call(&context, review.request_id, true)
+            .unwrap();
+        let failed = tokio::time::timeout(
+            Duration::from_secs(50),
+            fixture.runtime.execute_tool_call(
+                fixture.documents.clone(),
+                &context,
+                review.request_id,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(failed.code, RuntimeError::TimedOut);
+        assert_eq!(failed.outcome, CallOutcome::Unknown);
+        fixture.phase(ConnectionPhase::Failed).await;
+        assert_eq!(fixture.call_count(), 1);
+        fixture.runtime.shutdown().await;
+    }
+    #[tokio::test]
+    async fn changed_credentials_are_rechecked_even_without_a_ui_write() {
+        struct MutableSecret(Mutex<String>);
+        impl SecretStore for MutableSecret {
+            fn get(&self, _: Uuid, _: &str) -> Result<Option<String>, RuntimeError> {
+                Ok(Some(self.0.lock().unwrap().clone()))
+            }
+        }
+        let mut fixture = Fixture::new("normal");
+        let secret = Arc::new(MutableSecret(Mutex::new("before".into())));
+        fixture.runtime = Arc::new(IntegrationRuntime::new(
+            fixture.root.path().into(),
+            secret.clone(),
+        ));
+        fixture.configure(|config| {
+            let ConnectionConfig::Mcp {
+                transport: McpTransport::Stdio { process },
+            } = &mut config.entries[0].connection
+            else {
+                panic!()
+            };
+            process.env.insert(
+                "TEST_TOKEN".into(),
+                crate::integrations::config::ConfigValue::Secret {
+                    name: "token".into(),
+                },
+            );
+        });
+        fixture.connect().await;
+        fixture.phase(ConnectionPhase::Connected).await;
+        let context = fixture.call_context();
+        let review = fixture.review(&context);
+        fixture
+            .runtime
+            .decide_tool_call(&context, review.request_id, true)
+            .unwrap();
+        *secret.0.lock().unwrap() = "after".into();
+        let error = fixture
+            .runtime
+            .execute_tool_call(fixture.documents.clone(), &context, review.request_id)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, RuntimeError::ConfigChanged);
+        assert_eq!(error.outcome, CallOutcome::NotStarted);
+        assert_eq!(fixture.call_count(), 0);
+        fixture.runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn policy_changes_during_a_call_stop_it_without_waiting_for_the_call_deadline() {
+        let mut fixture = Fixture::new("slow_call");
+        fixture.connect().await;
+        fixture.phase(ConnectionPhase::Connected).await;
+        let context = fixture.call_context();
+        let review = fixture.review(&context);
+        fixture
+            .runtime
+            .decide_tool_call(&context, review.request_id, true)
+            .unwrap();
+        let runtime = fixture.runtime.clone();
+        let documents = fixture.documents.clone();
+        let task = tokio::spawn(async move {
+            runtime
+                .execute_tool_call(documents, &context, review.request_id)
+                .await
+        });
+        fixture.called().await;
+        fixture.configure(|config| config.entries[0].enabled = false);
+        let error = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(error.outcome, CallOutcome::Unknown);
+        assert_eq!(error.code, RuntimeError::IntegrationDisabled);
+        fixture.phase(ConnectionPhase::Failed).await;
+        assert_eq!(fixture.call_count(), 1);
+        fixture.runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn aliases_arguments_and_workspace_identity_are_checked_before_permission() {
+        let fixture = Fixture::new("normal");
+        fixture.connect().await;
+        fixture.phase(ConnectionPhase::Connected).await;
+        let context = fixture.call_context();
+        let review = fixture.review(&context);
+        let target = review.target;
+        let mut original_name = target.clone();
+        original_name.alias = "search".into();
+        assert!(matches!(
+            fixture.runtime.prepare_tool_call(
+                &fixture.documents,
+                &context,
+                original_name,
+                json!({})
+            ),
+            Err(RuntimeError::InvalidCatalog)
+        ));
+        assert!(matches!(
+            fixture.runtime.prepare_tool_call(
+                &fixture.documents,
+                &context,
+                target.clone(),
+                json!([])
+            ),
+            Err(RuntimeError::InvalidArguments)
+        ));
+        assert!(matches!(
+            fixture.runtime.prepare_tool_call(
+                &fixture.documents,
+                &context,
+                target.clone(),
+                json!({"data":"x".repeat(65536)})
+            ),
+            Err(RuntimeError::OutputLimit)
+        ));
+        let reopened = DocumentService::new(fixture.root.path().into());
+        assert!(matches!(
+            fixture
+                .runtime
+                .prepare_tool_call(&reopened, &context, target, json!({})),
+            Err(RuntimeError::WorkspaceChanged)
+        ));
+        assert_eq!(fixture.call_count(), 0);
+        fixture.runtime.shutdown().await;
     }
 }

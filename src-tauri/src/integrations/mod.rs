@@ -1,12 +1,15 @@
-//! Integration configuration, identities and supervised protocol probes.
+//! Integration configuration, identities and supervised protocol lifetimes.
 //! Saving configuration never starts a process or grants launch permission.
 
+pub(crate) mod call_result;
 pub mod catalog;
 pub mod config;
 pub mod connections;
-pub mod mcp_session;
 pub mod credentials;
 pub mod identity;
+pub(crate) mod invocation;
+pub mod mcp_session;
+pub(crate) mod permissions;
 pub mod probe;
 pub mod process;
 pub mod runtime;
@@ -37,4 +40,8 @@ pub enum RuntimeError {
     OutputLimit,
     TimedOut,
     Cancelled,
+    PermissionRequired,
+    PermissionDenied,
+    InvalidArguments,
+    UnsupportedResult,
 }

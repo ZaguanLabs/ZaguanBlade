@@ -4,8 +4,11 @@ use super::{
     RuntimeError,
 };
 use rmcp::{
-    model::{PaginatedRequestParams, ProtocolVersion},
-    service::RunningService,
+    model::{
+        CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest,
+        PaginatedRequestParams, ProtocolVersion, ServerResult,
+    },
+    service::{PeerRequestOptions, RunningService},
     ClientHandler, ClientLifecycleMode, ClientServiceExt, RoleClient,
 };
 use std::{
@@ -34,6 +37,55 @@ pub struct McpSession {
 }
 
 impl McpSession {
+    /// Exactly one wire request. MRTR/task results are unsupported; never use the
+    /// SDK convenience loop that could silently issue another tools/call.
+    pub(super) async fn call(
+        &self,
+        name: String,
+        arguments: serde_json::Map<String, serde_json::Value>,
+        cancel: &tokio_util::sync::CancellationToken,
+        sent: &AtomicBool,
+    ) -> Result<CallToolResult, RuntimeError> {
+        if cancel.is_cancelled() {
+            return Err(RuntimeError::Cancelled);
+        }
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(45);
+        let request = ClientRequest::CallToolRequest(CallToolRequest::new(
+            CallToolRequestParams::new(name).with_arguments(arguments),
+        ));
+        // Once submission begins, failure cannot establish absence of effects.
+        sent.store(true, Ordering::Release);
+        let mut handle = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(RuntimeError::Cancelled),
+            result = tokio::time::timeout_at(deadline, self.service.peer().send_request_with_option(request, PeerRequestOptions::no_options())) => {
+                result.map_err(|_| RuntimeError::TimedOut)?.map_err(|_| self.close_error())?
+            }
+        };
+        let result = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(RuntimeError::Cancelled),
+            _ = tokio::time::sleep_until(deadline) => Err(RuntimeError::TimedOut),
+            result = &mut handle.rx => result.map_err(|_| self.close_error()).and_then(|result| result.map_err(|_| self.close_error())),
+        };
+        if matches!(
+            result,
+            Err(RuntimeError::Cancelled | RuntimeError::TimedOut)
+        ) {
+            // Best effort protocol cancellation, followed by actor-owned teardown.
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_millis(250), handle.cancel(None))
+                    .await;
+        }
+        match result? {
+            ServerResult::CallToolResult(result) => Ok(result),
+            ServerResult::InputRequiredResult(_) | ServerResult::CreateTaskResult(_) => {
+                Err(RuntimeError::UnsupportedResult)
+            }
+            _ => Err(RuntimeError::ProtocolFailed),
+        }
+    }
+
     pub async fn open(
         read: impl AsyncRead + Send + Unpin + 'static,
         write: impl AsyncWrite + Send + Unpin + 'static,

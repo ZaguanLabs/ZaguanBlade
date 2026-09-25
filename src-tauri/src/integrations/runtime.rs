@@ -59,12 +59,14 @@ struct Requests {
 }
 
 pub struct IntegrationRuntime {
-    directory: PathBuf,
-    secrets: Arc<dyn SecretStore>,
+    pub(super) directory: PathBuf,
+    pub(super) secrets: Arc<dyn SecretStore>,
     requests: Mutex<Requests>,
     preparing: Arc<tokio::sync::Semaphore>,
     pub connections: ConnectionRegistry,
-    shutting_down: AtomicBool,
+    pub(super) shutting_down: AtomicBool,
+    pub(super) permissions: super::permissions::PermissionRegistry,
+    pub(super) invoking: Arc<tokio::sync::Semaphore>,
 }
 
 impl IntegrationRuntime {
@@ -76,6 +78,8 @@ impl IntegrationRuntime {
             preparing: Arc::new(tokio::sync::Semaphore::new(4)),
             connections: ConnectionRegistry::default(),
             shutting_down: AtomicBool::new(false),
+            permissions: Default::default(),
+            invoking: Arc::new(tokio::sync::Semaphore::new(4)),
         }
     }
 
@@ -190,6 +194,7 @@ impl IntegrationRuntime {
     /// Called from the final Tauri Exit event while the async runtime is alive.
     pub async fn shutdown(&self) {
         self.shutting_down.store(true, Ordering::Release);
+        self.permissions.clear();
         if let Ok(mut requests) = self.requests.lock() {
             for (_, ticket) in requests.pending.drain() {
                 ticket.cancel.cancel();
