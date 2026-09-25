@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
 use crate::project_settings;
 use crate::project_state;
-use tauri::State;
+use tauri::{Manager, State};
 
 #[tauri::command]
 pub fn get_current_workspace(state: State<'_, AppState>) -> Option<String> {
@@ -104,8 +104,10 @@ pub async fn save_project_settings(
     settings: project_settings::ProjectSettings,
 ) -> Result<(), String> {
     let path = std::path::PathBuf::from(project_path);
+    let integrations = app.state::<AppState>().integrations.clone();
     tokio::task::spawn_blocking(move || {
         project_settings::save_project_settings(&path, &settings)?;
+        integrations.reconcile_connections();
         crate::agent_skills::invalidate_skill_cache(Some(&path));
         Ok::<(), String>(())
     })

@@ -24,7 +24,7 @@ function ToolCard({ tool }: { tool: McpCatalogTool }) {
 
 /** Server text is plain escaped text. Schemas, icon URLs and resource references
  * are inspected as data; rendering never loads third-party content. */
-export function IntegrationToolCatalog({ catalog, serverName }: { catalog: McpCatalog; serverName: string }) {
+export function IntegrationToolCatalog({ catalog, serverName, origin = 'test' }: { catalog: McpCatalog; serverName: string; origin?: 'test' | 'connection' }) {
     const { t } = useTranslation();
     const [query, setQuery] = useState('');
     const [page, setPage] = useState(0);
@@ -32,7 +32,7 @@ export function IntegrationToolCatalog({ catalog, serverName }: { catalog: McpCa
     const result = catalogPage(catalog.tools, query, page);
     return <section className="space-y-3 rounded-md border border-(--border-default) p-3">
         <h4 className="text-sm font-semibold text-(--fg-primary)">{t('settings.integrations.catalog.title', { name: serverName })}</h4>
-        <p className="text-xs text-(--fg-tertiary)">{t('settings.integrations.catalog.help')}</p>
+        <p className="text-xs text-(--fg-tertiary)">{t(origin === 'connection' ? 'settings.integrations.catalog.liveHelp' : 'settings.integrations.catalog.help')}</p>
         <label htmlFor={searchId} className="block text-xs text-(--fg-secondary)">{t('settings.integrations.catalog.search')}</label>
         <input id={searchId} type="search" maxLength={256} value={query} onChange={event => { setQuery(event.target.value); setPage(0); }}
             className="w-full rounded-md border border-(--border-default) bg-(--bg-input) px-3 py-2 text-sm text-(--fg-primary)" />

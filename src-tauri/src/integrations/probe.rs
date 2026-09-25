@@ -1,11 +1,6 @@
 //! Short-lived protocol probes. No tools, prompts, sessions, authentication or
 //! editor callbacks are executed. Reader budget also bounds unterminated frames.
-use super::{
-    catalog::{CatalogBuilder, McpCatalog},
-    RuntimeError,
-};
-use rmcp::model::{PaginatedRequestParams, ProtocolVersion};
-use rmcp::{ClientHandler, ClientLifecycleMode, ClientServiceExt};
+use super::{catalog::McpCatalog, mcp_session::McpSession, RuntimeError};
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -22,61 +17,22 @@ pub struct ProbeResult {
     pub authentication_methods: usize,
 }
 
-struct ProbeClient;
-impl ClientHandler for ProbeClient {}
-
 pub async fn mcp(
     integration_id: uuid::Uuid,
     read: impl AsyncRead + Send + Unpin + 'static,
     write: impl AsyncWrite + Send + Unpin + 'static,
 ) -> Result<ProbeResult, RuntimeError> {
-    let service = ProbeClient
-        .serve_with_lifecycle(
-            (read.take(MAX_OUTPUT_BYTES), write),
-            ClientLifecycleMode::Auto {
-                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
-                legacy_version: Some(ProtocolVersion::V_2025_11_25),
-            },
-        )
-        .await
-        .map_err(|_| RuntimeError::ProtocolFailed)?;
-    let info = service.peer_info().ok_or(RuntimeError::ProtocolFailed)?;
-    if ![ProtocolVersion::V_2026_07_28, ProtocolVersion::V_2025_11_25]
-        .contains(&info.protocol_version)
-    {
-        return Err(RuntimeError::UnsupportedVersion);
-    }
-    let mut result = ProbeResult {
-        protocol_version: info.protocol_version.to_string(),
-        tools: 0,
-        catalog: None,
-        resources: info.capabilities.resources.is_some(),
-        prompts: info.capabilities.prompts.is_some(),
+    let session = McpSession::open(read.take(MAX_OUTPUT_BYTES), write).await?;
+    let catalog = session.discover(integration_id).await?;
+    let result = ProbeResult {
+        protocol_version: session.protocol_version.clone(),
+        tools: catalog.tools().len(),
+        catalog: Some(catalog),
+        resources: session.resources,
+        prompts: session.prompts,
         authentication_methods: 0,
     };
-    let mut catalog = CatalogBuilder::new(integration_id);
-    if info.capabilities.tools.is_some() {
-        let mut cursor = None;
-        let mut seen = std::collections::HashSet::new();
-        for page in 0..16 {
-            let response = service
-                .list_tools(Some(PaginatedRequestParams::default().with_cursor(cursor)))
-                .await
-                .map_err(|_| RuntimeError::ProtocolFailed)?;
-            for tool in response.tools {
-                catalog.push(tool)?;
-            }
-            cursor = response.next_cursor;
-            let Some(next) = cursor.as_ref() else { break };
-            if page == 15 || !seen.insert(next.clone()) {
-                return Err(RuntimeError::OutputLimit);
-            }
-        }
-    }
-    let catalog = catalog.finish()?;
-    result.tools = catalog.tools().len();
-    result.catalog = Some(catalog);
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), service.cancel()).await;
+    session.shutdown().await;
     Ok(result)
 }
 

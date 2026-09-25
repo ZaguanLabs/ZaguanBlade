@@ -255,6 +255,12 @@ pub fn run() {
             commands::integrations::get_symbols_index_status,
             commands::integrations::save_integration_settings,
             commands::integrations::prepare_integration_test,
+            commands::integrations::prepare_mcp_connection,
+            commands::integrations::connect_mcp,
+            commands::integrations::get_mcp_connections,
+            commands::integrations::disconnect_mcp,
+            commands::integrations::refresh_mcp_catalog,
+            commands::integrations::get_mcp_catalog,
             commands::integrations::run_integration_test,
             commands::integrations::cancel_integration_test,
             commands::integrations::set_integration_secret,
@@ -338,6 +344,13 @@ pub fn run() {
             // Protocol Dispatcher
             protocol_dispatcher::dispatch,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                use tauri::Manager;
+                let state = app.state::<AppState>();
+                tauri::async_runtime::block_on(state.integrations.shutdown());
+            }
+        });
 }

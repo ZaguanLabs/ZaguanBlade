@@ -3,6 +3,8 @@
 
 pub mod catalog;
 pub mod config;
+pub mod connections;
+pub mod mcp_session;
 pub mod credentials;
 pub mod identity;
 pub mod probe;
@@ -15,6 +17,9 @@ pub mod store;
 pub enum RuntimeError {
     DesktopOnly,
     ConfigChanged,
+    IntegrationDisabled,
+    PolicyUnavailable,
+    ConnectionNotReady,
     WorkspaceChanged,
     UnsupportedTransport,
     ExecutableNotFound,

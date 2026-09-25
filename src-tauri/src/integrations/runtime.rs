@@ -1,7 +1,8 @@
 //! Request-scoped, one-use launch approvals. Saving/enabling a definition never
-//! grants trust. A probe cannot be repurposed for a long-running connection.
+//! grants trust. Probe and live-connection tickets have distinct purposes.
 use super::{
     config::{ConnectionConfig, McpTransport},
+    connections::{self, ConnectionRegistry, ConnectionStatus},
     credentials::SecretStore,
     identity::WorkspaceIdentity,
     probe::{self, ProbeResult},
@@ -14,7 +15,10 @@ use serde::Serialize;
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
@@ -31,7 +35,14 @@ pub struct LaunchReview {
     pub args: Vec<String>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Purpose {
+    Probe,
+    Connection,
+}
+
 struct Ticket {
+    purpose: Purpose,
     integration: Uuid,
     revision: String,
     workspace: WorkspaceIdentity,
@@ -44,7 +55,7 @@ struct Ticket {
 #[derive(Default)]
 struct Requests {
     pending: HashMap<Uuid, Ticket>,
-    running: HashMap<Uuid, CancellationToken>,
+    running: HashMap<Uuid, (Uuid, CancellationToken)>,
 }
 
 pub struct IntegrationRuntime {
@@ -52,6 +63,8 @@ pub struct IntegrationRuntime {
     secrets: Arc<dyn SecretStore>,
     requests: Mutex<Requests>,
     preparing: Arc<tokio::sync::Semaphore>,
+    pub connections: ConnectionRegistry,
+    shutting_down: AtomicBool,
 }
 
 impl IntegrationRuntime {
@@ -61,6 +74,8 @@ impl IntegrationRuntime {
             secrets,
             requests: Mutex::new(Requests::default()),
             preparing: Arc::new(tokio::sync::Semaphore::new(4)),
+            connections: ConnectionRegistry::default(),
+            shutting_down: AtomicBool::new(false),
         }
     }
 
@@ -109,11 +124,36 @@ impl IntegrationRuntime {
         revision: String,
         documents: &DocumentService,
     ) -> Result<LaunchReview, RuntimeError> {
+        self.prepare_for(integration, revision, documents, Purpose::Probe)
+    }
+
+    pub fn prepare_connection(
+        &self,
+        integration: Uuid,
+        revision: String,
+        documents: &DocumentService,
+    ) -> Result<LaunchReview, RuntimeError> {
+        self.prepare_for(integration, revision, documents, Purpose::Connection)
+    }
+
+    fn prepare_for(
+        &self,
+        integration: Uuid,
+        revision: String,
+        documents: &DocumentService,
+        purpose: Purpose,
+    ) -> Result<LaunchReview, RuntimeError> {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(RuntimeError::Cancelled);
+        }
         let _slot = self
             .preparing
             .clone()
             .try_acquire_owned()
             .map_err(|_| RuntimeError::Busy)?;
+        if purpose == Purpose::Connection {
+            connections::read_policy(&self.directory, documents, integration)?;
+        }
         let (process, _) = self.resolve(integration, &revision, documents)?;
         let review = LaunchReview {
             ticket_id: Uuid::new_v4(),
@@ -122,6 +162,9 @@ impl IntegrationRuntime {
             args: process.args,
         };
         let mut requests = self.requests.lock().map_err(|_| RuntimeError::Busy)?;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(RuntimeError::Cancelled);
+        }
         requests.pending.retain(|_, ticket| {
             ticket.expires > Instant::now() && !ticket.workspace_cancel.is_cancelled()
         });
@@ -131,6 +174,7 @@ impl IntegrationRuntime {
         requests.pending.insert(
             review.ticket_id,
             Ticket {
+                purpose,
                 integration,
                 revision,
                 workspace: documents.identity().clone(),
@@ -143,14 +187,170 @@ impl IntegrationRuntime {
         Ok(review)
     }
 
+    /// Called from the final Tauri Exit event while the async runtime is alive.
+    pub async fn shutdown(&self) {
+        self.shutting_down.store(true, Ordering::Release);
+        if let Ok(mut requests) = self.requests.lock() {
+            for (_, ticket) in requests.pending.drain() {
+                ticket.cancel.cancel();
+            }
+            for (_, cancel) in requests.running.values() {
+                cancel.cancel();
+            }
+        }
+        self.connections.stop_all();
+        let drained = async {
+            loop {
+                let requests_done = self
+                    .requests
+                    .lock()
+                    .map(|requests| requests.running.is_empty())
+                    .unwrap_or(false);
+                if requests_done && self.connections.is_quiet() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+        if tokio::time::timeout(Duration::from_secs(5), drained)
+            .await
+            .is_err()
+        {
+            self.connections.abort_remaining();
+            let _ = tokio::time::timeout(Duration::from_secs(1), async {
+                while !self.connections.is_quiet() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await;
+        }
+    }
+
+    pub fn credentials_changed(&self, integration: Uuid) {
+        if let Ok(mut requests) = self.requests.lock() {
+            requests.pending.retain(|_, ticket| {
+                if ticket.integration == integration {
+                    ticket.cancel.cancel();
+                    false
+                } else {
+                    true
+                }
+            });
+            for (id, cancel) in requests.running.values() {
+                if *id == integration {
+                    cancel.cancel();
+                }
+            }
+        }
+        self.connections.invalidate_secret(integration);
+    }
+
+    pub fn reconcile_connections(&self) {
+        self.connections.reconcile(&self.directory);
+    }
+
     pub fn cancel(&self, ticket_id: Uuid) {
         if let Ok(mut requests) = self.requests.lock() {
             if let Some(ticket) = requests.pending.remove(&ticket_id) {
                 ticket.cancel.cancel();
             }
-            if let Some(cancel) = requests.running.get(&ticket_id) {
+            if let Some((_, cancel)) = requests.running.get(&ticket_id) {
                 cancel.cancel();
             }
+        }
+        self.connections.cancel_request(ticket_id);
+    }
+
+    fn take_ticket(
+        &self,
+        ticket_id: Uuid,
+        purpose: Purpose,
+        documents: &DocumentService,
+    ) -> Result<Ticket, RuntimeError> {
+        let mut requests = self.requests.lock().map_err(|_| RuntimeError::Busy)?;
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(RuntimeError::Cancelled);
+        }
+        if requests
+            .pending
+            .get(&ticket_id)
+            .is_some_and(|ticket| ticket.purpose != purpose)
+        {
+            return Err(RuntimeError::ApprovalExpired);
+        }
+        let ticket = requests
+            .pending
+            .remove(&ticket_id)
+            .ok_or(RuntimeError::ApprovalExpired)?;
+        if ticket.expires <= Instant::now() {
+            return Err(RuntimeError::ApprovalExpired);
+        }
+        if ticket.workspace != *documents.identity() || ticket.workspace_cancel.is_cancelled() {
+            return Err(RuntimeError::WorkspaceChanged);
+        }
+        if requests.running.len() >= 4 {
+            return Err(RuntimeError::Busy);
+        }
+        requests
+            .running
+            .insert(ticket_id, (ticket.integration, ticket.cancel.clone()));
+        Ok(ticket)
+    }
+
+    pub async fn connect(
+        self: &Arc<Self>,
+        ticket_id: Uuid,
+        documents: Arc<DocumentService>,
+    ) -> Result<ConnectionStatus, RuntimeError> {
+        let ticket = self.take_ticket(ticket_id, Purpose::Connection, &documents)?;
+        let _running = RunningRequest {
+            runtime: self.clone(),
+            id: ticket_id,
+        };
+        let runtime = self.clone();
+        let resolve_documents = documents.clone();
+        let integration = ticket.integration;
+        let revision = ticket.revision.clone();
+        let preparation = tokio::task::spawn_blocking(move || {
+            let definition =
+                connections::read_policy(&runtime.directory, &resolve_documents, integration)?;
+            let (prepared, is_acp) = runtime.resolve(integration, &revision, &resolve_documents)?;
+            if is_acp {
+                return Err(RuntimeError::UnsupportedTransport);
+            }
+            Ok::<_, RuntimeError>((prepared, definition))
+        });
+        let work = async {
+            let (prepared, definition) = preparation
+                .await
+                .map_err(|_| RuntimeError::LaunchFailed)??;
+            if prepared.fingerprint != ticket.fingerprint {
+                return Err(RuntimeError::ConfigChanged);
+            }
+            if ticket.expires <= Instant::now() {
+                return Err(RuntimeError::ApprovalExpired);
+            }
+            if ticket.cancel.is_cancelled() {
+                return Err(RuntimeError::Cancelled);
+            }
+            if ticket.workspace_cancel.is_cancelled() {
+                return Err(RuntimeError::WorkspaceChanged);
+            }
+            self.connections.start(
+                ticket_id,
+                self.directory.clone(),
+                definition,
+                documents,
+                ticket.cancel.clone(),
+                prepared,
+                ticket.expires,
+            )
+        };
+        tokio::select! {
+            biased;
+            _ = ticket.workspace_cancel.cancelled() => Err(RuntimeError::WorkspaceChanged),
+            _ = ticket.cancel.cancelled() => Err(RuntimeError::Cancelled),
+            result = tokio::time::timeout(PROBE_TIMEOUT, work) => result.unwrap_or(Err(RuntimeError::TimedOut)),
         }
     }
 
@@ -159,24 +359,7 @@ impl IntegrationRuntime {
         ticket_id: Uuid,
         documents: Arc<DocumentService>,
     ) -> Result<ProbeResult, RuntimeError> {
-        let ticket = {
-            let mut requests = self.requests.lock().map_err(|_| RuntimeError::Busy)?;
-            let ticket = requests
-                .pending
-                .remove(&ticket_id)
-                .ok_or(RuntimeError::ApprovalExpired)?;
-            if ticket.expires <= Instant::now() {
-                return Err(RuntimeError::ApprovalExpired);
-            }
-            if ticket.workspace != *documents.identity() || ticket.workspace_cancel.is_cancelled() {
-                return Err(RuntimeError::WorkspaceChanged);
-            }
-            if requests.running.len() >= 4 {
-                return Err(RuntimeError::Busy);
-            }
-            requests.running.insert(ticket_id, ticket.cancel.clone());
-            ticket
-        };
+        let ticket = self.take_ticket(ticket_id, Purpose::Probe, &documents)?;
         let _running = RunningRequest {
             runtime: self.clone(),
             id: ticket_id,
@@ -381,7 +564,9 @@ mod tests {
         fixture.runtime.cancel(first.ticket_id);
         assert_eq!(a.await.unwrap_err(), RuntimeError::Cancelled);
         assert!(
-            !fixture.runtime.requests.lock().unwrap().running[&second.ticket_id].is_cancelled()
+            !fixture.runtime.requests.lock().unwrap().running[&second.ticket_id]
+                .1
+                .is_cancelled()
         );
         fixture.documents.retire();
         assert_eq!(b.await.unwrap_err(), RuntimeError::WorkspaceChanged);

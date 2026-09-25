@@ -74,3 +74,14 @@ export interface McpCatalog {
     revision: string;
     tools: McpCatalogTool[];
 }
+
+export interface McpConnectionStatus {
+    connection_id: string;
+    integration_id: string;
+    workspace: { workspace_id: string; generation: string };
+    phase: 'connecting' | 'connected' | 'refreshing' | 'stopping' | 'disconnected' | 'failed';
+    protocol_version: string | null;
+    catalog_revision: string | null;
+    tools: number;
+    error: string | null;
+}

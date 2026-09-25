@@ -71,12 +71,14 @@ pub fn cancel_integration_test(
 #[tauri::command]
 pub async fn set_integration_secret(
     window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
     integration_id: Uuid,
     expected_revision: String,
     name: String,
     value: Option<String>,
 ) -> Result<(), RuntimeError> {
     runtime_desktop_only(&window)?;
+    let runtime = state.integrations.clone();
     tokio::task::spawn_blocking(move || {
         let snapshot = IntegrationStore::new(crate::config::default_global_config_dir())
             .load()
@@ -90,12 +92,16 @@ pub async fn set_integration_secret(
         {
             return Err(RuntimeError::ConfigChanged);
         }
-        match value {
+        let result = match value {
             Some(value) => {
                 crate::integrations::credentials::OsSecrets::set(integration_id, &name, &value)
             }
             None => crate::integrations::credentials::OsSecrets::delete(integration_id, &name),
+        };
+        if result.is_ok() {
+            runtime.credentials_changed(integration_id);
         }
+        result
     })
     .await
     .map_err(|_| RuntimeError::SecretUnavailable)?
@@ -127,9 +133,12 @@ pub async fn save_integration_settings(
     config: IntegrationConfig,
 ) -> Result<ConfigSnapshot, ConfigError> {
     desktop_only(&window)?;
+    let runtime = window.state::<AppState>().integrations.clone();
     let saved = tokio::task::spawn_blocking(move || {
-        IntegrationStore::new(crate::config::default_global_config_dir())
-            .save(&expected_revision, config)
+        let saved = IntegrationStore::new(crate::config::default_global_config_dir())
+            .save(&expected_revision, config)?;
+        runtime.reconcile_connections();
+        Ok::<_, ConfigError>(saved)
     })
     .await
     .map_err(|_| ConfigError::WriteFailed)??;
@@ -185,4 +194,115 @@ pub async fn get_symbols_index_status(
     })
     .await
     .map_err(|_| "symbols_index_policy_unavailable".to_string())?
+}
+
+#[tauri::command]
+pub async fn prepare_mcp_connection(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    integration_id: Uuid,
+    expected_revision: String,
+    workspace_path: String,
+) -> Result<LaunchReview, RuntimeError> {
+    runtime_desktop_only(&window)?;
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    let runtime = state.integrations.clone();
+    let preparation = tokio::task::spawn_blocking(move || {
+        let root =
+            std::fs::canonicalize(workspace_path).map_err(|_| RuntimeError::WorkspaceChanged)?;
+        if root != documents.workspace_root() {
+            return Err(RuntimeError::WorkspaceChanged);
+        }
+        runtime.prepare_connection(integration_id, expected_revision, &documents)
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(20), preparation)
+        .await
+        .map_err(|_| RuntimeError::TimedOut)?
+        .map_err(|_| RuntimeError::LaunchFailed)?
+}
+
+#[tauri::command]
+pub async fn connect_mcp(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    ticket_id: Uuid,
+) -> Result<crate::integrations::connections::ConnectionStatus, RuntimeError> {
+    runtime_desktop_only(&window)?;
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    state.integrations.connect(ticket_id, documents).await
+}
+
+#[tauri::command]
+pub async fn get_mcp_connections(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    workspace_path: String,
+) -> Result<Vec<crate::integrations::connections::ConnectionStatus>, RuntimeError> {
+    runtime_desktop_only(&window)?;
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    let runtime = state.integrations.clone();
+    tokio::task::spawn_blocking(move || {
+        let root =
+            std::fs::canonicalize(workspace_path).map_err(|_| RuntimeError::WorkspaceChanged)?;
+        if root != documents.workspace_root() {
+            return Err(RuntimeError::WorkspaceChanged);
+        }
+        runtime.connections.statuses(&documents)
+    })
+    .await
+    .map_err(|_| RuntimeError::WorkspaceChanged)?
+}
+
+#[tauri::command]
+pub fn disconnect_mcp(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    connection_id: Uuid,
+) -> Result<(), RuntimeError> {
+    runtime_desktop_only(&window)?;
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    state
+        .integrations
+        .connections
+        .disconnect(connection_id, &documents)
+}
+
+#[tauri::command]
+pub fn refresh_mcp_catalog(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    connection_id: Uuid,
+) -> Result<(), RuntimeError> {
+    runtime_desktop_only(&window)?;
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    state
+        .integrations
+        .connections
+        .refresh(connection_id, &documents)
+}
+
+#[tauri::command]
+pub fn get_mcp_catalog(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    connection_id: Uuid,
+) -> Result<crate::integrations::catalog::McpCatalog, RuntimeError> {
+    runtime_desktop_only(&window)?;
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    state
+        .integrations
+        .connections
+        .catalog(connection_id, &documents)
 }

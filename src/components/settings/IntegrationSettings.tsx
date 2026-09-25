@@ -5,6 +5,8 @@ import type { IntegrationConfig, IntegrationDefinition, IntegrationProcess, Work
 import { newIntegrationProcess, removeIntegration, replaceIntegration } from '../../utils/integrationSettings';
 import { IntegrationConnectionTest, type ConnectionTestContext } from './IntegrationConnectionTest';
 import { SymbolsIndexSettings } from './SymbolsIndexSettings';
+import { McpConnection, type LiveConnectionContext } from './McpConnection';
+import { useMcpConnections } from '../../hooks/useMcpConnections';
 import { IntegrationEnvironment, IntegrationSecrets } from './IntegrationEnvironment';
 
 const inputClass = 'w-full rounded-md border border-(--border-default) bg-(--bg-input) px-3 py-2 text-sm text-(--fg-primary) focus:outline-none focus:border-(--border-focus)';
@@ -47,19 +49,20 @@ function ProcessFields({ process, onChange }: { process: IntegrationProcess; onC
     </div>;
 }
 
-function DefinitionFields({ entry, onChange, onRemove, config, testContext }: {
+function DefinitionFields({ entry, onChange, onRemove, config, testContext, live }: {
     entry: IntegrationDefinition;
     onChange: (entry: IntegrationDefinition) => void;
     onRemove: () => void;
     config: IntegrationConfig;
     testContext: ConnectionTestContext;
+    live: LiveConnectionContext;
 }) {
     const { t } = useTranslation();
     const connection = entry.connection;
     const [credentialVersion, setCredentialVersion] = useState(0);
     return <section className="rounded-lg border border-(--border-default) bg-(--bg-panel) p-4 space-y-4">
         <div className="flex items-center justify-between gap-3">
-            <span className="text-xs text-(--fg-tertiary)">{t('settings.integrations.notConnected')}</span>
+            <span className="text-xs text-(--fg-tertiary)">{connection.protocol === 'mcp' && connection.transport.type === 'stdio' ? t(`settings.integrations.connection.${live.phase === 'ready' ? live.status?.phase ?? 'disconnected' : live.phase === 'failed' ? 'statusUnavailable' : 'checking'}`) : t('settings.integrations.notConnected')}</span>
             <button type="button" className={buttonClass} onClick={onRemove} aria-label={t('settings.integrations.removeDefinition', { name: entry.name })}>
                 <Trash2 className="h-4 w-4" aria-hidden="true" />{t('settings.integrations.remove')}
             </button>
@@ -104,11 +107,13 @@ function DefinitionFields({ entry, onChange, onRemove, config, testContext }: {
         <IntegrationSecrets entry={entry} revision={testContext.revision} canSave={testContext.canTest}
             onStored={() => setCredentialVersion(version => version + 1)} />
         <IntegrationConnectionTest key={credentialVersion} entry={entry} {...testContext} />
+        {connection.protocol === 'mcp' && connection.transport.type === 'stdio' ? <McpConnection key={`live-${credentialVersion}`} entry={entry} {...testContext} live={live} /> : null}
     </section>;
 }
 
 export function IntegrationSettings({ config, onChange, workspace, onWorkspaceChange, ...testContext }: ConnectionTestContext & { config: IntegrationConfig; onChange: (config: IntegrationConfig) => void; workspace?: WorkspaceIntegrationSettings; onWorkspaceChange?: (workspace: WorkspaceIntegrationSettings) => void }) {
     const { t } = useTranslation();
+    const live = useMcpConnections(testContext.workspacePath);
     const add = (protocol: 'mcp' | 'acp', atlas = false) => {
         const entry: IntegrationDefinition = {
             id: crypto.randomUUID(),
@@ -129,7 +134,7 @@ export function IntegrationSettings({ config, onChange, workspace, onWorkspaceCh
         {(['mcp', 'acp'] as const).map(protocol => <div key={protocol} className="space-y-3">
             <h4 className="text-sm font-semibold text-(--fg-primary)">{t(`settings.integrations.${protocol === 'mcp' ? 'servers' : 'agents'}`)}</h4>
             {config.entries.filter(entry => entry.connection.protocol === protocol).map(entry => <DefinitionFields key={entry.id}
-                entry={entry} config={config} testContext={testContext} onChange={updated => onChange(replaceIntegration(config, updated))}
+                entry={entry} config={config} testContext={testContext} live={{ status: live.statuses.find(status => status.integration_id === entry.id), phase: live.phase, update: live.update }} onChange={updated => onChange(replaceIntegration(config, updated))}
                 onRemove={() => onChange(removeIntegration(config, entry.id))} />)}
             {!config.entries.some(entry => entry.connection.protocol === protocol) ? <p className="text-sm text-(--fg-tertiary)">
                 {t(`settings.integrations.${protocol === 'mcp' ? 'noServers' : 'noAgents'}`)}

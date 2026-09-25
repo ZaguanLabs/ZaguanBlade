@@ -12,14 +12,14 @@ const MAX_TOOL_BYTES: usize = 128 * 1024;
 const MAX_CATALOG_BYTES: usize = 1024 * 1024;
 const MAX_DEPTH: usize = 32;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CatalogTool {
     pub alias: String,
     /// Preserve schemas and SDK-supported metadata without provider adaptation.
     pub definition: Tool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct McpCatalog {
     schema_version: u32,
     integration_id: Uuid,
@@ -28,6 +28,10 @@ pub struct McpCatalog {
 }
 
 impl McpCatalog {
+    pub fn revision(&self) -> &str {
+        &self.revision
+    }
+
     pub fn tools(&self) -> &[CatalogTool] {
         &self.tools
     }

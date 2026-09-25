@@ -230,6 +230,17 @@ impl SupervisedProcess {
         Ok((process, stdout, stdin))
     }
 
+    /// Call after closing protocol stdin. Give the server a short opportunity to
+    /// flush, then terminate/reap the owned process tree even if only descendants remain.
+    pub async fn shutdown_gracefully(mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = tokio::time::timeout(Duration::from_millis(750), child.wait()).await;
+            let _ = child.start_kill();
+            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+        }
+        self.stderr.abort();
+    }
+
     pub async fn shutdown(mut self) {
         self.stderr.abort();
         if let Some(mut child) = self.child.take() {
