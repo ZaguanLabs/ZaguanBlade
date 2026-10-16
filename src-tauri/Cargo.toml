@@ -49,7 +49,9 @@ ignore = "0.4.33"
 similar = "3.2.0"
 gix = "0.89.0"
 keyring = "4.2.0"
-rmcp = { version = "=3.5.1", default-features = false, features = ["client", "transport-async-rw"] }
+rmcp = { version = "=3.5.1", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client"] }
+sse-stream = "=0.2.6"
+bytes = "1.12.1"
 agent-client-protocol = { version = "=3.3.0", default-features = false }
 tokio-util = { version = "0.7.20", features = ["compat", "rt"] }
 process-wrap = { version = "=10.0.1", default-features = false, features = ["tokio1", "process-group", "job-object", "kill-on-drop", "creation-flags"] }

@@ -2,10 +2,9 @@
 //! No Tauri command, model tool, or remote intent exposes permission decisions.
 use super::{
     call_result::{bounded_json, CallFailure, McpCallResult, MAX_ARGUMENT_BYTES},
-    config::{ConnectionConfig, McpTransport},
     connections::read_policy,
+    launch::PreparedTransport,
     permissions::{CallContext, CallReview, CallTarget},
-    process::PreparedProcess,
     runtime::IntegrationRuntime,
     RuntimeError,
 };
@@ -87,19 +86,13 @@ impl IntegrationRuntime {
             if current != binding.definition {
                 return Err(RuntimeError::ConfigChanged);
             }
-            let ConnectionConfig::Mcp {
-                transport: McpTransport::Stdio { process },
-            } = &current.connection
-            else {
-                return Err(RuntimeError::UnsupportedTransport);
-            };
-            let resolved = PreparedProcess::resolve(
-                process,
+            let resolved = PreparedTransport::resolve(
+                &current.connection,
                 current.id,
                 validation_documents.workspace_root(),
                 runtime.secrets.as_ref(),
             )?;
-            if resolved.fingerprint != binding.fingerprint {
+            if resolved.fingerprint() != binding.fingerprint {
                 return Err(RuntimeError::ConfigChanged);
             }
             Ok(slot)

@@ -775,7 +775,6 @@
       "test": {
         "button": "Probar conexión",
         "testing": "Probando…",
-        "httpPending": "La prueba de conexión HTTP estará disponible cuando se incorpore este transporte.",
         "workspaceNeeded": "Abre un espacio de trabajo para probar esta conexión.",
         "saveFirst": "Guarda los cambios antes de probar la conexión.",
         "success": "Prueba de conexión completada (protocolo {{version}}). El proceso de prueba se ha detenido.",
@@ -797,7 +796,7 @@
           "approval_expired": "La autorización de ejecución ha caducado o ya se ha utilizado. Inicia otra solicitud de conexión.",
           "busy": "Este servidor ya está conectado o conectándose, o hay demasiadas solicitudes activas. Comprueba su estado e inténtalo de nuevo.",
           "launch_failed": "No se ha podido iniciar el programa.",
-          "protocol_failed": "El programa no ha completado un intercambio válido del protocolo. Revisa el ejecutable y sus argumentos.",
+          "protocol_failed": "El servidor no ha completado un intercambio válido del protocolo. Revisa su URL, el ejecutable y los argumentos.",
           "unsupported_version": "El programa ha devuelto una versión del protocolo no compatible.",
           "output_limit": "El programa ha superado un límite de tráfico del protocolo o de descubrimiento.",
           "timed_out": "La solicitud de conexión ha agotado el tiempo de espera y se ha detenido.",
@@ -812,12 +811,16 @@
           "invalid_arguments": "Los argumentos o la identidad de la solicitud de la herramienta no son válidos.",
           "unsupported_result": "El servidor ha solicitado una interacción o tarea en segundo plano no compatible. La llamada puede haber producido efectos y no se ha vuelto a ejecutar.",
           "artifact_unavailable": "El resultado completo no está disponible; se conserva la vista previa en la conversación.",
-          "call_limit": "Este turno ha alcanzado el límite de llamadas MCP o ha repetido un identificador de llamada."
+          "call_limit": "Este turno ha alcanzado el límite de llamadas MCP o ha repetido un identificador de llamada.",
+          "authentication_required": "El servidor requiere autenticación o ha rechazado las credenciales configuradas. Revisa las cabeceras y las credenciales guardadas. El inicio de sesión con OAuth aún no está disponible.",
+          "server_unreachable": "No se ha podido contactar con el servidor. Comprueba la URL, la conexión de red y el certificado del servidor."
         },
         "mcpResult_other": "{{count}} herramientas; recursos: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "El agente anuncia {{count}} métodos de autenticación. No se ha iniciado ninguna sesión.",
         "mcpResult_one": "{{count}} herramienta; recursos: {{resources}}; prompts: {{prompts}}.",
-        "acpResult_one": "El agente anuncia {{count}} método de autenticación. No se ha iniciado ninguna sesión."
+        "acpResult_one": "El agente anuncia {{count}} método de autenticación. No se ha iniciado ninguna sesión.",
+        "reviewHelpHttp": "Blade se conectará al servidor indicado y enviará las cabeceras configuradas, incluidas las credenciales guardadas. Solo comprobará la conexión del protocolo y obtendrá la lista de herramientas; después, cerrará la sesión. Esta autorización sirve para una sola prueba y caduca a los 60 segundos.",
+        "successHttp": "Prueba de conexión completada (protocolo {{version}}). La sesión de prueba se ha cerrado."
       },
       "environment": {
         "title": "Variables de entorno",
@@ -887,7 +890,19 @@
         "statusUnavailable": "Estado de la conexión no disponible",
         "reviewTitle": "Conectar con {{name}}",
         "allow": "Permitir esta conexión",
-        "reviewHelp": "Se iniciará el programa indicado con tus permisos de usuario y las variables de entorno configuradas. Puede acceder a archivos y a la red. Seguirá ejecutándose hasta que lo desconectes, cierres el espacio de trabajo, salgas de Blade o cambies su configuración guardada, sus credenciales o las restricciones del espacio de trabajo. Esta autorización permite iniciar una conexión, pero no ejecutar herramientas. Los nombres, las descripciones y los esquemas de las herramientas pueden compartirse con el proveedor del modelo nativo seleccionado."
+        "reviewHelp": "Se iniciará el programa indicado con tus permisos de usuario y las variables de entorno configuradas. Puede acceder a archivos y a la red. Seguirá ejecutándose hasta que lo desconectes, cierres el espacio de trabajo, salgas de Blade o cambies su configuración guardada, sus credenciales o las restricciones del espacio de trabajo. Esta autorización permite iniciar una conexión, pero no ejecutar herramientas. Los nombres, las descripciones y los esquemas de las herramientas pueden compartirse con el proveedor del modelo nativo seleccionado.",
+        "reviewHelpHttp": "Blade se conectará al servidor indicado y enviará en cada solicitud las cabeceras configuradas, incluidas las credenciales guardadas. La conexión seguirá abierta hasta que la desconectes, cierres el espacio de trabajo, salgas de Blade o cambies su configuración guardada, sus credenciales o las restricciones del espacio de trabajo. Esta autorización permite iniciar una conexión, pero no ejecutar herramientas. Los nombres, las descripciones y los esquemas de las herramientas pueden compartirse con el proveedor del modelo nativo seleccionado."
+      },
+      "headers": {
+        "title": "Cabeceras HTTP",
+        "help": "Se envían en cada solicitud a este servidor. Authorization, Proxy-Authorization y Cookie deben usar una referencia a una credencial. Blade añade por su cuenta las cabeceras del protocolo.",
+        "name": "Nombre de la cabecera",
+        "add": "Añadir cabecera"
+      },
+      "review": {
+        "headers": "Cabeceras enviadas",
+        "noHeaders": "Ninguna",
+        "insecure": "Este servidor usa HTTP sin cifrar en otro equipo. Cualquiera que tenga acceso a la red intermedia podría leer o modificar las cabeceras, las credenciales, los argumentos de las herramientas y sus resultados. Usa HTTPS salvo que confíes en la red."
       }
     },
     "retryLoading": "Volver a cargar los ajustes",

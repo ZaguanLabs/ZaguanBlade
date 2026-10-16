@@ -1,12 +1,14 @@
-//! Workspace-owned MCP process lifetimes and serialized, approved tool calls.
+//! Workspace-owned MCP connection lifetimes (local processes or Streamable HTTP
+//! sessions) and serialized, approved tool calls.
 use super::{
     call_result::{CallFailure, CallOutcome, McpCallResult},
     catalog::McpCatalog,
-    config::{ConnectionConfig, IntegrationDefinition, McpTransport, MAX_CONFIG_BYTES},
+    config::{ConnectionConfig, IntegrationDefinition, MAX_CONFIG_BYTES},
     identity::WorkspaceIdentity,
-    mcp_session::McpSession,
+    launch::PreparedTransport,
+    mcp_session::{McpSession, MAX_SESSION_BYTES},
     permissions::{ApprovedCall, CallTarget},
-    process::{PreparedProcess, SupervisedProcess},
+    process::SupervisedProcess,
     store::IntegrationStore,
     RuntimeError,
 };
@@ -142,7 +144,7 @@ impl ConnectionRegistry {
         definition: IntegrationDefinition,
         documents: Arc<DocumentService>,
         cancel: CancellationToken,
-        prepared: PreparedProcess,
+        prepared: PreparedTransport,
         expires: Instant,
     ) -> Result<ConnectionStatus, RuntimeError> {
         let mut entries = self.entries.lock().map_err(|_| RuntimeError::Busy)?;
@@ -195,7 +197,7 @@ impl ConnectionRegistry {
             cancel,
             commands,
             operation: Arc::new(Semaphore::new(1)),
-            fingerprint: prepared.fingerprint.clone(),
+            fingerprint: prepared.fingerprint().to_owned(),
             worker: Mutex::new(None),
             snapshot: Mutex::new(Snapshot {
                 status: status.clone(),
@@ -550,12 +552,7 @@ pub(super) fn read_policy(
     if !settings.integrations.allows(&entry) {
         return Err(RuntimeError::IntegrationDisabled);
     }
-    if !matches!(
-        entry.connection,
-        ConnectionConfig::Mcp {
-            transport: McpTransport::Stdio { .. }
-        }
-    ) {
+    if !matches!(entry.connection, ConnectionConfig::Mcp { .. }) {
         return Err(RuntimeError::UnsupportedTransport);
     }
     Ok(entry)
@@ -595,7 +592,7 @@ impl Drop for FinishGuard {
 async fn run(
     connection: Arc<Connection>,
     directory: std::path::PathBuf,
-    prepared: PreparedProcess,
+    prepared: PreparedTransport,
     mut commands: mpsc::Receiver<Command>,
     expires: Instant,
 ) {
@@ -611,9 +608,16 @@ async fn run(
         if expires <= Instant::now() {
             return Err(RuntimeError::ApprovalExpired);
         }
-        let (child, read, write) = SupervisedProcess::spawn(&prepared)?;
-        process = Some(child);
-        let opened = McpSession::open(read, write).await?;
+        let opened = match &prepared {
+            PreparedTransport::Process(prepared) => {
+                let (child, read, write) = SupervisedProcess::spawn(prepared)?;
+                process = Some(child);
+                McpSession::open(read, write).await?
+            }
+            PreparedTransport::Http(prepared) => {
+                McpSession::open_http(prepared, MAX_SESSION_BYTES).await?
+            }
+        };
         session = Some(opened);
         let active = session.as_ref().ok_or(RuntimeError::ProtocolFailed)?;
         let catalog = active.discover(connection.definition.id).await?;
@@ -698,7 +702,7 @@ mod tests {
         permissions::{CallContext, CallReview},
     };
     use crate::integrations::{
-        config::{IntegrationConfig, ProcessConfig},
+        config::{IntegrationConfig, McpTransport, ProcessConfig},
         credentials::SecretStore,
         runtime::IntegrationRuntime,
     };

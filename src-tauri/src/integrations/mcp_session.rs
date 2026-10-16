@@ -1,6 +1,8 @@
-//! Owned stdio MCP session. Discovery is not tool invocation authorization.
+//! Owned MCP session over stdio or Streamable HTTP. Discovery is not tool
+//! invocation authorization.
 use super::{
     catalog::{CatalogBuilder, McpCatalog},
+    http::PreparedHttp,
     RuntimeError,
 };
 use rmcp::{
@@ -22,15 +24,46 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
-const MAX_SESSION_BYTES: usize = 64 * 1024 * 1024;
+pub(super) const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+pub(super) const MAX_SESSION_BYTES: usize = 64 * 1024 * 1024;
+
+/// Transport failures the SDK reduces to an opaque error, recorded where they
+/// are observed so the UI can show an actionable reason.
+#[derive(Default)]
+pub struct Signals {
+    exceeded: AtomicBool,
+    auth_required: AtomicBool,
+    unreachable: AtomicBool,
+}
+impl Signals {
+    pub(super) fn exceeded(&self) {
+        self.exceeded.store(true, Ordering::Release);
+    }
+    pub(super) fn auth_required(&self) {
+        self.auth_required.store(true, Ordering::Release);
+    }
+    pub(super) fn unreachable(&self) {
+        self.unreachable.store(true, Ordering::Release);
+    }
+    pub(super) fn error(&self) -> RuntimeError {
+        if self.exceeded.load(Ordering::Acquire) {
+            RuntimeError::OutputLimit
+        } else if self.auth_required.load(Ordering::Acquire) {
+            RuntimeError::AuthenticationRequired
+        } else if self.unreachable.load(Ordering::Acquire) {
+            RuntimeError::ServerUnreachable
+        } else {
+            RuntimeError::ProtocolFailed
+        }
+    }
+}
 
 pub struct McpClient;
 impl ClientHandler for McpClient {}
 
 pub struct McpSession {
     service: RunningService<RoleClient, McpClient>,
-    exceeded: Arc<AtomicBool>,
+    signals: Arc<Signals>,
     pub protocol_version: String,
     pub resources: bool,
     pub prompts: bool,
@@ -90,23 +123,38 @@ impl McpSession {
         read: impl AsyncRead + Send + Unpin + 'static,
         write: impl AsyncWrite + Send + Unpin + 'static,
     ) -> Result<Self, RuntimeError> {
-        let exceeded = Arc::new(AtomicBool::new(false));
+        let signals = Arc::new(Signals::default());
         let read = BoundedReader {
             inner: read,
             frame: 0,
             total: 0,
-            exceeded: exceeded.clone(),
+            signals: signals.clone(),
         };
+        Self::serve((read, write), signals).await
+    }
+
+    /// `budget` bounds all response bytes received over this session's lifetime.
+    pub async fn open_http(prepared: &PreparedHttp, budget: usize) -> Result<Self, RuntimeError> {
+        let signals = Arc::new(Signals::default());
+        let transport = prepared.transport(signals.clone(), budget)?;
+        Self::serve(transport, signals).await
+    }
+
+    async fn serve<T, E, A>(transport: T, signals: Arc<Signals>) -> Result<Self, RuntimeError>
+    where
+        T: rmcp::transport::IntoTransport<RoleClient, E, A>,
+        E: std::error::Error + Send + Sync + 'static,
+    {
         let service = McpClient
             .serve_with_lifecycle(
-                (read, write),
+                transport,
                 ClientLifecycleMode::Auto {
                     preferred_versions: vec![ProtocolVersion::V_2026_07_28],
                     legacy_version: Some(ProtocolVersion::V_2025_11_25),
                 },
             )
             .await
-            .map_err(|_| protocol_error(&exceeded))?;
+            .map_err(|_| signals.error())?;
         let info = service.peer_info().ok_or(RuntimeError::ProtocolFailed)?;
         if ![ProtocolVersion::V_2026_07_28, ProtocolVersion::V_2025_11_25]
             .contains(&info.protocol_version)
@@ -118,7 +166,7 @@ impl McpSession {
             resources: info.capabilities.resources.is_some(),
             prompts: info.capabilities.prompts.is_some(),
             service,
-            exceeded,
+            signals,
         })
     }
 
@@ -136,7 +184,7 @@ impl McpSession {
                     .service
                     .list_tools(Some(PaginatedRequestParams::default().with_cursor(cursor)))
                     .await
-                    .map_err(|_| protocol_error(&self.exceeded))?;
+                    .map_err(|_| self.signals.error())?;
                 for tool in response.tools {
                     catalog.push(tool)?;
                 }
@@ -155,19 +203,11 @@ impl McpSession {
     }
 
     pub fn close_error(&self) -> RuntimeError {
-        protocol_error(&self.exceeded)
+        self.signals.error()
     }
 
     pub async fn shutdown(mut self) {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(1), self.service.close()).await;
-    }
-}
-
-fn protocol_error(exceeded: &AtomicBool) -> RuntimeError {
-    if exceeded.load(Ordering::Acquire) {
-        RuntimeError::OutputLimit
-    } else {
-        RuntimeError::ProtocolFailed
     }
 }
 
@@ -177,7 +217,7 @@ struct BoundedReader<R> {
     inner: R,
     frame: usize,
     total: usize,
-    exceeded: Arc<AtomicBool>,
+    signals: Arc<Signals>,
 }
 impl<R: AsyncRead + Unpin> AsyncRead for BoundedReader<R> {
     fn poll_read(
@@ -185,7 +225,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for BoundedReader<R> {
         cx: &mut Context<'_>,
         buffer: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        if self.exceeded.load(Ordering::Acquire) {
+        if self.signals.exceeded.load(Ordering::Acquire) {
             return Poll::Ready(Err(io::ErrorKind::InvalidData.into()));
         }
         let start = buffer.filled().len();
@@ -195,7 +235,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for BoundedReader<R> {
                     self.total += 1;
                     self.frame += 1;
                     if self.frame > MAX_FRAME_BYTES || self.total > MAX_SESSION_BYTES {
-                        self.exceeded.store(true, Ordering::Release);
+                        self.signals.exceeded();
                         // AsyncRead must not advance the caller's filled bytes on error.
                         buffer.set_filled(start);
                         return Poll::Ready(Err(io::ErrorKind::InvalidData.into()));
@@ -217,31 +257,31 @@ mod tests {
     use tokio::io::AsyncReadExt;
     #[tokio::test]
     async fn frame_and_lifetime_limits_are_independent_and_fail_closed() {
-        let exceeded = Arc::new(AtomicBool::new(false));
+        let signals = Arc::new(Signals::default());
         let mut reader = BoundedReader {
             inner: &b"abc\ndef\n"[..],
             frame: 0,
             total: MAX_SESSION_BYTES - 4,
-            exceeded: exceeded.clone(),
+            signals: signals.clone(),
         };
         assert!(reader.read_to_end(&mut Vec::new()).await.is_err());
-        assert!(exceeded.load(Ordering::Acquire));
-        let exceeded = Arc::new(AtomicBool::new(false));
+        assert_eq!(signals.error(), RuntimeError::OutputLimit);
+        let signals = Arc::new(Signals::default());
         let mut reader = BoundedReader {
             inner: &b"abc\ndef\n"[..],
             frame: MAX_FRAME_BYTES - 4,
             total: 0,
-            exceeded: exceeded.clone(),
+            signals: signals.clone(),
         };
         let mut output = Vec::new();
         reader.read_to_end(&mut output).await.unwrap();
         assert_eq!(output, b"abc\ndef\n");
-        assert!(!exceeded.load(Ordering::Acquire));
+        assert_eq!(signals.error(), RuntimeError::ProtocolFailed);
         let mut reader = BoundedReader {
             inner: &b"abcde"[..],
             frame: MAX_FRAME_BYTES - 4,
             total: 0,
-            exceeded,
+            signals,
         };
         assert!(reader.read_to_end(&mut Vec::new()).await.is_err());
     }

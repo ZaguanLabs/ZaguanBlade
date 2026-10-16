@@ -1,12 +1,13 @@
 //! Request-scoped, one-use launch approvals. Saving/enabling a definition never
 //! grants trust. Probe and live-connection tickets have distinct purposes.
 use super::{
-    config::{ConnectionConfig, McpTransport},
+    config::ConnectionConfig,
     connections::{self, ConnectionRegistry, ConnectionStatus},
     credentials::SecretStore,
     identity::WorkspaceIdentity,
+    launch::PreparedTransport,
     probe::{self, ProbeResult},
-    process::{PreparedProcess, SupervisedProcess},
+    process::SupervisedProcess,
     store::IntegrationStore,
     RuntimeError,
 };
@@ -30,9 +31,41 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 #[derive(Clone, Serialize)]
 pub struct LaunchReview {
     pub ticket_id: Uuid,
-    pub executable: PathBuf,
-    pub cwd: PathBuf,
-    pub args: Vec<String>,
+    #[serde(flatten)]
+    pub target: ReviewTarget,
+}
+
+/// What the user approves. Header values and environment values are never shown.
+#[derive(Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReviewTarget {
+    Process {
+        executable: PathBuf,
+        cwd: PathBuf,
+        args: Vec<String>,
+    },
+    Http {
+        url: String,
+        header_names: Vec<String>,
+        insecure: bool,
+    },
+}
+
+impl From<&PreparedTransport> for ReviewTarget {
+    fn from(prepared: &PreparedTransport) -> Self {
+        match prepared {
+            PreparedTransport::Process(process) => Self::Process {
+                executable: process.executable.clone(),
+                cwd: process.cwd.clone(),
+                args: process.args.clone(),
+            },
+            PreparedTransport::Http(http) => Self::Http {
+                url: http.url.clone(),
+                header_names: http.header_names.clone(),
+                insecure: http.insecure,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -88,7 +121,7 @@ impl IntegrationRuntime {
         integration: Uuid,
         revision: &str,
         documents: &DocumentService,
-    ) -> Result<(PreparedProcess, bool), RuntimeError> {
+    ) -> Result<(PreparedTransport, bool), RuntimeError> {
         if documents.cancellation().is_cancelled() {
             return Err(RuntimeError::WorkspaceChanged);
         }
@@ -104,21 +137,14 @@ impl IntegrationRuntime {
             .iter()
             .find(|entry| entry.id == integration)
             .ok_or(RuntimeError::ConfigChanged)?;
-        let (process, is_acp) = match &entry.connection {
-            ConnectionConfig::Mcp {
-                transport: McpTransport::Stdio { process },
-            } => (process, false),
-            ConnectionConfig::Acp { process, .. } => (process, true),
-            _ => return Err(RuntimeError::UnsupportedTransport),
-        };
         Ok((
-            PreparedProcess::resolve(
-                process,
+            PreparedTransport::resolve(
+                &entry.connection,
                 integration,
                 documents.workspace_root(),
                 self.secrets.as_ref(),
             )?,
-            is_acp,
+            matches!(entry.connection, ConnectionConfig::Acp { .. }),
         ))
     }
 
@@ -158,12 +184,10 @@ impl IntegrationRuntime {
         if purpose == Purpose::Connection {
             connections::read_policy(&self.directory, documents, integration)?;
         }
-        let (process, _) = self.resolve(integration, &revision, documents)?;
+        let (prepared, _) = self.resolve(integration, &revision, documents)?;
         let review = LaunchReview {
             ticket_id: Uuid::new_v4(),
-            executable: process.executable,
-            cwd: process.cwd,
-            args: process.args,
+            target: ReviewTarget::from(&prepared),
         };
         let mut requests = self.requests.lock().map_err(|_| RuntimeError::Busy)?;
         if self.shutting_down.load(Ordering::Acquire) {
@@ -182,7 +206,7 @@ impl IntegrationRuntime {
                 integration,
                 revision,
                 workspace: documents.identity().clone(),
-                fingerprint: process.fingerprint,
+                fingerprint: prepared.fingerprint().to_owned(),
                 expires: Instant::now() + APPROVAL_TTL,
                 cancel: CancellationToken::new(),
                 workspace_cancel: documents.cancellation(),
@@ -329,7 +353,7 @@ impl IntegrationRuntime {
             let (prepared, definition) = preparation
                 .await
                 .map_err(|_| RuntimeError::LaunchFailed)??;
-            if prepared.fingerprint != ticket.fingerprint {
+            if prepared.fingerprint() != ticket.fingerprint {
                 return Err(RuntimeError::ConfigChanged);
             }
             if ticket.expires <= Instant::now() {
@@ -379,7 +403,7 @@ impl IntegrationRuntime {
             let (prepared, is_acp) = preparation
                 .await
                 .map_err(|_| RuntimeError::LaunchFailed)??;
-            if prepared.fingerprint != ticket.fingerprint {
+            if prepared.fingerprint() != ticket.fingerprint {
                 return Err(RuntimeError::ConfigChanged);
             }
             if ticket.expires <= Instant::now() {
@@ -391,6 +415,10 @@ impl IntegrationRuntime {
             if ticket.workspace_cancel.is_cancelled() {
                 return Err(RuntimeError::WorkspaceChanged);
             }
+            let prepared = match prepared {
+                PreparedTransport::Http(http) => return probe::mcp_http(integration, &http).await,
+                PreparedTransport::Process(process) => process,
+            };
             let (process, read, write) = SupervisedProcess::spawn(&prepared)?;
             let result = if is_acp {
                 probe::acp(read, write).await

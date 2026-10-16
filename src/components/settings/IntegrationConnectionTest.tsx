@@ -5,6 +5,7 @@ import { ConfirmModal } from '../ui/Modal';
 import type { IntegrationDefinition, IntegrationLaunchReview, IntegrationProbeResult } from '../../types/integrations';
 import { IntegrationProbeRequest, integrationProbeErrorKey } from '../../utils/integrationProbe';
 import { IntegrationToolCatalog } from './IntegrationToolCatalog';
+import { LaunchReviewDetails } from './IntegrationLaunchReview';
 
 export interface ConnectionTestContext {
     revision?: string | null;
@@ -61,7 +62,6 @@ export function IntegrationConnectionTest({ entry, revision, workspacePath, canT
         }
     };
 
-    if (isHttp) return <p className="text-xs text-(--fg-tertiary)">{t('settings.integrations.test.httpPending')}</p>;
     return <div className="space-y-2 border-t border-(--border-default) pt-3">
         <div className="flex items-center gap-2">
             <button type="button" className={buttonClass} disabled={!canTest || !revision || !workspacePath || busy || !!review} onClick={() => void prepare()}>
@@ -72,7 +72,7 @@ export function IntegrationConnectionTest({ entry, revision, workspacePath, canT
         {!workspacePath || !canTest ? <p className="text-xs text-(--fg-tertiary)">{t(`settings.integrations.test.${!workspacePath ? 'workspaceNeeded' : 'saveFirst'}`)}</p> : null}
         {error ? <p role="alert" className="text-sm text-(--state-danger)">{t(error)}</p> : null}
         {result ? <div role="status" className="text-sm text-(--fg-secondary)">
-            <p>{t('settings.integrations.test.success', { version: result.protocol_version })}</p>
+            <p>{t(`settings.integrations.test.${isHttp ? 'successHttp' : 'success'}`, { version: result.protocol_version })}</p>
             <p>{entry.connection.protocol === 'mcp'
                 ? t('settings.integrations.test.mcpResult', { count: result.tools, resources: t(result.resources ? 'common.yes' : 'common.no'), prompts: t(result.prompts ? 'common.yes' : 'common.no') })
                 : t('settings.integrations.test.acpResult', { count: result.authentication_methods })}</p>
@@ -80,13 +80,6 @@ export function IntegrationConnectionTest({ entry, revision, workspacePath, canT
         {result?.catalog && result.catalog.integration_id === entry.id ? <IntegrationToolCatalog key={result.catalog.revision} catalog={result.catalog} serverName={entry.name} /> : null}
         <ConfirmModal isOpen={!!review} title={t('settings.integrations.test.reviewTitle', { name: entry.name })}
             confirmLabel={t('settings.integrations.test.allowOnce')} onConfirm={() => void run()} onCancel={cancel}
-            message={<div className="space-y-3">
-                <p>{t('settings.integrations.test.reviewHelp')}</p>
-                <dl className="max-h-60 overflow-auto break-all">
-                    <dt>{t('settings.integrations.command')}</dt><dd className="font-mono text-xs">{review?.executable}</dd>
-                    <dt className="mt-2">{t('settings.integrations.arguments')}</dt><dd className="font-mono text-xs whitespace-pre-wrap">{JSON.stringify(review?.args, null, 2)}</dd>
-                    <dt className="mt-2">{t('settings.integrations.directory')}</dt><dd className="font-mono text-xs">{review?.cwd}</dd>
-                </dl>
-            </div>} />
+            message={<LaunchReviewDetails review={review} purpose="test" />} />
     </div>;
 }

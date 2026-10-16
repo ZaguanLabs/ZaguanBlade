@@ -237,6 +237,7 @@ impl IntegrationConfig {
                     let mut names = HashSet::new();
                     for (name, value) in headers {
                         if reqwest::header::HeaderName::from_bytes(name.as_bytes()).is_err()
+                            || super::http::reserved_header(name)
                             || !names.insert(name.to_ascii_lowercase())
                             || !value.validate()
                             || matches!(value, ConfigValue::Text { value } if reqwest::header::HeaderValue::from_str(value).is_err())
@@ -385,6 +386,23 @@ mod tests {
             },
         );
         assert!(config.validate().is_ok());
+        // Transport-owned headers cannot be replaced by configuration.
+        for name in ["Mcp-Session-Id", "accept", "Mcp-Param-Path"] {
+            let mut reserved = config.clone();
+            let ConnectionConfig::Mcp {
+                transport: McpTransport::StreamableHttp { headers, .. },
+            } = &mut reserved.entries[0].connection
+            else {
+                panic!()
+            };
+            headers.insert(
+                name.into(),
+                ConfigValue::Text {
+                    value: "value".into(),
+                },
+            );
+            assert_eq!(reserved.validate(), Err(ConfigError::InvalidHeaders));
+        }
     }
 
     #[test]

@@ -779,7 +779,6 @@
       "test": {
         "button": "Test connection",
         "testing": "Testing…",
-        "httpPending": "HTTP connection testing will be available with the HTTP transport.",
         "workspaceNeeded": "Open a workspace to test this connection.",
         "saveFirst": "Save your changes before testing.",
         "success": "Connection test passed (protocol {{version}}). The test process has stopped.",
@@ -801,7 +800,7 @@
           "approval_expired": "The launch approval expired or was already used. Start a new connection request.",
           "busy": "This server is already connecting or connected, or too many requests are active. Check its status and try again.",
           "launch_failed": "The program could not be started.",
-          "protocol_failed": "The program did not complete a valid protocol exchange. Check the executable and arguments.",
+          "protocol_failed": "The server did not complete a valid protocol exchange. Check its URL, executable and arguments.",
           "unsupported_version": "The program returned an unsupported protocol version.",
           "output_limit": "The program exceeded a protocol traffic or discovery limit.",
           "timed_out": "The connection request timed out and was stopped.",
@@ -816,12 +815,16 @@
           "invalid_arguments": "The tool call arguments or request identity are invalid.",
           "unsupported_result": "The server requested an unsupported interaction or background task. The call may have had effects and was not retried.",
           "artifact_unavailable": "The full result is unavailable; the transcript preview is still retained.",
-          "call_limit": "This turn has reached its MCP call limit or repeated a call identifier."
+          "call_limit": "This turn has reached its MCP call limit or repeated a call identifier.",
+          "authentication_required": "The server requires authentication or rejected the configured credentials. Check the headers and stored credentials. OAuth sign-in is not supported yet.",
+          "server_unreachable": "Could not reach the server. Check the URL, your network connection and the server certificate."
         },
         "mcpResult_other": "{{count}} tools; resources: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "{{count}} authentication methods advertised. No session was started.",
         "mcpResult_one": "{{count}} tool; resources: {{resources}}; prompts: {{prompts}}.",
-        "acpResult_one": "{{count}} authentication method advertised. No session was started."
+        "acpResult_one": "{{count}} authentication method advertised. No session was started.",
+        "reviewHelpHttp": "Blade will connect to the server below and send the configured headers, including stored credentials. It will only check the protocol connection and list the tools, then close the session. This approval is valid for one test and expires after 60 seconds.",
+        "successHttp": "Connection test passed (protocol {{version}}). The test session has closed."
       },
       "environment": {
         "title": "Environment variables",
@@ -891,7 +894,19 @@
         "statusUnavailable": "Connection status unavailable",
         "reviewTitle": "Connect to {{name}}",
         "allow": "Allow this connection",
-        "reviewHelp": "This starts the program below with your user permissions and configured environment. It can access files and the network. It stays running until you disconnect, close the workspace, exit Blade, or change its saved configuration, credentials or workspace policy. This approval starts one connection; it does not authorize tool calls. Tool names, descriptions and schemas may be shared with the selected native model provider."
+        "reviewHelp": "This starts the program below with your user permissions and configured environment. It can access files and the network. It stays running until you disconnect, close the workspace, exit Blade, or change its saved configuration, credentials or workspace policy. This approval starts one connection; it does not authorize tool calls. Tool names, descriptions and schemas may be shared with the selected native model provider.",
+        "reviewHelpHttp": "Blade will connect to the server below and send the configured headers, including stored credentials, with every request. The connection stays open until you disconnect, close the workspace, exit Blade, or change its saved configuration, credentials or workspace policy. This approval starts one connection; it does not authorize tool calls. Tool names, descriptions and schemas may be shared with the selected native model provider."
+      },
+      "headers": {
+        "title": "HTTP headers",
+        "help": "Sent with every request to this server. Authorization, Proxy-Authorization and Cookie must use a credential reference. Blade sets protocol headers itself.",
+        "name": "Header name",
+        "add": "Add header"
+      },
+      "review": {
+        "headers": "Headers sent",
+        "noHeaders": "None",
+        "insecure": "This server uses unencrypted HTTP on another computer. Anyone on the network path can read or change headers, credentials, tool arguments and results. Use HTTPS unless you trust the network."
       }
     },
     "retryLoading": "Reload settings",

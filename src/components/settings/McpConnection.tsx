@@ -7,6 +7,7 @@ import { McpConnectionRequest } from '../../utils/mcpConnection';
 import { integrationProbeErrorKey } from '../../utils/integrationProbe';
 import { ConfirmModal } from '../ui/Modal';
 import { IntegrationToolCatalog } from './IntegrationToolCatalog';
+import { LaunchReviewDetails } from './IntegrationLaunchReview';
 
 export interface LiveConnectionContext {
     status?: McpConnectionStatus;
@@ -89,13 +90,6 @@ export function McpConnection({ entry, revision, workspacePath, canTest, live }:
         {catalog && live.phase === 'ready' && status?.phase === 'connected' && catalog.revision === status.catalog_revision ? <IntegrationToolCatalog catalog={catalog} serverName={entry.name} origin="connection" /> : null}
         <ConfirmModal isOpen={!!review} title={t('settings.integrations.connection.reviewTitle', { name: entry.name })}
             confirmLabel={t('settings.integrations.connection.allow')} onConfirm={() => void connect()} onCancel={cancel}
-            message={<div className="space-y-3">
-                <p>{t('settings.integrations.connection.reviewHelp')}</p>
-                <dl className="max-h-60 overflow-auto break-all">
-                    <dt>{t('settings.integrations.command')}</dt><dd className="font-mono text-xs">{review?.executable}</dd>
-                    <dt className="mt-2">{t('settings.integrations.arguments')}</dt><dd className="font-mono text-xs whitespace-pre-wrap">{JSON.stringify(review?.args, null, 2)}</dd>
-                    <dt className="mt-2">{t('settings.integrations.directory')}</dt><dd className="font-mono text-xs">{review?.cwd}</dd>
-                </dl>
-            </div>} />
+            message={<LaunchReviewDetails review={review} purpose="connection" />} />
     </section>;
 }

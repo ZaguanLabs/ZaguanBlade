@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { IntegrationProbeRequest, integrationProbeErrorKey } from './integrationProbe';
 import type { IntegrationLaunchReview, IntegrationProbeResult } from '../types/integrations';
 
-const review: IntegrationLaunchReview = { ticket_id: 'ticket', executable: '/program', cwd: '/project', args: [] };
+const review: IntegrationLaunchReview = { ticket_id: 'ticket', kind: 'process', executable: '/program', cwd: '/project', args: [] };
 const result: IntegrationProbeResult = { protocol_version: '1', tools: 0, resources: false, prompts: false, authentication_methods: 0 };
 function deferred<T>() {
     let resolve!: (value: T) => void;

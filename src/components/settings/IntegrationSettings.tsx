@@ -7,7 +7,7 @@ import { IntegrationConnectionTest, type ConnectionTestContext } from './Integra
 import { SymbolsIndexSettings } from './SymbolsIndexSettings';
 import { McpConnection, type LiveConnectionContext } from './McpConnection';
 import { useMcpConnections } from '../../hooks/useMcpConnections';
-import { IntegrationEnvironment, IntegrationSecrets } from './IntegrationEnvironment';
+import { IntegrationEnvironment, IntegrationHeaders, IntegrationSecrets } from './IntegrationEnvironment';
 
 const inputClass = 'w-full rounded-md border border-(--border-default) bg-(--bg-input) px-3 py-2 text-sm text-(--fg-primary) focus:outline-none focus:border-(--border-focus)';
 const buttonClass = 'inline-flex items-center gap-2 rounded-md border border-(--border-default) px-3 py-2 text-sm text-(--fg-secondary) hover:bg-(--bg-surface-hover) disabled:opacity-50';
@@ -62,7 +62,7 @@ function DefinitionFields({ entry, onChange, onRemove, config, testContext, live
     const [credentialVersion, setCredentialVersion] = useState(0);
     return <section className="rounded-lg border border-(--border-default) bg-(--bg-panel) p-4 space-y-4">
         <div className="flex items-center justify-between gap-3">
-            <span className="text-xs text-(--fg-tertiary)">{connection.protocol === 'mcp' && connection.transport.type === 'stdio' ? t(`settings.integrations.connection.${live.phase === 'ready' ? live.status?.phase ?? 'disconnected' : live.phase === 'failed' ? 'statusUnavailable' : 'checking'}`) : t('settings.integrations.notConnected')}</span>
+            <span className="text-xs text-(--fg-tertiary)">{connection.protocol === 'mcp' ? t(`settings.integrations.connection.${live.phase === 'ready' ? live.status?.phase ?? 'disconnected' : live.phase === 'failed' ? 'statusUnavailable' : 'checking'}`) : t('settings.integrations.notConnected')}</span>
             <button type="button" className={buttonClass} onClick={onRemove} aria-label={t('settings.integrations.removeDefinition', { name: entry.name })}>
                 <Trash2 className="h-4 w-4" aria-hidden="true" />{t('settings.integrations.remove')}
             </button>
@@ -85,13 +85,19 @@ function DefinitionFields({ entry, onChange, onRemove, config, testContext, live
             </label>
             {connection.transport.type === 'stdio'
                 ? <ProcessFields process={connection.transport.process} onChange={process => onChange({ ...entry, connection: { protocol: 'mcp', transport: { type: 'stdio', process } } })} />
-                : <label className="block text-sm text-(--fg-secondary)">
-                    {t('settings.integrations.url')}
-                    <input className={`${inputClass} mt-1`} type="url" value={connection.transport.url} spellCheck={false}
-                        onChange={event => {
-                            if (connection.transport.type === 'streamable_http') onChange({ ...entry, connection: { protocol: 'mcp', transport: { ...connection.transport, url: event.target.value } } });
-                        }} />
-                </label>}
+                : <div className="space-y-3">
+                    <label className="block text-sm text-(--fg-secondary)">
+                        {t('settings.integrations.url')}
+                        <input className={`${inputClass} mt-1`} type="url" value={connection.transport.url} spellCheck={false}
+                            placeholder="https://example.com/mcp"
+                            onChange={event => {
+                                if (connection.transport.type === 'streamable_http') onChange({ ...entry, connection: { protocol: 'mcp', transport: { ...connection.transport, url: event.target.value } } });
+                            }} />
+                    </label>
+                    <IntegrationHeaders headers={connection.transport.headers} onChange={headers => {
+                        if (connection.transport.type === 'streamable_http') onChange({ ...entry, connection: { protocol: 'mcp', transport: { ...connection.transport, headers } } });
+                    }} />
+                </div>}
         </> : <>
             <ProcessFields process={connection.process} onChange={process => onChange({ ...entry, connection: { ...connection, process } })} />
             {config.entries.some(candidate => candidate.connection.protocol === 'mcp') ? <fieldset className="space-y-2">
@@ -107,7 +113,7 @@ function DefinitionFields({ entry, onChange, onRemove, config, testContext, live
         <IntegrationSecrets entry={entry} revision={testContext.revision} canSave={testContext.canTest}
             onStored={() => setCredentialVersion(version => version + 1)} />
         <IntegrationConnectionTest key={credentialVersion} entry={entry} {...testContext} />
-        {connection.protocol === 'mcp' && connection.transport.type === 'stdio' ? <McpConnection key={`live-${credentialVersion}`} entry={entry} {...testContext} live={live} /> : null}
+        {connection.protocol === 'mcp' ? <McpConnection key={`live-${credentialVersion}`} entry={entry} {...testContext} live={live} /> : null}
     </section>;
 }
 

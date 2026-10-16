@@ -1,6 +1,6 @@
 //! Short-lived protocol probes. No tools, prompts, sessions, authentication or
 //! editor callbacks are executed. Reader budget also bounds unterminated frames.
-use super::{catalog::McpCatalog, mcp_session::McpSession, RuntimeError};
+use super::{catalog::McpCatalog, http::PreparedHttp, mcp_session::McpSession, RuntimeError};
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -22,7 +22,29 @@ pub async fn mcp(
     read: impl AsyncRead + Send + Unpin + 'static,
     write: impl AsyncWrite + Send + Unpin + 'static,
 ) -> Result<ProbeResult, RuntimeError> {
-    let session = McpSession::open(read.take(MAX_OUTPUT_BYTES), write).await?;
+    report(
+        integration_id,
+        McpSession::open(read.take(MAX_OUTPUT_BYTES), write).await?,
+    )
+    .await
+}
+
+/// The probe budget matches stdio's: 4 MiB across every response.
+pub async fn mcp_http(
+    integration_id: uuid::Uuid,
+    prepared: &PreparedHttp,
+) -> Result<ProbeResult, RuntimeError> {
+    report(
+        integration_id,
+        McpSession::open_http(prepared, MAX_OUTPUT_BYTES as usize).await?,
+    )
+    .await
+}
+
+async fn report(
+    integration_id: uuid::Uuid,
+    session: McpSession,
+) -> Result<ProbeResult, RuntimeError> {
     let catalog = session.discover(integration_id).await?;
     let result = ProbeResult {
         protocol_version: session.protocol_version.clone(),

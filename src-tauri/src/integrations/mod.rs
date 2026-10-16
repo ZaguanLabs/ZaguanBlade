@@ -6,8 +6,10 @@ pub mod catalog;
 pub mod config;
 pub mod connections;
 pub mod credentials;
+pub mod http;
 pub mod identity;
 pub(crate) mod invocation;
+pub mod launch;
 pub mod mcp_session;
 pub(crate) mod native_catalog;
 pub(crate) mod native_turn;
@@ -49,4 +51,6 @@ pub enum RuntimeError {
     UnsupportedResult,
     ArtifactUnavailable,
     CallLimit,
+    AuthenticationRequired,
+    ServerUnreachable,
 }
