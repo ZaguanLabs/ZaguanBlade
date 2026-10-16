@@ -322,7 +322,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                     invoke: async <T,>(command: string, args: Record<string, unknown>): Promise<T> => {
                         try { return await invoke<T>(command, args); }
                         catch (error) {
-                            if (command === 'save_integration_settings') throw new Error(i18n.t(integrationErrorKey(error)));
+                            if (command === 'save_integration_settings') {
+                                throw Object.assign(new Error(i18n.t(integrationErrorKey(error))), { cause: error });
+                            }
                             throw error;
                         }
                     },

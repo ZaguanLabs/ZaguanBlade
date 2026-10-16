@@ -97,7 +97,7 @@ build-frontend: install-deps ## Frontend build only (tsc + vite build)
 test: test-frontend test-backend ## Run all tests
 
 test-frontend: ## Run frontend tests
-	$(BUN) test src/**/*.test.ts
+	$(BUN) run test
 
 test-backend: ## Run backend (Rust) tests
 	cd src-tauri && $(CARGO) test --workspace

@@ -5,14 +5,14 @@ edition = "2021"
 rust-version = "1.88"
 publish = false
 
-# Keep SDK evaluation separate from the application dependency graph until the
-# runtime adapters are ready. These are the feature sets intended for adoption.
+# Check broader SDK feature sets in a separate dependency graph while keeping
+# the shared SDK versions aligned with the application.
 [dev-dependencies]
-rmcp = { version = "=3.2.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest", "auth", "elicitation"] }
-agent-client-protocol = { version = "=2.1.0", default-features = false }
-tokio = { version = "=1.52.3", features = ["rt-multi-thread", "macros", "io-util", "time", "process"] }
-tokio-util = { version = "0.7", features = ["compat"] }
-serde_json = "1"
+rmcp = { version = "=3.5.1", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest", "auth", "elicitation"] }
+agent-client-protocol = { version = "=3.3.0", default-features = false }
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "io-util", "time", "process"] }
+tokio-util = { version = "0.7.20", features = ["compat"] }
+serde_json = "1.0.154"
 
 [[test]]
 name = "protocols"

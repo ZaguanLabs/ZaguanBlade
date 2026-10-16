@@ -15,23 +15,23 @@ name = "zblade_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.3", features = [] }
+tauri-build = { version = "2.7.3", features = [] }
 
 [dependencies]
-tauri = { version = "2.11.5", features = [] }
-tauri-plugin-opener = "2.5.5"
-tauri-plugin-fs = "2.5.2"
-tauri-plugin-dialog = "2.7.3"
-tauri-plugin-notification = "2.4.0"
+tauri = { version = "2.12.4", features = [] }
+tauri-plugin-opener = "2.7.2"
+tauri-plugin-fs = "2.7.1"
+tauri-plugin-dialog = "2.8.3"
+tauri-plugin-notification = "2.7.0"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = "1.0.154"
 serde_yaml = "0.9"
 # M4.3 — span-preserving YAML reader for correct config-key line/col positions
 # (serde_yaml 0.9 discards source spans). Small, purpose-built to retain
 # per-node line/col markers; tolerates duplicate keys.
 marked-yaml = "0.8"
-reqwest = { version = "0.13.3", features = ["json", "stream"] }
-tokio = { version = "1.52.3", features = ["rt", "rt-multi-thread", "fs", "process", "net", "sync", "time", "macros", "io-util"] }
+reqwest = { version = "0.13.5", features = ["json", "stream"] }
+tokio = { version = "1.53.3", features = ["rt", "rt-multi-thread", "fs", "process", "net", "sync", "time", "macros", "io-util"] }
 chrono = { version = "0.4", features = ["clock", "serde"] }
 regex = "1.12.2"
 walkdir = "2.5.0"
@@ -40,22 +40,22 @@ futures-util = "0.3.34"
 portable-pty = "0.9.0"
 
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
-uuid = { version = "1.26.0", features = ["v4", "serde"] }
-clap = { version = "4.6.6", features = ["derive"] }
+uuid = { version = "1.28.0", features = ["v4", "serde"] }
+clap = { version = "4.6.7", features = ["derive"] }
 glob = "0.3"
 rusqlite = { version = "0.39", features = ["bundled"] }
 notify = "8"
 ignore = "0.4.33"
 similar = "3.2.0"
-gix = "0.86.0"
+gix = "0.89.0"
 keyring = "4.2.0"
-rmcp = { version = "=3.2.0", default-features = false, features = ["client", "transport-async-rw"] }
-agent-client-protocol = { version = "=2.1.0", default-features = false }
-tokio-util = { version = "0.7", features = ["compat", "rt"] }
-process-wrap = { version = "=9.1.0", default-features = false, features = ["tokio1", "process-group", "job-object", "kill-on-drop", "creation-flags"] }
+rmcp = { version = "=3.5.1", default-features = false, features = ["client", "transport-async-rw"] }
+agent-client-protocol = { version = "=3.3.0", default-features = false }
+tokio-util = { version = "0.7.20", features = ["compat", "rt"] }
+process-wrap = { version = "=10.0.1", default-features = false, features = ["tokio1", "process-group", "job-object", "kill-on-drop", "creation-flags"] }
 
 # Tree-sitter for AST parsing (ZLP - Zaguán Language Protocol)
-tree-sitter = "0.26.13"
+tree-sitter = "0.27.1"
 tree-sitter-rust = "0.24.2"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-javascript = "0.25"
@@ -69,12 +69,12 @@ mimalloc = "0.1.52"
 
 # Warmup context prefetch — the zcoderd warmup contract requires a SHA-256
 # hash of the exact sent bytes on every content-bearing bundle item.
-sha2 = "0.11"
+sha2 = "0.11.1"
 
 # M6 CL1 — xxh3: a version-stable content hash for persisted fingerprints
 # (indexed_files.file_hash, the reconcile checkpoint, the project-state filename).
 # Unlike std's SipHash DefaultHasher, xxh3 output is fixed across Rust toolchains.
-xxhash-rust = { version = "0.8", features = ["xxh3"] }
+xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 
 base64 = "0.23.1"
 xcap = "0.9.8"
