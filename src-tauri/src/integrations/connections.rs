@@ -30,6 +30,8 @@ use uuid::Uuid;
 
 const MAX_CONNECTIONS: usize = 4;
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(20);
+/// Minimum spacing of server-initiated rediscovery; further notices coalesce.
+const CHANGE_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -102,6 +104,18 @@ impl Connection {
             }
         }
         self.cancel.cancel();
+    }
+    /// Withdraw the catalog before rediscovery so nothing is dispatched
+    /// against a list the server has declared stale.
+    fn withdraw(&self) -> Result<(), RuntimeError> {
+        let mut snapshot = self.snapshot.lock().map_err(|_| RuntimeError::Busy)?;
+        if snapshot.status.phase.active() && snapshot.status.phase != ConnectionPhase::Stopping {
+            snapshot.status.phase = ConnectionPhase::Refreshing;
+            snapshot.status.catalog_revision = None;
+            snapshot.status.tools = 0;
+            snapshot.catalog = None;
+        }
+        Ok(())
     }
     fn status(&self) -> Result<ConnectionStatus, RuntimeError> {
         self.snapshot
@@ -638,12 +652,32 @@ async fn run(
                 .expect("successful initialization owns the MCP session");
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let watch = active.watch_tool_changes();
+            tokio::pin!(watch);
+            let mut stale = false;
+            let mut next_refresh = tokio::time::Instant::now();
+            let rediscover = || async {
+                verify(&directory, &connection).await?;
+                let catalog = active.discover(connection.definition.id).await?;
+                verify(&directory, &connection).await?;
+                connection.publish(active, catalog)
+            };
             let monitor = async {
                 loop {
                     tokio::select! {
                         _ = interval.tick() => {
                             if active.is_closed() { return Err(active.close_error()); }
                             tokio::time::timeout(DISCOVERY_TIMEOUT, verify(&directory, &connection)).await.map_err(|_| RuntimeError::TimedOut)??;
+                        }
+                        _ = &mut watch => {}
+                        _ = active.tools_changed(), if !stale => {
+                            connection.withdraw()?;
+                            stale = true;
+                        }
+                        _ = tokio::time::sleep_until(next_refresh), if stale => {
+                            stale = false;
+                            next_refresh = tokio::time::Instant::now() + CHANGE_REFRESH_INTERVAL;
+                            tokio::time::timeout(DISCOVERY_TIMEOUT, rediscover()).await.map_err(|_| RuntimeError::TimedOut)??;
                         }
                         request = commands.recv() => {
                             let Some(request) = request else { return Ok(()); };
@@ -654,13 +688,7 @@ async fn run(
                                 }
                                 Command::Refresh(slot) => slot,
                             };
-                            let discover = async {
-                                verify(&directory, &connection).await?;
-                                let catalog = active.discover(connection.definition.id).await?;
-                                verify(&directory, &connection).await?;
-                                connection.publish(active, catalog)
-                            };
-                            tokio::time::timeout(DISCOVERY_TIMEOUT, discover).await.map_err(|_| RuntimeError::TimedOut)??;
+                            tokio::time::timeout(DISCOVERY_TIMEOUT, rediscover()).await.map_err(|_| RuntimeError::TimedOut)??;
                         }
                     }
                 }
@@ -740,19 +768,28 @@ for line in sys.stdin:
     if method=='notifications/cancelled':
         Path('cancel.json').write_text(json.dumps(req))
         continue
-    if method=='server/discover' and mode=='modern':
-        result={'resultType':'complete','supportedVersions':['2026-07-28'],'ttlMs':0,'cacheScope':'private','capabilities':{'tools':{}}}
+    if method=='server/discover' and mode.startswith('modern'):
+        tools={'listChanged':True} if mode=='modern_notify' else {}
+        result={'resultType':'complete','supportedVersions':['2026-07-28'],'ttlMs':0,'cacheScope':'private','capabilities':{'tools':tools}}
         print(json.dumps({'jsonrpc':'2.0','id':req['id'],'result':result}),flush=True)
         continue
     if method=='server/discover':
         print(json.dumps({'jsonrpc':'2.0','id':req['id'],'error':{'code':-32601,'message':'legacy'}}),flush=True)
         continue
+    if method=='subscriptions/listen':
+        meta={'io.modelcontextprotocol/subscriptionId':req['id']}
+        print(json.dumps({'jsonrpc':'2.0','method':'notifications/subscriptions/acknowledged','params':{'_meta':meta,'notifications':{'toolsListChanged':True}}}),flush=True)
+        print(json.dumps({'jsonrpc':'2.0','method':'notifications/tools/list_changed','params':{'_meta':meta}}),flush=True)
+        continue
     if method=='initialize':
-        result={'protocolVersion':'2025-11-25','capabilities':{'tools':{}},'serverInfo':{'name':'fixture','version':'1'}}
+        tools={'listChanged':True} if mode=='notify' else {}
+        result={'protocolVersion':'2025-11-25','capabilities':{'tools':tools},'serverInfo':{'name':'fixture','version':'1'}}
     elif method=='tools/list':
         pages+=1
+        Path('lists').write_text(str(pages))
         if mode=='slow_refresh' and pages>1: time.sleep(60)
         result={'tools':[{'name':'search','description':str(pages),'inputSchema':{'type':'object'},'annotations':{'readOnlyHint':True}}]}
+        if mode=='cached': result.update({'ttlMs':600000,'cacheScope':'public'})
     elif method=='tools/call':
         with open('calls.jsonl','a') as output: output.write(json.dumps(req)+'\n')
         if mode=='slow_call': continue
@@ -764,6 +801,8 @@ for line in sys.stdin:
     else:
         raise RuntimeError('Unexpected request')
     print(json.dumps({'jsonrpc':'2.0','id':req['id'],'result':result}),flush=True)
+    if mode=='notify' and method=='tools/list' and pages==1:
+        print(json.dumps({'jsonrpc':'2.0','method':'notifications/tools/list_changed'}),flush=True)
     if mode=='exit' and pages: break
 "#).unwrap();
             let id = Uuid::new_v4();
@@ -887,6 +926,9 @@ for line in sys.stdin:
             })
             .await
             .unwrap();
+        }
+        fn list_count(&self) -> String {
+            std::fs::read_to_string(self.root.path().join("lists")).unwrap_or_default()
         }
         fn call_count(&self) -> usize {
             std::fs::read_to_string(self.root.path().join("calls.jsonl"))
@@ -1013,6 +1055,64 @@ for line in sys.stdin:
             .disconnect(next.connection_id, &fixture.documents)
             .unwrap();
         fixture.phase(ConnectionPhase::Disconnected).await;
+    }
+
+    #[tokio::test]
+    async fn server_change_notices_withdraw_then_rediscover_in_both_protocols() {
+        for mode in ["notify", "modern_notify"] {
+            let fixture = Fixture::new(mode);
+            let status = fixture.connect().await;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while fixture.list_count() != "2" {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("server notice triggered rediscovery");
+            fixture.phase(ConnectionPhase::Connected).await;
+            let catalog = fixture
+                .runtime
+                .connections
+                .catalog(status.connection_id, &fixture.documents)
+                .unwrap();
+            assert_eq!(
+                catalog.tools()[0].definition.description.as_deref(),
+                Some("2")
+            );
+            // One notice, one rediscovery; the subscription stays open.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            assert_eq!(fixture.list_count(), "2");
+            assert_eq!(
+                fixture
+                    .phase(ConnectionPhase::Connected)
+                    .await
+                    .protocol_version,
+                Some(
+                    if mode == "notify" {
+                        "2025-11-25"
+                    } else {
+                        "2026-07-28"
+                    }
+                    .into()
+                )
+            );
+            fixture.runtime.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_is_live_even_when_the_server_allows_caching() {
+        let fixture = Fixture::new("cached");
+        let status = fixture.connect().await;
+        fixture.phase(ConnectionPhase::Connected).await;
+        fixture
+            .runtime
+            .connections
+            .refresh(status.connection_id, &fixture.documents)
+            .unwrap();
+        fixture.phase(ConnectionPhase::Connected).await;
+        assert_eq!(fixture.list_count(), "2");
+        fixture.runtime.shutdown().await;
     }
 
     #[tokio::test]
