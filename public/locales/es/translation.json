@@ -404,9 +404,13 @@
     "pendingAction": "Acción pendiente",
     "run": "Ejecutar",
     "skip": "Omitir",
+    "approve": "Aprobar",
+    "deny": "Denegar",
     "waiting": "En espera",
     "skipping": "Omitiendo",
     "runCommandDescription": "Ejecutar comando: {{command}}",
+    "hookApproval": "Aprobación de herramienta",
+    "hookApprovalDetail": "Revisa esta acción de la herramienta antes de que la ejecución pueda continuar.",
     "createDirectory": "Crear directorio: {{path}}",
     "moveFile": "Mover {{source}} a {{destination}}",
     "copyFile": "Copiar {{source}} a {{destination}}"
