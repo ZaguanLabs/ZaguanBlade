@@ -1802,7 +1802,8 @@
       "dateTimeFormat": "Por ejemplo, 2026-10-17T14:30:00Z"
     },
     "tool": "Herramienta MCP",
-    "waiting": "Esperando el permiso o la respuesta de la herramienta externa.",
+    "waiting": "Esperando a que permitas esta llamada en la parte superior del chat o a que responda la herramienta externa.",
+    "approvalExpired": "Nadie permitió esta llamada en 60 segundos, así que no se ha ejecutado. Vuelve a pedirlo para reintentarlo.",
     "outcome": {
       "completed": "La herramienta externa ha respondido.",
       "unknown": "Resultado desconocido. La operación externa puede haberse realizado. Compruébalo antes de volver a intentarlo.",

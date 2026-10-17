@@ -32,7 +32,7 @@ export function McpTurnView({ state, busy, error, respond, answer }: {
         </details>
         {state.blocked && <p role="status" className="mt-2">{t(`mcpChat.blocked.${state.blocked}`)}</p>}
         {error && <p role="alert" className="mt-2 text-(--status-error)">{t(error)}</p>}
-        {state.pending.map(review => <div key={review.request_id} className="mt-3 rounded border border-(--border-default) p-3">
+        {state.pending.map(review => <div key={review.request_id} role="alertdialog" aria-label={t('mcpChat.approval', { server: review.server_name, tool: review.tool_name })} className="mt-3 rounded border border-(--accent-ai) p-3">
             <p className="font-medium text-(--fg-primary)">{t('mcpChat.approval', { server: review.server_name, tool: review.tool_name })}</p>
             <p className="my-2">{t('mcpChat.approvalHelp')}</p>
             <details><summary className="cursor-pointer">{t('mcpChat.arguments')}</summary><pre className="my-2 max-h-48 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify(review.arguments, null, 2)}</pre></details>

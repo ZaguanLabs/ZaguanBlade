@@ -1,6 +1,6 @@
 //! Immutable native-provider catalog. Preserve JSON Schema constraints verbatim;
 //! reject unsupported schema dialects/references instead of weakening them.
-use super::{catalog::McpCatalog, permissions::CallTarget};
+use super::{catalog::McpCatalog, permissions::CallTarget, store::fingerprint};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -30,9 +30,10 @@ pub struct NativeCatalog {
 impl NativeCatalog {
     pub fn add(&mut self, connection: Uuid, server_name: &str, catalog: &McpCatalog) {
         for tool in catalog.tools() {
+            let name = self.function_name(server_name, &tool.definition.name, &tool.alias);
             let parameters = Value::Object((*tool.definition.input_schema).clone());
             let schema = json!({"type":"function","function":{
-                "name":tool.alias, "description":format!("MCP: {} / {}. {}", server_name, tool.definition.name, tool.definition.description.as_deref().unwrap_or("")),
+                "name":name, "description":format!("MCP: {} / {}. {}", server_name, tool.definition.name, tool.definition.description.as_deref().unwrap_or("")),
                 "parameters":parameters}});
             let bytes = serde_json::to_vec(&schema)
                 .map(|v| v.len())
@@ -56,7 +57,7 @@ impl NativeCatalog {
             }
             self.bytes += bytes;
             self.tools.insert(
-                tool.alias.clone(),
+                name,
                 NativeTool {
                     target: CallTarget {
                         connection_id: connection,
@@ -69,6 +70,44 @@ impl NativeCatalog {
                 },
             );
         }
+    }
+}
+impl NativeCatalog {
+    /// The name the model calls, such as `mcp__bit_lantern__symbol_search`.
+    /// Models pick tools by name, so it says what the tool is. The opaque
+    /// catalog alias stays the call target. A digest of that alias settles
+    /// collisions and over-long names, so a name never routes to another tool.
+    fn function_name(&self, server: &str, tool: &str, alias: &str) -> String {
+        let readable = format!(
+            "mcp__{}__{}",
+            slug(server, "server").to_ascii_lowercase(),
+            slug(tool, "tool")
+        );
+        if readable.len() <= MAX_FUNCTION_NAME && !self.tools.contains_key(&readable) {
+            return readable;
+        }
+        let digest = fingerprint(alias.as_bytes());
+        let mut name = readable;
+        name.truncate(MAX_FUNCTION_NAME - 9);
+        format!("{name}_{}", &digest[..8])
+    }
+}
+const MAX_FUNCTION_NAME: usize = 64;
+/// Letters, digits, `-` and single underscores: what every provider accepts.
+fn slug(value: &str, fallback: &str) -> String {
+    let mut out = String::new();
+    for c in value.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' {
+            out.push(c);
+        } else if !out.is_empty() && !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    let out = out.trim_end_matches('_');
+    if out.is_empty() {
+        fallback.into()
+    } else {
+        out.into()
     }
 }
 fn compatible_schema(value: &Value) -> bool {
@@ -159,6 +198,8 @@ mod tests {
         output.add(Uuid::new_v4(), "First", &catalog(Uuid::new_v4(), 1));
         output.add(Uuid::new_v4(), "Second", &catalog(Uuid::new_v4(), 1));
         assert_eq!(output.tools.len(), 2);
+        assert!(output.tools.contains_key("mcp__first__tool_00"));
+        assert!(output.tools.contains_key("mcp__second__tool_00"));
         assert!(!compatible_schema(
             &json!({"type":"object","properties":{"query":{"$ref":"https://external/schema"}}})
         ));
@@ -171,5 +212,36 @@ mod tests {
         assert!(compatible_schema(
             &json!({"type":"object","dependencies":{"query":["other"]}})
         ));
+    }
+    #[test]
+    fn model_names_are_readable_valid_and_never_shared() {
+        let mut output = NativeCatalog::default();
+        output.add(Uuid::new_v4(), "Bit Lantern", &catalog(Uuid::new_v4(), 1));
+        output.add(Uuid::new_v4(), "bit-lantern!", &catalog(Uuid::new_v4(), 1));
+        output.add(Uuid::new_v4(), "Bit Lantern", &catalog(Uuid::new_v4(), 1));
+        output.add(Uuid::new_v4(), &"ñ".repeat(80), &catalog(Uuid::new_v4(), 1));
+        output.add(
+            Uuid::new_v4(),
+            &"long".repeat(40),
+            &catalog(Uuid::new_v4(), 1),
+        );
+        assert_eq!(output.tools.len(), 5);
+        assert!(output.tools.contains_key("mcp__bit_lantern__tool_00"));
+        assert!(output.tools.contains_key("mcp__bit-lantern__tool_00"));
+        assert!(output.tools.contains_key("mcp__server__tool_00"));
+        for (name, tool) in &output.tools {
+            assert!(name.starts_with("mcp_"));
+            assert!(name.len() <= MAX_FUNCTION_NAME);
+            assert!(name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+            assert_eq!(tool.schema["function"]["name"], name.as_str());
+        }
+        let targets: std::collections::HashSet<_> = output
+            .tools
+            .values()
+            .map(|tool| tool.target.connection_id)
+            .collect();
+        assert_eq!(targets.len(), 5);
     }
 }

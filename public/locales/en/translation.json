@@ -1802,7 +1802,8 @@
       "dateTimeFormat": "For example 2026-10-17T14:30:00Z"
     },
     "tool": "MCP tool",
-    "waiting": "Waiting for approval or the external tool response.",
+    "waiting": "Waiting for you to allow this call at the top of the chat, or for the external tool to respond.",
+    "approvalExpired": "Nobody allowed this call within 60 seconds, so it didn't run. Ask again to retry.",
     "outcome": {
       "completed": "External tool responded.",
       "unknown": "Outcome unknown. The external operation may have taken effect. Check before retrying.",

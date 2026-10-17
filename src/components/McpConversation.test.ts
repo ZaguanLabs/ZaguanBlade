@@ -66,6 +66,9 @@ for (const [language, translation] of Object.entries({ en, es })) {
         const unknown = JSON.stringify({ mcp_result_version: 1, server: 'Atlas', tool: 'search', result: { outcome: 'unknown', error: 'cancelled', retry: false } });
         const cancelled = renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(McpToolResult, { alias: 'mcp_alias', raw: unknown, status: 'error' })));
         assert.ok(cancelled.includes(translation.mcpChat.outcome.unknown));
+        const unanswered = JSON.stringify({ mcp_result_version: 1, server: 'Atlas', tool: 'search', result: { outcome: 'not_started', error: 'approval_expired', retry: false } });
+        const expired = renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(McpToolResult, { alias: 'mcp__atlas__search', raw: unanswered, status: 'error' })));
+        assert.ok(expired.includes(translation.mcpChat.approvalExpired.replace("'", '&#x27;')));
     });
 }
 test('malformed external result fields do not reach React children', () => {

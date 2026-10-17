@@ -43,7 +43,7 @@ export function McpToolResult({ alias, raw, status }: { alias: string; raw?: str
     return <div className="my-2 rounded border border-(--border-default) p-3 text-xs text-(--fg-secondary)">
         <p className="break-all font-medium text-(--fg-primary)">{payload?.server && payload.tool ? `${payload.server} / ${payload.tool}` : `${t('mcpChat.tool')} · ${alias}`}</p>
         <p className="mt-1">{result ? t(`mcpChat.outcome.${result.outcome}`) : t(raw || status === 'error' ? 'mcpChat.invalidResult' : 'mcpChat.waiting')}</p>
-        {result?.error && <p>{t(integrationProbeErrorKey(result.error))}</p>}
+        {result?.error && <p>{t(result.error === 'approval_expired' ? 'mcpChat.approvalExpired' : integrationProbeErrorKey(result.error))}</p>}
         {result?.projection?.is_error && <p>{t('mcpChat.toolError')}</p>}
         {result?.projection && <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all">{result.projection.text}</pre>}
         {result?.projection?.truncated && <p>{t('mcpChat.truncated')}</p>}
