@@ -6,9 +6,11 @@ interface ChatTabBarProps {
     activeTab: 'chat' | 'history';
     onTabChange: (tab: 'chat' | 'history') => void;
     onNewConversation: () => void;
+    /** Shown before the new-conversation button. */
+    actions?: React.ReactNode;
 }
 
-export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, onNewConversation }) => {
+export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, onNewConversation, actions }) => {
     const { t } = useTranslation();
     const chatTabRef = useRef<HTMLButtonElement>(null);
     const historyTabRef = useRef<HTMLButtonElement>(null);
@@ -86,6 +88,8 @@ export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, 
                     {t('chat.tabs.history')}
                 </button>
             </div>
+            <div className="flex items-center gap-2">
+            {actions}
             <button
                 type="button"
                 onClick={onNewConversation}
@@ -95,6 +99,7 @@ export const ChatTabBar: React.FC<ChatTabBarProps> = ({ activeTab, onTabChange, 
             >
                 <Plus className="w-4 h-4" aria-hidden="true" />
             </button>
+            </div>
         </div>
     );
 };

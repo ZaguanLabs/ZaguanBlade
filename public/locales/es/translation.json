@@ -331,6 +331,65 @@
       "searching": "🔍 Buscando `{{pattern}}`...",
       "running": "⚙️ Ejecutando `{{command}}`...",
       "usingTool": "🔧 Usando la herramienta `{{tool}}`..."
+    },
+    "agent": {
+      "start": "Nueva conversación con un agente",
+      "menu": "Agentes",
+      "none": "No hay ningún agente ACP activado. Añade uno en Ajustes, en MCP / ACP.",
+      "openSettings": "Abrir Ajustes",
+      "loadFailed": "No se han podido cargar tus agentes.",
+      "reviewTitle": "¿Iniciar {{name}}?",
+      "allow": "Iniciar agente",
+      "starting": "Iniciando {{name}}…",
+      "runBy": "Gestionada por {{name}}",
+      "reportsHelp": "Las llamadas a herramientas y los cambios que se muestran aquí los notifica el agente. Blade no los ejecuta ni los aplica.",
+      "signIn": {
+        "title": "{{name}} necesita que inicies sesión",
+        "help": "Elige un método de inicio de sesión. El propio agente se encarga del proceso.",
+        "terminal": "{{method}} requiere iniciar sesión desde un terminal, algo que Blade aún no admite.",
+        "none": "El agente no ofrece ningún método de inicio de sesión que Blade pueda usar."
+      },
+      "placeholder": "Escribe a {{name}}…",
+      "send": "Enviar",
+      "stop": "Detener",
+      "end": "Finalizar sesión",
+      "thoughts": "Razonamiento",
+      "working": "Trabajando…",
+      "stopping": "Deteniendo…",
+      "plan": "Plan",
+      "permission": {
+        "title": "{{name}} solicita permiso",
+        "help": "El agente espera tu respuesta y recibe exactamente la opción que elijas.",
+        "dismiss": "Ahora no"
+      },
+      "tool": {
+        "status": {
+          "pending": "Pendiente",
+          "in_progress": "En curso",
+          "completed": "Hecho",
+          "failed": "Error"
+        },
+        "diff": "Cambio notificado en {{path}}",
+        "terminal": "Terminal {{id}}",
+        "resource": "Recurso {{uri}}",
+        "other": "Contenido que Blade no puede mostrar",
+        "truncated": "Recortado para mostrarlo."
+      },
+      "stopReason": {
+        "max_tokens": "El agente se ha detenido porque ha alcanzado su límite de tokens.",
+        "max_turn_requests": "El agente se ha detenido porque ha alcanzado su límite de pasos por turno.",
+        "refusal": "El agente ha declinado continuar.",
+        "cancelled": "Detenido."
+      },
+      "failed": "El turno no ha terminado: {{reason}}",
+      "truncated": "La respuesta era demasiado larga para mostrarla entera.",
+      "exited": "La sesión del agente ha finalizado.",
+      "exitedError": "La sesión del agente ha finalizado: {{reason}}",
+      "usage": "Contexto: {{used}} de {{size}} tokens",
+      "ended": {
+        "title": "Esta conversación la gestionó {{name}}",
+        "help": "Su sesión ha finalizado. La transcripción se conserva aquí; inicia una nueva conversación con el agente para continuar."
+      }
     }
   },
   "fileTree": {
@@ -899,7 +958,8 @@
           "prompt_unavailable": "El servidor no ha podido generar este prompt. Revisa los valores de los argumentos.",
           "oauth_unsupported": "Este servidor no publica un servidor de autorización OAuth utilizable (endpoints HTTPS con PKCE). Usa en su lugar una cabecera con una credencial guardada.",
           "authorization_failed": "No se ha podido iniciar sesión. El servidor de autorización ha rechazado la solicitud o Blade no ha podido registrarse en él. Vuelve a intentarlo o introduce un ID de cliente registrado para Blade.",
-          "authorization_denied": "Se ha rechazado el inicio de sesión en el navegador."
+          "authorization_denied": "Se ha rechazado el inicio de sesión en el navegador.",
+          "agent_exited": "El programa del agente se ha cerrado."
         },
         "mcpResult_other": "{{count}} herramientas; recursos: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "El agente anuncia {{count}} métodos de autenticación. No se ha iniciado ninguna sesión.",
@@ -978,6 +1038,9 @@
         "allow": "Permitir esta conexión",
         "reviewHelp": "Se iniciará el programa indicado con tus permisos de usuario y las variables de entorno configuradas. Puede acceder a archivos y a la red. Seguirá ejecutándose hasta que lo desconectes, cierres el espacio de trabajo, salgas de Blade o cambies su configuración guardada, sus credenciales o las restricciones del espacio de trabajo. Esta autorización permite iniciar una conexión, pero no ejecutar herramientas. Los nombres, las descripciones y los esquemas de las herramientas pueden compartirse con el proveedor del modelo nativo seleccionado.",
         "reviewHelpHttp": "Blade se conectará al servidor indicado y enviará en cada solicitud las cabeceras configuradas, incluidas las credenciales guardadas. La conexión seguirá abierta hasta que la desconectes, cierres el espacio de trabajo, salgas de Blade o cambies su configuración guardada, sus credenciales o las restricciones del espacio de trabajo. Esta autorización permite iniciar una conexión, pero no ejecutar herramientas. Los nombres, las descripciones y los esquemas de las herramientas pueden compartirse con el proveedor del modelo nativo seleccionado."
+      },
+      "agent": {
+        "reviewHelp": "Se iniciará el programa del agente indicado con tus permisos de usuario y las variables de entorno configuradas, en una nueva conversación que gestionará él. Puede leer y modificar archivos y acceder a la red por su cuenta. Blade muestra su actividad y te consulta cuando solicita permiso, pero los permisos de ACP son una colaboración con un programa de confianza, no un entorno aislado. Se detiene cuando finalizas la sesión, cambias de conversación, cierras el espacio de trabajo o sales de Blade."
       },
       "headers": {
         "title": "Cabeceras HTTP",

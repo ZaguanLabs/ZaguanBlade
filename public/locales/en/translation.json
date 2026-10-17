@@ -331,6 +331,65 @@
       "searching": "🔍 Searching for `{{pattern}}`...",
       "running": "⚙️ Running `{{command}}`...",
       "usingTool": "🔧 Using tool `{{tool}}`..."
+    },
+    "agent": {
+      "start": "New agent conversation",
+      "menu": "Agents",
+      "none": "No ACP agent is enabled. Add one in Settings, under MCP / ACP.",
+      "openSettings": "Open Settings",
+      "loadFailed": "Could not load your agents.",
+      "reviewTitle": "Start {{name}}?",
+      "allow": "Start agent",
+      "starting": "Starting {{name}}…",
+      "runBy": "Run by {{name}}",
+      "reportsHelp": "Tool calls and changes shown here are reported by the agent. Blade does not run or apply them.",
+      "signIn": {
+        "title": "{{name}} needs you to sign in",
+        "help": "Choose a sign-in method. The agent handles the sign-in itself.",
+        "terminal": "{{method}} needs a terminal login, which Blade does not support yet.",
+        "none": "The agent offers no sign-in method Blade can use."
+      },
+      "placeholder": "Message {{name}}…",
+      "send": "Send",
+      "stop": "Stop",
+      "end": "End session",
+      "thoughts": "Reasoning",
+      "working": "Working…",
+      "stopping": "Stopping…",
+      "plan": "Plan",
+      "permission": {
+        "title": "{{name}} asks for permission",
+        "help": "The agent waits for your answer and receives exactly the option you choose.",
+        "dismiss": "Not now"
+      },
+      "tool": {
+        "status": {
+          "pending": "Pending",
+          "in_progress": "Running",
+          "completed": "Done",
+          "failed": "Failed"
+        },
+        "diff": "Change reported for {{path}}",
+        "terminal": "Terminal {{id}}",
+        "resource": "Resource {{uri}}",
+        "other": "Content Blade cannot show",
+        "truncated": "Shortened for display."
+      },
+      "stopReason": {
+        "max_tokens": "The agent stopped because it reached its token limit.",
+        "max_turn_requests": "The agent stopped because it reached its step limit for one turn.",
+        "refusal": "The agent declined to continue.",
+        "cancelled": "Stopped."
+      },
+      "failed": "The turn did not finish: {{reason}}",
+      "truncated": "The reply was too long to show in full.",
+      "exited": "The agent session has ended.",
+      "exitedError": "The agent session ended: {{reason}}",
+      "usage": "Context: {{used}} of {{size}} tokens",
+      "ended": {
+        "title": "This conversation was run by {{name}}",
+        "help": "Its session has ended. The transcript stays here; start a new agent conversation to continue."
+      }
     }
   },
   "fileTree": {
@@ -899,7 +958,8 @@
           "prompt_unavailable": "The server could not generate this prompt. Check the argument values.",
           "oauth_unsupported": "This server does not publish a usable OAuth authorization server (HTTPS endpoints with PKCE). Use a header with a stored credential instead.",
           "authorization_failed": "Sign-in failed. The authorization server rejected the request or Blade could not register with it. Try again, or enter a client ID registered for Blade.",
-          "authorization_denied": "Sign-in was declined in the browser."
+          "authorization_denied": "Sign-in was declined in the browser.",
+          "agent_exited": "The agent program exited."
         },
         "mcpResult_other": "{{count}} tools; resources: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "{{count}} authentication methods advertised. No session was started.",
@@ -978,6 +1038,9 @@
         "allow": "Allow this connection",
         "reviewHelp": "This starts the program below with your user permissions and configured environment. It can access files and the network. It stays running until you disconnect, close the workspace, exit Blade, or change its saved configuration, credentials or workspace policy. This approval starts one connection; it does not authorize tool calls. Tool names, descriptions and schemas may be shared with the selected native model provider.",
         "reviewHelpHttp": "Blade will connect to the server below and send the configured headers, including stored credentials, with every request. The connection stays open until you disconnect, close the workspace, exit Blade, or change its saved configuration, credentials or workspace policy. This approval starts one connection; it does not authorize tool calls. Tool names, descriptions and schemas may be shared with the selected native model provider."
+      },
+      "agent": {
+        "reviewHelp": "This starts the agent program below with your user permissions and configured environment, in a new conversation it runs. It can read and change files and use the network on its own. Blade shows its activity and asks you when it requests permission, but ACP permissions are cooperation with a trusted program, not a sandbox. It stops when you end the session, switch conversations, close the workspace or exit Blade."
       },
       "headers": {
         "title": "HTTP headers",

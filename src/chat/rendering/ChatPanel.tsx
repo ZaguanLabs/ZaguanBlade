@@ -1,4 +1,7 @@
 import { McpTurnPanel } from '../../components/McpTurnPanel';
+import { AcpAgentMenu } from '../../components/AcpAgentMenu';
+import { AcpConversationView } from '../../components/AcpConversation';
+import { useAcpConversation } from '../../hooks/useAcpConversation';
 import React, { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChatMessage as ChatMessageType, ChatMode, ComposerMention, HookApprovalRequest, ImageAttachment, ModelInfo, QueuedRequest, ResourceAttachment, ToolActivityState } from '../../types/chat';
@@ -185,11 +188,21 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const { stopCommandExecution } = useCommandExecution();
     const canUseAi = models.length > 0;
     const cloudErrorRecovery = useMemo(() => classifyCloudError(error), [error]);
+    const agent = useAcpConversation();
+    const { detach: detachAgent, attach: attachAgent, sync: syncAgent } = agent;
 
     const handleNewConversation = useCallback(() => {
+        // A new conversation is always Blade's; the backend ends any agent session.
+        detachAgent();
         onNewConversation();
         setActiveTab('chat');
-    }, [onNewConversation]);
+    }, [detachAgent, onNewConversation]);
+
+    const handleAgentStarted = useCallback((status: Parameters<typeof attachAgent>[0]) => {
+        attachAgent(status);
+        onLoadConversation([]);
+        setActiveTab('chat');
+    }, [attachAgent, onLoadConversation]);
 
     const openLocalAiSettings = useCallback(() => {
         document.dispatchEvent(new CustomEvent('open-settings', { detail: { section: 'localai' } }));
@@ -237,11 +250,24 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             data-font-zoom-scope="chat"
             style={{ '--markdown-font-size': 'var(--chat-content-font-size, 13px)' } as React.CSSProperties}
         >
-            <ChatHeader activeTab={activeTab} onTabChange={setActiveTab} onNewConversation={handleNewConversation} />
+            <ChatHeader activeTab={activeTab} onTabChange={setActiveTab} onNewConversation={handleNewConversation}
+                actions={<AcpAgentMenu workspaceRoot={workspaceRoot} onStarted={handleAgentStarted} />} />
 
-            {activeTab === 'chat' && <McpTurnPanel workspaceRoot={workspaceRoot} />}
+            {activeTab === 'chat' && !agent.chat && <McpTurnPanel workspaceRoot={workspaceRoot} />}
 
-            {activeTab === 'chat' ? (
+            {activeTab === 'chat' && agent.chat ? (
+                <AcpConversationView
+                    chat={agent.chat}
+                    busy={agent.busy}
+                    error={agent.error}
+                    send={text => void agent.send(text)}
+                    cancel={() => void agent.cancel()}
+                    answer={(requestId, optionId) => void agent.answer(requestId, optionId)}
+                    authenticate={methodId => void agent.authenticate(methodId)}
+                    end={() => void agent.end()}
+                    onOpenFile={onOpenFile}
+                />
+            ) : activeTab === 'chat' ? (
                 <ChatViewport
                     messages={messages}
                     loading={loading}
@@ -276,6 +302,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                     onSelectConversation={async (sessionId) => {
                         const conversationMessages = await loadConversation(sessionId);
                         onLoadConversation(conversationMessages);
+                        await syncAgent();
                         setActiveTab('chat');
                     }}
                 />
@@ -286,6 +313,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 onAcceptAll={onAcceptAllChanges}
                 onRejectAll={onRejectAllChanges}
             />
+            {!agent.chat && <>
             <TaskStrip todos={activeTodos} />
             <QueueStrip requests={queuedRequests} onEditRequest={handleEditQueuedRequest} onDeleteRequest={deleteQueuedRequest} />
             {error && (
@@ -327,7 +355,13 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                     </div>
                 </div>
             )}
-            {chatMode === 'planning' && latestPlanText && (
+            {agent.storedOwner && (
+                <div role="status" className="mx-3 mt-2 rounded-[calc(var(--panel-radius)*0.65)] border border-(--border-subtle) bg-(--bg-surface) px-3 py-2 text-xs">
+                    <p className="m-0 font-medium text-(--fg-primary)">{t('chat.agent.ended.title', { name: agent.storedOwner })}</p>
+                    <p className="m-0 text-(--fg-secondary)">{t('chat.agent.ended.help')}</p>
+                </div>
+            )}
+            {chatMode === 'planning' && latestPlanText && !agent.storedOwner && (
                 <div className="px-3 pb-1 pt-2">
                     <div className="flex justify-end">
                         <button
@@ -350,10 +384,11 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 setSelectedModelId={setSelectedModelId}
                 chatMode={chatMode}
                 setChatMode={setChatMode}
-                disabled={!canUseAi}
+                disabled={!canUseAi || !!agent.storedOwner}
                 prefillRequest={composerPrefill}
                 onPrefillConsumed={() => setComposerPrefill(null)}
             />
+            </>}
         </div>
     );
 };

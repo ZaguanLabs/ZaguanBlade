@@ -6,7 +6,7 @@ const errors = new Set(['desktop_only', 'config_changed', 'workspace_changed', '
     'timed_out', 'cancelled', 'invalid_catalog', 'catalog_changed', 'integration_disabled', 'policy_unavailable', 'connection_not_ready',
     'permission_required', 'permission_denied', 'invalid_arguments', 'unsupported_result', 'artifact_unavailable', 'call_limit',
     'authentication_required', 'server_unreachable', 'resource_unavailable', 'prompt_unavailable',
-    'oauth_unsupported', 'authorization_failed', 'authorization_denied']);
+    'oauth_unsupported', 'authorization_failed', 'authorization_denied', 'agent_exited']);
 
 export function integrationProbeErrorKey(error: unknown): string {
     return `settings.integrations.test.errors.${typeof error === 'string' && errors.has(error) ? error : 'protocol_failed'}`;

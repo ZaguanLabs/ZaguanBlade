@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import type { IntegrationLaunchReview } from '../../types/integrations';
 
 /** Approval details for a one-use launch or connection ticket. */
-export function LaunchReviewDetails({ review, purpose }: { review: IntegrationLaunchReview | null; purpose: 'test' | 'connection' }) {
+export function LaunchReviewDetails({ review, purpose }: { review: IntegrationLaunchReview | null; purpose: 'test' | 'connection' | 'agent' }) {
     const { t } = useTranslation();
     if (!review) return null;
     if (review.kind === 'http') return <div className="space-y-3">
