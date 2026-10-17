@@ -29,6 +29,9 @@ pub struct CallContext {
     pub scope: CallScope,
     pub(super) cancel: CancellationToken,
     pub(super) workspace_cancel: CancellationToken,
+    /// Where the server's requests for user input go while this call runs.
+    /// Without one, they are declined.
+    pub(super) elicitation: Option<super::elicitation::Sink>,
 }
 impl CallContext {
     pub fn new(
@@ -50,7 +53,12 @@ impl CallContext {
             },
             cancel,
             workspace_cancel: documents.cancellation(),
+            elicitation: None,
         })
+    }
+    pub fn with_elicitation(mut self, sink: super::elicitation::Sink) -> Self {
+        self.elicitation = Some(sink);
+        self
     }
     pub(super) fn check(&self) -> Result<(), RuntimeError> {
         if self.workspace_cancel.is_cancelled() {

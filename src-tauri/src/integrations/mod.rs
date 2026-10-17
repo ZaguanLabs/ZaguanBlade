@@ -6,6 +6,7 @@ pub mod catalog;
 pub mod config;
 pub mod connections;
 pub mod credentials;
+pub mod elicitation;
 pub mod http;
 pub mod identity;
 pub(crate) mod invocation;

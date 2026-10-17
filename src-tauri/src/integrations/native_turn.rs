@@ -2,6 +2,7 @@
 use super::{
     call_result::{CallFailure, CallOutcome},
     connections::ConnectionPhase,
+    elicitation::{ElicitationView, Prompt, Request},
     native_catalog::{ExcludedTool, NativeCatalog, MAX_NATIVE_TOOLS},
     permissions::{CallContext, CallReview},
     result_artifact,
@@ -9,6 +10,7 @@ use super::{
     RuntimeError,
 };
 use crate::{document_service::DocumentService, protocol::ToolCall, tools::ToolResult};
+use rmcp::model::{ElicitResult, ElicitationAction};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
@@ -16,7 +18,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -40,6 +42,21 @@ impl Drop for PendingReviewGuard<'_> {
         }
     }
 }
+struct PendingElicitation {
+    call_id: String,
+    view: ElicitationView,
+    respond: oneshot::Sender<ElicitResult>,
+}
+
+/// The user's answer to a server's request for input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ElicitationAnswer {
+    Accept,
+    Decline,
+    Cancel,
+}
+
 #[derive(Serialize)]
 pub struct TurnState {
     pub turn_id: Uuid,
@@ -49,6 +66,7 @@ pub struct TurnState {
     pub excluded: Vec<ExcludedTool>,
     pub blocked: Option<&'static str>,
     pub pending: Vec<CallReview>,
+    pub elicitations: Vec<ElicitationView>,
 }
 pub struct NativeMcpTurn {
     pub id: Uuid,
@@ -58,6 +76,7 @@ pub struct NativeMcpTurn {
     pub cancel: CancellationToken,
     catalog: NativeCatalog,
     pending: Mutex<HashMap<Uuid, Decision>>,
+    elicitations: Mutex<HashMap<Uuid, PendingElicitation>>,
     seen: Mutex<HashSet<String>>,
     blocked: Mutex<Option<&'static str>>,
 }
@@ -110,6 +129,7 @@ impl NativeMcpTurn {
             cancel: CancellationToken::new(),
             catalog,
             pending: Mutex::new(HashMap::new()),
+            elicitations: Mutex::new(HashMap::new()),
             seen: Mutex::new(HashSet::new()),
             blocked: Mutex::new(remote.then_some("remote")),
         }))
@@ -125,8 +145,8 @@ impl NativeMcpTurn {
             && self.conversation.to_string() == conversation
     }
     pub fn state(&self) -> Result<TurnState, RuntimeError> {
-        let pending = if self.cancel.is_cancelled() || self.documents.cancellation().is_cancelled()
-        {
+        let closed = self.cancel.is_cancelled() || self.documents.cancellation().is_cancelled();
+        let pending = if closed {
             Vec::new()
         } else {
             self.pending
@@ -134,6 +154,16 @@ impl NativeMcpTurn {
                 .map_err(|_| RuntimeError::Busy)?
                 .values()
                 .map(|entry| entry.review.clone())
+                .collect()
+        };
+        let elicitations = if closed {
+            Vec::new()
+        } else {
+            self.elicitations
+                .lock()
+                .map_err(|_| RuntimeError::Busy)?
+                .values()
+                .map(|entry| entry.view.clone())
                 .collect()
         };
         Ok(TurnState {
@@ -144,6 +174,7 @@ impl NativeMcpTurn {
             excluded: self.catalog.excluded.clone(),
             blocked: *self.blocked.lock().map_err(|_| RuntimeError::Busy)?,
             pending,
+            elicitations,
         })
     }
     pub fn schemas(&self) -> Vec<Value> {
@@ -182,6 +213,74 @@ impl NativeMcpTurn {
         }
         Ok(())
     }
+    /// The URL a URL-mode request asks the user to open, so the caller can
+    /// open it on consent before the answer is sent.
+    pub fn elicitation_url(&self, request: Uuid) -> Result<Option<String>, RuntimeError> {
+        let elicitations = self.elicitations.lock().map_err(|_| RuntimeError::Busy)?;
+        let pending = elicitations
+            .get(&request)
+            .ok_or(RuntimeError::ApprovalExpired)?;
+        Ok(match &pending.view.request {
+            Request::Url { url, .. } => Some(url.clone()),
+            Request::Form { .. } => None,
+        })
+    }
+
+    /// Answer one request. Accepted form content must match the form shown.
+    pub fn respond_elicitation(
+        &self,
+        request: Uuid,
+        answer: ElicitationAnswer,
+        content: Option<Value>,
+    ) -> Result<(), RuntimeError> {
+        if self.cancel.is_cancelled() || self.documents.cancellation().is_cancelled() {
+            return Err(RuntimeError::Cancelled);
+        }
+        let mut elicitations = self.elicitations.lock().map_err(|_| RuntimeError::Busy)?;
+        let pending = elicitations
+            .get(&request)
+            .ok_or(RuntimeError::ApprovalExpired)?;
+        let result = match (answer, &pending.view.request) {
+            (ElicitationAnswer::Accept, Request::Form { fields }) => {
+                let content = super::elicitation::validate(
+                    fields,
+                    &content.ok_or(RuntimeError::InvalidArguments)?,
+                )?;
+                ElicitResult::new(ElicitationAction::Accept).with_content(content)
+            }
+            (ElicitationAnswer::Accept, Request::Url { .. }) => {
+                ElicitResult::new(ElicitationAction::Accept)
+            }
+            (ElicitationAnswer::Decline, _) => ElicitResult::new(ElicitationAction::Decline),
+            (ElicitationAnswer::Cancel, _) => ElicitResult::new(ElicitationAction::Cancel),
+        };
+        if let Some(pending) = elicitations.remove(&request) {
+            let _ = pending.respond.send(result);
+        }
+        Ok(())
+    }
+
+    fn show(&self, prompt: Prompt, call_id: &str, server_name: &str, tool_name: &str) {
+        let request_id = Uuid::new_v4();
+        let view = ElicitationView {
+            request_id,
+            server_name: server_name.to_owned(),
+            tool_name: tool_name.to_owned(),
+            message: prompt.message,
+            request: prompt.request,
+        };
+        if let Ok(mut elicitations) = self.elicitations.lock() {
+            elicitations.insert(
+                request_id,
+                PendingElicitation {
+                    call_id: call_id.to_owned(),
+                    view,
+                    respond: prompt.respond,
+                },
+            );
+        }
+    }
+
     pub async fn execute(&self, call: &ToolCall) -> ToolResult {
         let tool = self.catalog.tools.get(&call.function.name);
         let outcome = self.execute_inner(call).await;
@@ -267,13 +366,16 @@ impl NativeMcpTurn {
         }
         let arguments = serde_json::from_str(&call.function.arguments)
             .map_err(|_| RuntimeError::InvalidArguments)?;
+        // Requests for input reach this conversation only while this call runs.
+        let (sink, mut prompts) = mpsc::channel(4);
         let context = CallContext::new(
             &self.documents,
             self.conversation,
             self.id,
             call.id.clone(),
             self.cancel.child_token(),
-        )?;
+        )?
+        .with_elicitation(sink);
         let connection_cancel = self
             .runtime
             .connections
@@ -286,6 +388,7 @@ impl NativeMcpTurn {
             arguments,
         )?;
         let id = review.request_id;
+        let (server_name, tool_name) = (review.server_name.clone(), review.tool_name.clone());
         let (sender, receiver) = oneshot::channel();
         self.pending.lock().map_err(|_| RuntimeError::Busy)?.insert(
             id,
@@ -313,10 +416,20 @@ impl NativeMcpTurn {
             .map_err(|_| RuntimeError::Busy)?
             .remove(&id);
         decision?;
-        let result = self
+        let _elicitations = ElicitationGuard {
+            turn: self,
+            call_id: &call.id,
+        };
+        let execution = self
             .runtime
-            .execute_tool_call(self.documents.clone(), &context, id)
-            .await;
+            .execute_tool_call(self.documents.clone(), &context, id);
+        tokio::pin!(execution);
+        let result = loop {
+            tokio::select! {
+                result = &mut execution => break result,
+                Some(prompt) = prompts.recv() => self.show(prompt, &call.id, &server_name, &tool_name),
+            }
+        };
         // Do not let the next model round retry an uncertain operation under a
         // fresh call ID. A new user turn is required before any more MCP work.
         if result
@@ -329,6 +442,20 @@ impl NativeMcpTurn {
         result
     }
 }
+/// Requests left unanswered when their call ends are withdrawn; dropping the
+/// answer channel tells the server the user cancelled.
+struct ElicitationGuard<'a> {
+    turn: &'a NativeMcpTurn,
+    call_id: &'a str,
+}
+impl Drop for ElicitationGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut elicitations) = self.turn.elicitations.lock() {
+            elicitations.retain(|_, pending| pending.call_id != self.call_id);
+        }
+    }
+}
+
 impl Drop for NativeMcpTurn {
     fn drop(&mut self) {
         self.cancel.cancel();

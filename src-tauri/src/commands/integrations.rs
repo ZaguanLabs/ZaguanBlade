@@ -550,6 +550,35 @@ pub async fn respond_mcp_tool_call(
         .ok_or(RuntimeError::ApprovalExpired)?;
     turn.respond(request_id, allow)
 }
+/// The user's answer to a server's request for input during a tool call.
+/// Accepting a URL request opens it in the browser first.
+#[tauri::command]
+pub async fn respond_mcp_elicitation(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    turn_id: Uuid,
+    request_id: Uuid,
+    answer: crate::integrations::native_turn::ElicitationAnswer,
+    content: Option<serde_json::Value>,
+) -> Result<(), RuntimeError> {
+    use tauri_plugin_opener::OpenerExt;
+    runtime_desktop_only(&window)?;
+    if state.remote_control.is_configured().await {
+        return Err(RuntimeError::PermissionDenied);
+    }
+    let turn = current_mcp_turn(&state)?
+        .filter(|turn| turn.id == turn_id)
+        .ok_or(RuntimeError::ApprovalExpired)?;
+    if answer == crate::integrations::native_turn::ElicitationAnswer::Accept {
+        if let Some(url) = turn.elicitation_url(request_id)? {
+            app.opener()
+                .open_url(url, None::<&str>)
+                .map_err(|_| RuntimeError::LaunchFailed)?;
+        }
+    }
+    turn.respond_elicitation(request_id, answer, content)
+}
 #[tauri::command]
 pub async fn get_mcp_result_artifact(
     window: tauri::WebviewWindow,

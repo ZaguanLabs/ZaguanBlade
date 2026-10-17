@@ -2,6 +2,7 @@
 //! invocation authorization.
 use super::{
     catalog::{CatalogBuilder, McpCatalog},
+    elicitation::Broker,
     http::PreparedHttp,
     prompts::{PromptListing, PromptRender},
     resources::{ResourceListing, ResourceRead, MAX_ENTRIES, MAX_PAGES},
@@ -9,12 +10,13 @@ use super::{
 };
 use rmcp::{
     model::{
-        CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest,
-        GetPromptRequestParams, GetPromptResponse, PaginatedRequestParams, ProtocolVersion,
-        ReadResourceRequestParams, ReadResourceResponse, ServerNotification, ServerResult,
-        SubscriptionFilter,
+        CallToolRequest, CallToolRequestParams, CallToolResult, ClientConfig, ClientRequest,
+        ElicitRequestParams, ElicitResult, ElicitationCapability, FormElicitationCapability,
+        GetPromptRequestParams, GetPromptResponse, InputRequest, InputResponses,
+        PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
+        ServerNotification, ServerResult, SubscriptionFilter, UrlElicitationCapability,
     },
-    service::{NotificationContext, PeerRequestOptions, RunningService},
+    service::{NotificationContext, PeerRequestOptions, RequestContext, RunningService},
     ClientCacheConfig, ClientHandler, ClientLifecycleMode, ClientServiceExt, RoleClient,
 };
 use std::{
@@ -66,29 +68,58 @@ impl Signals {
     }
 }
 
-/// Legacy servers deliver change notices here; 2026-07-28 notices arrive on
-/// the subscription stream instead (see [`McpSession::watch_tool_changes`]).
+/// Legacy servers deliver change notices and input requests here; 2026-07-28
+/// notices arrive on the subscription stream (see
+/// [`McpSession::watch_tool_changes`]) and input requests in call results.
 pub struct McpClient {
     tools_changed: Arc<Notify>,
+    elicitation: Arc<Broker>,
 }
 impl ClientHandler for McpClient {
     async fn on_tool_list_changed(&self, _: NotificationContext<RoleClient>) {
         self.tools_changed.notify_one();
     }
+    async fn create_elicitation(
+        &self,
+        request: ElicitRequestParams,
+        _: RequestContext<RoleClient>,
+    ) -> Result<ElicitResult, rmcp::ErrorData> {
+        Ok(self.elicitation.ask(&request).await)
+    }
+    fn get_info(&self) -> ClientConfig {
+        let mut config = ClientConfig::default();
+        config.capabilities.elicitation = Some(
+            ElicitationCapability::new()
+                .with_form(FormElicitationCapability::new().with_schema_validation(true))
+                .with_url(UrlElicitationCapability::new()),
+        );
+        config
+    }
 }
+
+/// Without user input a call gets this long; time the user spends answering
+/// the server's questions does not count.
+const CALL_TIMEOUT: Duration = Duration::from_secs(45);
+/// Rounds of `input_required` answered for one call.
+const MAX_INPUT_ROUNDS: usize = 4;
+const MAX_INPUT_REQUESTS: usize = 8;
 
 pub struct McpSession {
     service: RunningService<RoleClient, McpClient>,
     signals: Arc<Signals>,
     tools_changed: Arc<Notify>,
+    pub(super) elicitation: Arc<Broker>,
     pub protocol_version: String,
     pub resources: bool,
     pub prompts: bool,
 }
 
 impl McpSession {
-    /// Exactly one wire request. MRTR/task results are unsupported; never use the
-    /// SDK convenience loop that could silently issue another tools/call.
+    /// One tools/call, plus a continuation only when the server answers
+    /// `input_required` (2026-07-28): the server has not completed the call and
+    /// asks for it again with the user's answers. Nothing else is ever re-sent,
+    /// and the SDK convenience loop that could silently issue another
+    /// tools/call is never used. Task results are unsupported.
     pub(super) async fn call(
         &self,
         name: String,
@@ -96,13 +127,65 @@ impl McpSession {
         cancel: &tokio_util::sync::CancellationToken,
         sent: &AtomicBool,
     ) -> Result<CallToolResult, RuntimeError> {
+        let mut params = CallToolRequestParams::new(name).with_arguments(arguments);
+        for round in 0..=MAX_INPUT_ROUNDS {
+            match self.send_call(params.clone(), cancel, sent).await? {
+                ServerResult::CallToolResult(result) => return Ok(result),
+                ServerResult::InputRequiredResult(input) if round < MAX_INPUT_ROUNDS => {
+                    params.input_responses = Some(
+                        self.answer(input.input_requests.unwrap_or_default(), cancel)
+                            .await?,
+                    );
+                    params.request_state = input.request_state;
+                }
+                ServerResult::InputRequiredResult(_) | ServerResult::CreateTaskResult(_) => {
+                    return Err(RuntimeError::UnsupportedResult)
+                }
+                _ => return Err(RuntimeError::ProtocolFailed),
+            }
+        }
+        Err(RuntimeError::UnsupportedResult)
+    }
+
+    /// The user's answers to one round. Blade advertises elicitation only, so
+    /// any other request kind fails the call rather than being guessed at.
+    async fn answer(
+        &self,
+        requests: rmcp::model::InputRequests,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<InputResponses, RuntimeError> {
+        if requests.is_empty() || requests.len() > MAX_INPUT_REQUESTS {
+            return Err(RuntimeError::UnsupportedResult);
+        }
+        let mut responses = InputResponses::new();
+        for (key, request) in requests {
+            let InputRequest::Elicitation(request) = request else {
+                return Err(RuntimeError::UnsupportedResult);
+            };
+            let result = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(RuntimeError::Cancelled),
+                result = self.elicitation.ask(&request.params) => result,
+            };
+            responses.insert(
+                key,
+                serde_json::to_value(result).map_err(|_| RuntimeError::ProtocolFailed)?,
+            );
+        }
+        Ok(responses)
+    }
+
+    async fn send_call(
+        &self,
+        params: CallToolRequestParams,
+        cancel: &tokio_util::sync::CancellationToken,
+        sent: &AtomicBool,
+    ) -> Result<ServerResult, RuntimeError> {
         if cancel.is_cancelled() {
             return Err(RuntimeError::Cancelled);
         }
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(45);
-        let request = ClientRequest::CallToolRequest(CallToolRequest::new(
-            CallToolRequestParams::new(name).with_arguments(arguments),
-        ));
+        let mut deadline = tokio::time::Instant::now() + CALL_TIMEOUT;
+        let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
         // Once submission begins, failure cannot establish absence of effects.
         sent.store(true, Ordering::Release);
         let mut handle = tokio::select! {
@@ -112,11 +195,28 @@ impl McpSession {
                 result.map_err(|_| RuntimeError::TimedOut)?.map_err(|_| self.close_error())?
             }
         };
-        let result = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => Err(RuntimeError::Cancelled),
-            _ = tokio::time::sleep_until(deadline) => Err(RuntimeError::TimedOut),
-            result = &mut handle.rx => result.map_err(|_| self.close_error()).and_then(|result| result.map_err(|_| self.close_error())),
+        let result = loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => break Err(RuntimeError::Cancelled),
+                _ = tokio::time::sleep_until(deadline) => {
+                    // A legacy server waits on the user's answer mid-call.
+                    let now = tokio::time::Instant::now();
+                    if self.elicitation.waiting() {
+                        deadline = now + CALL_TIMEOUT;
+                    } else if let Some(resumed) = self
+                        .elicitation
+                        .answered_at()
+                        .map(|answered| answered + CALL_TIMEOUT)
+                        .filter(|resumed| *resumed > now)
+                    {
+                        deadline = resumed;
+                    } else {
+                        break Err(RuntimeError::TimedOut);
+                    }
+                }
+                result = &mut handle.rx => break result.map_err(|_| self.close_error()).and_then(|result| result.map_err(|_| self.close_error())),
+            }
         };
         if matches!(
             result,
@@ -127,13 +227,7 @@ impl McpSession {
                 tokio::time::timeout(std::time::Duration::from_millis(250), handle.cancel(None))
                     .await;
         }
-        match result? {
-            ServerResult::CallToolResult(result) => Ok(result),
-            ServerResult::InputRequiredResult(_) | ServerResult::CreateTaskResult(_) => {
-                Err(RuntimeError::UnsupportedResult)
-            }
-            _ => Err(RuntimeError::ProtocolFailed),
-        }
+        result
     }
 
     pub async fn open(
@@ -175,8 +269,10 @@ impl McpSession {
         E: std::error::Error + Send + Sync + 'static,
     {
         let tools_changed = Arc::new(Notify::new());
+        let elicitation = Arc::new(Broker::default());
         let service = McpClient {
             tools_changed: tools_changed.clone(),
+            elicitation: elicitation.clone(),
         }
         .serve_with_lifecycle(
             transport,
@@ -206,6 +302,7 @@ impl McpSession {
             service,
             signals,
             tools_changed,
+            elicitation,
         })
     }
 

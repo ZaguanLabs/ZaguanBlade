@@ -273,6 +273,7 @@ pub fn run() {
             commands::integrations::get_mcp_sign_in_status,
             commands::integrations::get_mcp_turn_state,
             commands::integrations::respond_mcp_tool_call,
+            commands::integrations::respond_mcp_elicitation,
             commands::integrations::get_mcp_result_artifact,
             commands::integrations::run_integration_test,
             commands::integrations::cancel_integration_test,

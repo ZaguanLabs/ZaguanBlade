@@ -625,6 +625,12 @@ async fn run_call(
                     }
                 }
             };
+            let _elicitation = request
+                .approved
+                .context()
+                .elicitation
+                .clone()
+                .map(|sink| session.elicitation.attach(sink));
             tokio::select! {
                 result = session.call(name, arguments, &request.cancel, &request.sent) =>
                     result.and_then(|result| McpCallResult::normalize(request.approved.review(), result)),
@@ -902,8 +908,15 @@ from pathlib import Path
 Path('peer.pid').write_text(str(os.getpid()))
 mode=sys.argv[1]
 pages=0
+held=None
 for line in sys.stdin:
     req=json.loads(line)
+    if 'method' not in req:
+        # The client's answer to our elicitation request completes the held call.
+        if mode=='elicit' and req.get('id')=='e1' and held is not None:
+            print(json.dumps({'jsonrpc':'2.0','id':held,'result':{'structuredContent':{'answer':req['result']},'isError':False}}),flush=True)
+            held=None
+        continue
     if mode=='hang':
         time.sleep(60)
         continue
@@ -936,6 +949,7 @@ for line in sys.stdin:
         capabilities={'tools':tools}
         if mode=='resources': capabilities['resources']={}
         if mode=='prompts': capabilities['prompts']={}
+        if mode=='elicit': Path('caps.json').write_text(json.dumps(req['params']['capabilities']))
         result={'protocolVersion':'2025-11-25','capabilities':capabilities,'serverInfo':{'name':'fixture','version':'1'}}
     elif method=='resources/list':
         if (req.get('params') or {}).get('cursor')=='p2':
@@ -969,6 +983,18 @@ for line in sys.stdin:
         with open('calls.jsonl','a') as output: output.write(json.dumps(req)+'\n')
         if mode=='slow_call': continue
         if mode=='exit_call': os._exit(0)
+        schema={'type':'object','properties':{'ok':{'type':'boolean'}},'required':['ok']}
+        if mode=='elicit':
+            held=req['id']
+            print(json.dumps({'jsonrpc':'2.0','id':'e1','method':'elicitation/create','params':{'mode':'form','message':'Proceed?','requestedSchema':schema}}),flush=True)
+            continue
+        if mode=='modern_mrtr' and 'inputResponses' not in req['params']:
+            print(json.dumps({'jsonrpc':'2.0','id':req['id'],'result':{'resultType':'input_required','requestState':'state-1','inputRequests':{'confirm':{'method':'elicitation/create','params':{'mode':'form','message':'Proceed?','requestedSchema':schema}}}}}),flush=True)
+            continue
+        if mode=='modern_mrtr':
+            assert req['params']['requestState']=='state-1'
+            print(json.dumps({'jsonrpc':'2.0','id':req['id'],'result':{'resultType':'complete','structuredContent':{'answers':req['params']['inputResponses']},'isError':False}}),flush=True)
+            continue
         if mode=='modern': assert req['params']['_meta']['io.modelcontextprotocol/protocolVersion']=='2026-07-28'
         result={'resultType':'complete','structuredContent':{'name':req['params']['name'],'arguments':req['params']['arguments']},'isError':mode=='tool_error'}
         if mode=='large_call': result={'content':[{'type':'text','text':'x'*(1024*1024+1)}]}
@@ -1977,6 +2003,86 @@ for line in sys.stdin:
             fixture.phase(ConnectionPhase::Failed).await;
             assert_eq!(fixture.call_count(), 1);
             assert!(fixture.root.path().join("cancel.json").exists());
+            fixture.runtime.shutdown().await;
+        }
+    }
+
+    /// The user's side of an elicitation: answer the first request that arrives.
+    async fn answer_first(
+        mut prompts: tokio::sync::mpsc::Receiver<crate::integrations::elicitation::Prompt>,
+        content: serde_json::Value,
+    ) -> String {
+        let prompt = prompts.recv().await.unwrap();
+        let _ = prompt.respond.send(
+            rmcp::model::ElicitResult::new(rmcp::model::ElicitationAction::Accept)
+                .with_content(content),
+        );
+        prompt.message
+    }
+
+    #[tokio::test]
+    async fn legacy_and_modern_servers_ask_the_attached_call_for_input() {
+        for mode in ["elicit", "modern_mrtr"] {
+            let fixture = Fixture::new(mode);
+            fixture.connect().await;
+            fixture.phase(ConnectionPhase::Connected).await;
+            let (sink, prompts) = tokio::sync::mpsc::channel(4);
+            let context = fixture.call_context().with_elicitation(sink);
+            let review = fixture.review(&context);
+            fixture
+                .runtime
+                .decide_tool_call(&context, review.request_id, true)
+                .unwrap();
+            let (result, message) = tokio::join!(
+                fixture.runtime.execute_tool_call(
+                    fixture.documents.clone(),
+                    &context,
+                    review.request_id
+                ),
+                answer_first(prompts, json!({"ok": true}))
+            );
+            assert_eq!(message, "Proceed?");
+            let result = result.unwrap().result;
+            let answer = if mode == "elicit" {
+                &result["structuredContent"]["answer"]
+            } else {
+                &result["structuredContent"]["answers"]["confirm"]
+            };
+            assert_eq!(answer["action"], "accept", "{mode}");
+            assert_eq!(answer["content"], json!({"ok": true}));
+            if mode == "elicit" {
+                let caps: serde_json::Value = serde_json::from_str(
+                    &std::fs::read_to_string(fixture.root.path().join("caps.json")).unwrap(),
+                )
+                .unwrap();
+                assert!(
+                    caps["elicitation"]["form"].is_object()
+                        && caps["elicitation"]["url"].is_object()
+                );
+            } else {
+                // Exactly one continuation, carrying the server's state.
+                assert_eq!(fixture.call_count(), 2);
+            }
+
+            // A call from a context that cannot show the request is declined.
+            let context = fixture.call_context();
+            let review = fixture.review(&context);
+            fixture
+                .runtime
+                .decide_tool_call(&context, review.request_id, true)
+                .unwrap();
+            let result = fixture
+                .runtime
+                .execute_tool_call(fixture.documents.clone(), &context, review.request_id)
+                .await
+                .unwrap()
+                .result;
+            let answer = if mode == "elicit" {
+                &result["structuredContent"]["answer"]
+            } else {
+                &result["structuredContent"]["answers"]["confirm"]
+            };
+            assert_eq!(answer["action"], "decline", "{mode}");
             fixture.runtime.shutdown().await;
         }
     }

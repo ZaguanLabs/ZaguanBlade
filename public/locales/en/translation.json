@@ -1717,6 +1717,18 @@
     "arguments": "Review arguments",
     "deny": "Deny",
     "allow": "Allow once",
+    "elicitation": {
+      "title": "{{server}} asks for input while running {{tool}}",
+      "help": "This request comes from the external server, not from Blade. Only answer what you are comfortable sharing with it. Declining lets the tool continue without your input; cancelling stops it.",
+      "urlHelp": "The server asks you to continue on a page at {{host}}. Check the full address below before opening it.",
+      "submit": "Send answer",
+      "open": "Open in browser",
+      "decline": "Decline",
+      "cancel": "Cancel",
+      "none": "None",
+      "invalid": "Check this field.",
+      "dateTimeFormat": "For example 2026-10-17T14:30:00Z"
+    },
     "tool": "MCP tool",
     "waiting": "Waiting for approval or the external tool response.",
     "outcome": {

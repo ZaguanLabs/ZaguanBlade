@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import { integrationProbeErrorKey } from '../utils/integrationProbe';
+import type { McpElicitation } from '../utils/mcpElicitation';
+import { McpElicitationCard, type ElicitationAnswer } from './McpElicitation';
 
 export interface McpTurnState {
     turn_id: string;
@@ -11,11 +13,17 @@ export interface McpTurnState {
     excluded: Array<{ server_name: string; tool_name: string; reason: 'schema' | 'budget' }>;
     blocked: 'remote' | 'provider' | 'budget' | 'uncertain' | 'model_changed' | null;
     pending: Array<{ request_id: string; server_name: string; tool_name: string; arguments: unknown }>;
+    elicitations?: McpElicitation[];
 }
 const buttonClass = 'rounded border border-(--border-default) px-3 py-1.5 hover:bg-(--bg-surface-hover) disabled:opacity-50';
-export function McpTurnView({ state, busy, error, respond }: { state: McpTurnState; busy: boolean; error: string | null; respond: (request: string, allow: boolean) => void }) {
+export function McpTurnView({ state, busy, error, respond, answer }: {
+    state: McpTurnState; busy: boolean; error: string | null;
+    respond: (request: string, allow: boolean) => void;
+    answer?: (request: string, answer: ElicitationAnswer, content?: Record<string, unknown>) => void;
+}) {
     const { t } = useTranslation();
-    if (!state.available && !state.excluded.length && !state.blocked && !error) return null;
+    const elicitations = state.elicitations ?? [];
+    if (!state.available && !state.excluded.length && !state.blocked && !error && !elicitations.length) return null;
     return <section aria-label={t('mcpChat.title')} className="max-h-[45%] shrink-0 overflow-auto border-b border-(--border-default) px-4 py-2 text-xs text-(--fg-secondary)">
         <details open={state.excluded.length > 0 || undefined}>
             <summary className="cursor-pointer">{t('mcpChat.catalog', { count: state.available, limit: state.limit })}</summary>
@@ -33,6 +41,8 @@ export function McpTurnView({ state, busy, error, respond }: { state: McpTurnSta
                 <button className={buttonClass} disabled={busy} onClick={() => respond(review.request_id, true)}>{t('mcpChat.allow')}</button>
             </div>
         </div>)}
+        {answer ? elicitations.map(request => <McpElicitationCard key={request.request_id} request={request} busy={busy}
+            respond={(choice, content) => answer(request.request_id, choice, content)} />) : null}
     </section>;
 }
 export function McpTurnPanel({ workspaceRoot }: { workspaceRoot?: string | null }) {
@@ -75,5 +85,15 @@ export function McpTurnPanel({ workspaceRoot }: { workspaceRoot?: string | null 
         } catch (failure) { if (epoch.current === generation) setError(integrationProbeErrorKey(failure)); }
         finally { if (epoch.current === generation) setBusy(false); }
     };
-    return state && <McpTurnView state={state} busy={busy} error={error} respond={respond} />;
+    const answer = async (requestId: string, choice: ElicitationAnswer, content?: Record<string, unknown>) => {
+        if (!state || busy) return;
+        const generation = epoch.current;
+        setBusy(true); setError(null);
+        try {
+            await invoke('respond_mcp_elicitation', { turnId: state.turn_id, requestId, answer: choice, content: content ?? null });
+            if (epoch.current === generation) setState(previous => previous && ({ ...previous, elicitations: (previous.elicitations ?? []).filter(request => request.request_id !== requestId) }));
+        } catch (failure) { if (epoch.current === generation) setError(integrationProbeErrorKey(failure)); }
+        finally { if (epoch.current === generation) setBusy(false); }
+    };
+    return state && <McpTurnView state={state} busy={busy} error={error} respond={respond} answer={answer} />;
 }

@@ -1717,6 +1717,18 @@
     "arguments": "Revisar argumentos",
     "deny": "Denegar",
     "allow": "Permitir una vez",
+    "elicitation": {
+      "title": "{{server}} solicita información mientras ejecuta {{tool}}",
+      "help": "Esta solicitud procede del servidor externo, no de Blade. Responde solo lo que estés dispuesto a compartir con él. Si la rechazas, la herramienta continuará sin tu respuesta; si la cancelas, se detendrá.",
+      "urlHelp": "El servidor te pide continuar en una página de {{host}}. Comprueba la dirección completa antes de abrirla.",
+      "submit": "Enviar respuesta",
+      "open": "Abrir en el navegador",
+      "decline": "Rechazar",
+      "cancel": "Cancelar",
+      "none": "Ninguno",
+      "invalid": "Revisa este campo.",
+      "dateTimeFormat": "Por ejemplo, 2026-10-17T14:30:00Z"
+    },
     "tool": "Herramienta MCP",
     "waiting": "Esperando el permiso o la respuesta de la herramienta externa.",
     "outcome": {

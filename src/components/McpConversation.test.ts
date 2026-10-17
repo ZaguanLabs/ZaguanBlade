@@ -30,6 +30,28 @@ for (const [language, translation] of Object.entries({ en, es })) {
         assert.ok(!html.includes('<script>'));
         assert.ok(!html.includes('mcpChat.'));
     });
+    test(`server requests for input are shown as text and answered only by the user in ${language}`, async () => {
+        const i18n = createInstance();
+        await i18n.init({ lng: language, resources: { [language]: { translation } }, interpolation: { escapeValue: false } });
+        const state: McpTurnState = {
+            turn_id: 'turn', conversation_id: 'conversation', available: 1, limit: 32, excluded: [], blocked: null, pending: [],
+            elicitations: [
+                { request_id: 'form', server_name: 'Deploy', tool_name: 'release', message: '<b>Which environment?</b>', mode: 'form', fields: [
+                    { name: 'env', title: 'Environment', description: null, required: true, kind: 'choice', options: [{ value: 'prod', label: 'Production' }], multiple: false, min_items: null, max_items: null, default: [] },
+                    { name: 'notes', title: null, description: null, required: false, kind: 'text', min_length: null, max_length: 100, format: null, default: null },
+                ] },
+                { request_id: 'url', server_name: 'Deploy', tool_name: 'release', message: 'Approve in the console', mode: 'url', url: 'https://console.example.com/approve?id=1', host: 'console.example.com' },
+            ],
+        };
+        let answers = 0;
+        const html = renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(McpTurnView, { state, busy: false, error: null, respond: () => {}, answer: () => { answers++; } })));
+        assert.equal(answers, 0);
+        assert.ok(html.includes('&lt;b&gt;Which environment?&lt;/b&gt;'));
+        assert.ok(html.includes('Production'));
+        assert.ok(html.includes('https://console.example.com/approve?id=1'));
+        for (const key of ['submit', 'open', 'decline', 'cancel'] as const) assert.ok(html.includes(translation.mcpChat.elicitation[key]));
+        assert.ok(!html.includes('mcpChat.'));
+    });
     test(`MCP rich results are attributed and never auto-fetch media in ${language}`, async () => {
         const i18n = createInstance();
         await i18n.init({ lng: language, resources: { [language]: { translation } }, interpolation: { escapeValue: false } });
