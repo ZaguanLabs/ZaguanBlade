@@ -63,7 +63,11 @@ function DefinitionFields({ entry, onChange, onRemove, config, testContext, live
     const [credentialVersion, setCredentialVersion] = useState(0);
     return <section className="rounded-lg border border-(--border-default) bg-(--bg-panel) p-4 space-y-4">
         <div className="flex items-center justify-between gap-3">
-            <span className="text-xs text-(--fg-tertiary)">{connection.protocol === 'mcp' ? t(`settings.integrations.connection.${live.phase === 'ready' ? live.status?.phase ?? 'disconnected' : live.phase === 'failed' ? 'statusUnavailable' : 'checking'}`) : t('settings.integrations.notConnected')}</span>
+            <label className="flex items-center gap-2 text-sm text-(--fg-primary)">
+                <input type="checkbox" checked={entry.enabled} onChange={event => onChange({ ...entry, enabled: event.target.checked })} />
+                {t('settings.integrations.enabled')}
+            </label>
+            <span className="ml-auto text-xs text-(--fg-tertiary)">{connection.protocol === 'mcp' ? t(`settings.integrations.connection.${live.phase === 'ready' ? live.status?.phase ?? 'disconnected' : live.phase === 'failed' ? 'statusUnavailable' : 'checking'}`) : t('settings.integrations.notConnected')}</span>
             <button type="button" className={buttonClass} onClick={onRemove} aria-label={t('settings.integrations.removeDefinition', { name: entry.name })}>
                 <Trash2 className="h-4 w-4" aria-hidden="true" />{t('settings.integrations.remove')}
             </button>
@@ -127,13 +131,13 @@ function DefinitionFields({ entry, onChange, onRemove, config, testContext, live
 export function IntegrationSettings({ config, onChange, workspace, onWorkspaceChange, ...testContext }: ConnectionTestContext & { config: IntegrationConfig; onChange: (config: IntegrationConfig) => void; workspace?: WorkspaceIntegrationSettings; onWorkspaceChange?: (workspace: WorkspaceIntegrationSettings) => void }) {
     const { t } = useTranslation();
     const live = useMcpConnections(testContext.workspacePath);
-    const add = (protocol: 'mcp' | 'acp', atlas = false) => {
+    const add = (protocol: 'mcp' | 'acp') => {
         const entry: IntegrationDefinition = {
             id: crypto.randomUUID(),
-            name: atlas ? 'Atlas Scout' : t(`settings.integrations.${protocol === 'mcp' ? 'newServer' : 'newAgent'}`),
+            name: t(`settings.integrations.${protocol === 'mcp' ? 'newServer' : 'newAgent'}`),
             enabled: false,
             connection: protocol === 'mcp'
-                ? { protocol: 'mcp', transport: { type: 'stdio', process: atlas ? newIntegrationProcess('atlas-scout', ['mcp']) : newIntegrationProcess() } }
+                ? { protocol: 'mcp', transport: { type: 'stdio', process: newIntegrationProcess() } }
                 : { protocol: 'acp', process: newIntegrationProcess(), mcp_servers: [] },
         };
         onChange({ ...config, entries: [...config.entries, entry] });
@@ -156,7 +160,6 @@ export function IntegrationSettings({ config, onChange, workspace, onWorkspaceCh
                 <button type="button" className={buttonClass} onClick={() => add(protocol)}>
                     <Plus className="h-4 w-4" aria-hidden="true" />{t(`settings.integrations.${protocol === 'mcp' ? 'addServer' : 'addAgent'}`)}
                 </button>
-                {protocol === 'mcp' ? <button type="button" className={buttonClass} onClick={() => add('mcp', true)}>{t('settings.integrations.addAtlas')}</button> : null}
             </div>
         </div>)}
         <SymbolsIndexSettings config={config} workspace={workspace} workspacePath={testContext.workspacePath} onChange={onChange} onWorkspaceChange={onWorkspaceChange} />

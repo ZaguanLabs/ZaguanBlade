@@ -25,6 +25,7 @@ for (const [language, translation] of Object.entries({ en, es })) {
         assert.ok(html.includes('value="path with spaces"'));
         assert.ok(html.includes(`aria-label="${i18n.t('settings.integrations.argumentNumber', { number: 1 })}"`));
         assert.ok(html.includes('type="checkbox" checked=""'));
+        assert.equal(html.split(`<input type="checkbox"/>${translation.settings.integrations.enabled}</label>`).length - 1, 2);
         assert.ok(html.includes('type="password"'));
         assert.ok(html.includes(translation.settings.integrations.test.button));
         assert.ok(html.includes(translation.settings.integrations.environment.credentials));
