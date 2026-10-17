@@ -1,6 +1,7 @@
 //! Integration configuration, identities and supervised protocol lifetimes.
 //! Saving configuration never starts a process or grants launch permission.
 
+pub mod acp_session;
 pub(crate) mod call_result;
 pub mod catalog;
 pub mod config;
@@ -64,4 +65,5 @@ pub enum RuntimeError {
     OAuthUnsupported,
     AuthorizationFailed,
     AuthorizationDenied,
+    AgentExited,
 }
