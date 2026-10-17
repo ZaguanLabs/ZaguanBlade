@@ -813,6 +813,25 @@
       "remove": "Remove",
       "removeDefinition": "Remove {{name}}",
       "forwardedServers": "MCP servers to offer to new agent sessions",
+      "oauth": {
+        "title": "OAuth sign-in",
+        "enable": "Sign in through the server's authorization server",
+        "help": "For servers that use OAuth. Blade opens the sign-in page in your browser and stores the resulting tokens in the system keychain, never in the settings file. Tokens are only sent to this server URL.",
+        "clientId": "Client ID (optional)",
+        "clientIdPlaceholder": "Leave empty to register Blade automatically",
+        "scopes": "Scopes (optional)",
+        "scopesPlaceholder": "Separated by spaces; leave empty to use the server's defaults",
+        "saveFirst": "Save settings before signing in. Sign-in uses the saved server URL and OAuth settings.",
+        "checking": "Checking sign-in…",
+        "waiting": "Waiting for you to finish signing in in your browser…",
+        "signedIn": "Signed in on this computer.",
+        "signedOut": "Not signed in.",
+        "signIn": "Sign in",
+        "signInAgain": "Sign in again",
+        "signOut": "Sign out",
+        "browserSuccess": "You are signed in. You can close this tab and return to Zaguán Blade.",
+        "browserFailure": "Sign-in did not complete. Close this tab and try again from Zaguán Blade."
+      },
       "errors": {
         "unsupported_version": "This integration settings version is not supported. Update Blade before editing this file.",
         "invalid_config": "The integration settings file is malformed or contains unknown fields. Correct the file and reload Settings.",
@@ -825,6 +844,7 @@
         "invalid_environment": "An environment variable name or value is invalid.",
         "invalid_url": "Enter an HTTP or HTTPS server URL without an embedded username, password or fragment.",
         "invalid_headers": "HTTP headers are invalid. Authentication headers must reference a stored secret.",
+        "invalid_oauth": "OAuth settings are invalid. OAuth needs HTTPS (or a server on this computer), cannot be combined with an Authorization header, and client IDs and scopes cannot contain spaces or quotes.",
         "invalid_reference": "An ACP agent references an MCP server that does not exist or is listed more than once.",
         "too_large": "Integration settings are too large. Use at most 128 definitions and a file smaller than 1 MiB.",
         "read_failed": "Could not read integration settings. Check file access and try again.",
@@ -873,10 +893,13 @@
           "unsupported_result": "The server requested an unsupported interaction or background task. The call may have had effects and was not retried.",
           "artifact_unavailable": "The full result is unavailable; the transcript preview is still retained.",
           "call_limit": "This turn has reached its MCP call limit or repeated a call identifier.",
-          "authentication_required": "The server requires authentication or rejected the configured credentials. Check the headers and stored credentials. OAuth sign-in is not supported yet.",
+          "authentication_required": "The server requires authentication or rejected the configured credentials. Check the headers and stored credentials, or sign in again under OAuth sign-in.",
           "server_unreachable": "Could not reach the server. Check the URL, your network connection and the server certificate.",
           "resource_unavailable": "The server could not provide this resource. Check the address or the template values.",
-          "prompt_unavailable": "The server could not generate this prompt. Check the argument values."
+          "prompt_unavailable": "The server could not generate this prompt. Check the argument values.",
+          "oauth_unsupported": "This server does not publish a usable OAuth authorization server (HTTPS endpoints with PKCE). Use a header with a stored credential instead.",
+          "authorization_failed": "Sign-in failed. The authorization server rejected the request or Blade could not register with it. Try again, or enter a client ID registered for Blade.",
+          "authorization_denied": "Sign-in was declined in the browser."
         },
         "mcpResult_other": "{{count}} tools; resources: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "{{count}} authentication methods advertised. No session was started.",
@@ -965,7 +988,9 @@
       "review": {
         "headers": "Headers sent",
         "noHeaders": "None",
-        "insecure": "This server uses unencrypted HTTP on another computer. Anyone on the network path can read or change headers, credentials, tool arguments and results. Use HTTPS unless you trust the network."
+        "insecure": "This server uses unencrypted HTTP on another computer. Anyone on the network path can read or change headers, credentials, tool arguments and results. Use HTTPS unless you trust the network.",
+        "authentication": "Authentication",
+        "oauth": "Your OAuth sign-in for this server"
       }
     },
     "retryLoading": "Reload settings",

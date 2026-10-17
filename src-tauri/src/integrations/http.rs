@@ -2,7 +2,7 @@
 //! headers, never follow redirects, and every response body is bounded before
 //! the SDK parses it. Transport recovery never re-sends an ordinary request.
 use super::{
-    config::ConfigValue,
+    config::{ConfigValue, OAuthSettings},
     credentials::SecretStore,
     mcp_session::{Signals, MAX_FRAME_BYTES},
     RuntimeError,
@@ -71,14 +71,22 @@ pub struct PreparedHttp {
     /// Plain HTTP to a host other than this machine.
     pub insecure: bool,
     pub fingerprint: String,
+    /// Present when the server is reached with the user's OAuth sign-in.
+    pub(super) oauth: Option<OAuthBinding>,
+}
+
+pub(super) struct OAuthBinding {
+    pub integration: Uuid,
+    pub secrets: Arc<dyn SecretStore>,
 }
 
 impl PreparedHttp {
     pub fn resolve(
         url: &str,
         headers: &BTreeMap<String, ConfigValue>,
+        oauth: Option<&OAuthSettings>,
         integration: Uuid,
-        secrets: &dyn SecretStore,
+        secrets: &Arc<dyn SecretStore>,
     ) -> Result<Self, RuntimeError> {
         let parsed = reqwest::Url::parse(url).map_err(|_| RuntimeError::UnsupportedTransport)?;
         if !matches!(parsed.scheme(), "http" | "https") || parsed.host().is_none() {
@@ -121,12 +129,35 @@ impl PreparedHttp {
             header_names.push(name.clone());
             resolved.insert(header, value);
         }
+        // Approval binds to the sign-in configuration, not to tokens, which
+        // rotate on every refresh. Tokens are bound to this URL in storage.
+        let oauth = match oauth {
+            None => None,
+            Some(settings) => {
+                if insecure || resolved.contains_key(&reqwest::header::AUTHORIZATION) {
+                    return Err(RuntimeError::OAuthUnsupported);
+                }
+                if !super::oauth::signed_in(secrets.as_ref(), integration, url)? {
+                    return Err(RuntimeError::AuthenticationRequired);
+                }
+                push(b"oauth");
+                push(settings.client_id.as_deref().unwrap_or_default().as_bytes());
+                for scope in &settings.scopes {
+                    push(scope.as_bytes());
+                }
+                Some(OAuthBinding {
+                    integration,
+                    secrets: secrets.clone(),
+                })
+            }
+        };
         Ok(Self {
             url: url.to_owned(),
             headers: resolved,
             header_names,
             insecure,
             fingerprint: super::store::fingerprint(&bytes),
+            oauth,
         })
     }
 
@@ -135,6 +166,17 @@ impl PreparedHttp {
         signals: Arc<Signals>,
         budget: usize,
     ) -> Result<StreamableHttpClientTransport<BoundedHttpClient>, RuntimeError> {
+        let (client, config) = self.parts(signals, budget)?;
+        Ok(StreamableHttpClientTransport::with_client(client, config))
+    }
+
+    /// The bounded client and transport configuration, for callers that wrap
+    /// the client (OAuth adds the bearer token and one refresh on a 401).
+    pub(super) fn parts(
+        &self,
+        signals: Arc<Signals>,
+        budget: usize,
+    ) -> Result<(BoundedHttpClient, StreamableHttpClientTransportConfig), RuntimeError> {
         let client = reqwest::Client::builder()
             // A redirect target never receives configured headers or credentials.
             .redirect(reqwest::redirect::Policy::none())
@@ -151,7 +193,7 @@ impl PreparedHttp {
             .reinit_on_expired_session(false);
         // Resuming an event stream re-attaches to it; it never re-sends a POST.
         config.retry_config = Arc::new(ResumeTwice);
-        Ok(StreamableHttpClientTransport::with_client(
+        Ok((
             BoundedHttpClient {
                 client,
                 signals,
@@ -162,7 +204,7 @@ impl PreparedHttp {
     }
 }
 
-fn loopback(url: &reqwest::Url) -> bool {
+pub(super) fn loopback(url: &reqwest::Url) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
@@ -579,8 +621,10 @@ mod tests {
     #[derive(Clone)]
     struct Seen {
         method: String,
+        target: String,
         headers: HashMap<String, String>,
         body: Value,
+        raw: String,
     }
     type Log = Arc<Mutex<Vec<Seen>>>;
 
@@ -607,7 +651,9 @@ mod tests {
                     };
                     let head = String::from_utf8_lossy(&buffer[..end]).into_owned();
                     let mut lines = head.split("\r\n");
-                    let method = lines.next().unwrap().split(' ').next().unwrap().to_owned();
+                    let mut line = lines.next().unwrap().split(' ');
+                    let method = line.next().unwrap().to_owned();
+                    let target = line.next().unwrap_or_default().to_owned();
                     let headers: HashMap<_, _> = lines
                         .filter_map(|line| line.split_once(':'))
                         .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_owned()))
@@ -625,8 +671,10 @@ mod tests {
                     }
                     let request = Seen {
                         method,
+                        target,
                         headers,
                         body: serde_json::from_slice(&body).unwrap_or(Value::Null),
+                        raw: String::from_utf8_lossy(&body).into_owned(),
                     };
                     let response = reply(&request);
                     seen.lock().unwrap().push(request);
@@ -752,7 +800,17 @@ mod tests {
     }
 
     fn prepared(url: &str) -> PreparedHttp {
-        PreparedHttp::resolve(url, &BTreeMap::new(), Uuid::nil(), &Secrets::default()).unwrap()
+        resolve(url, &BTreeMap::new(), Uuid::nil(), &Default::default()).unwrap()
+    }
+
+    fn resolve(
+        url: &str,
+        headers: &BTreeMap<String, ConfigValue>,
+        id: Uuid,
+        secrets: &Arc<Secrets>,
+    ) -> Result<PreparedHttp, RuntimeError> {
+        let secrets: Arc<dyn SecretStore> = secrets.clone();
+        PreparedHttp::resolve(url, headers, None, id, &secrets)
     }
 
     fn methods(log: &Log, method: &str) -> usize {
@@ -784,6 +842,7 @@ mod tests {
                         transport: McpTransport::StreamableHttp {
                             url: url.clone(),
                             headers: headers(),
+                            oauth: None,
                         },
                     },
                 }],
@@ -956,13 +1015,13 @@ mod tests {
             )
         })
         .await;
-        let secrets = Secrets::default();
+        let secrets = Arc::new(Secrets::default());
         secrets
             .0
             .lock()
             .unwrap()
             .insert((Uuid::nil(), "token".into()), "Bearer x".into());
-        let with_secret = PreparedHttp::resolve(&url, &headers(), Uuid::nil(), &secrets).unwrap();
+        let with_secret = resolve(&url, &headers(), Uuid::nil(), &secrets).unwrap();
         assert_eq!(
             McpSession::open_http(&with_secret, MAX_SESSION).await.err(),
             Some(RuntimeError::ProtocolFailed)
@@ -970,6 +1029,223 @@ mod tests {
         assert!(redirected.lock().unwrap().is_empty());
     }
     const MAX_SESSION: usize = super::super::mcp_session::MAX_SESSION_BYTES;
+
+    #[tokio::test]
+    async fn oauth_sign_in_connects_refreshes_a_rejected_token_once_and_signs_out() {
+        #[derive(Default)]
+        struct Authority {
+            revoked: Vec<String>,
+            refreshes: usize,
+        }
+        let authority = Arc::new(Mutex::new(Authority::default()));
+        let origin = Arc::new(Mutex::new(String::new()));
+        let inner = mcp(false, |_| None);
+        let (url, log) = server({
+            let (authority, origin) = (authority.clone(), origin.clone());
+            move |seen| {
+                let origin = origin.lock().unwrap().clone();
+                let json = |body: Value| {
+                    http("200 OK", &[("Content-Type", JSON)], body.to_string().as_bytes())
+                };
+                match seen.target.split('?').next().unwrap_or_default() {
+                    "/.well-known/oauth-protected-resource/mcp" => json(json!({
+                        "resource": format!("{origin}/mcp"), "authorization_servers": [origin]})),
+                    "/.well-known/oauth-authorization-server" => json(json!({
+                        "issuer": origin,
+                        "authorization_endpoint": format!("{origin}/authorize"),
+                        "token_endpoint": format!("{origin}/token"),
+                        "registration_endpoint": format!("{origin}/register"),
+                        "code_challenge_methods_supported": ["S256"],
+                        "response_types_supported": ["code"]})),
+                    "/register" => http(
+                        "201 Created",
+                        &[("Content-Type", JSON)],
+                        json!({"client_id": "dynamic-client",
+                            "redirect_uris": seen.body["redirect_uris"]})
+                        .to_string()
+                        .as_bytes(),
+                    ),
+                    "/token" => {
+                        let token = if seen.raw.contains("grant_type=refresh_token") {
+                            authority.lock().unwrap().refreshes += 1;
+                            "at-2"
+                        } else {
+                            assert!(seen.raw.contains("code=granted"));
+                            assert!(seen.raw.contains("code_verifier="));
+                            "at-1"
+                        };
+                        json(json!({"access_token": token, "token_type": "Bearer",
+                            "expires_in": 3600, "refresh_token": "rt"}))
+                    }
+                    "/mcp" => {
+                        let token = seen
+                            .headers
+                            .get("authorization")
+                            .and_then(|value| value.strip_prefix("Bearer "));
+                        match token {
+                            Some(token)
+                                if token.starts_with("at-")
+                                    && !authority.lock().unwrap().revoked.iter().any(|t| t == token) =>
+                            {
+                                inner(seen)
+                            }
+                            _ => {
+                                let challenge = format!(
+                                    "Bearer resource_metadata=\"{origin}/.well-known/oauth-protected-resource/mcp\""
+                                );
+                                http("401 Unauthorized", &[("WWW-Authenticate", &challenge)], b"")
+                            }
+                        }
+                    }
+                    other => http("404 Not Found", &[], other.as_bytes()),
+                }
+            }
+        })
+        .await;
+        *origin.lock().unwrap() = url.trim_end_matches("/mcp").to_owned();
+
+        let root = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4();
+        let config = IntegrationConfig {
+            entries: vec![IntegrationDefinition {
+                id,
+                name: "Remote".into(),
+                enabled: true,
+                connection: ConnectionConfig::Mcp {
+                    transport: McpTransport::StreamableHttp {
+                        url: url.clone(),
+                        headers: BTreeMap::new(),
+                        oauth: Some(Default::default()),
+                    },
+                },
+            }],
+            ..Default::default()
+        };
+        let revision = IntegrationStore::new(root.path().into())
+            .save("missing", config)
+            .unwrap()
+            .revision;
+        let secrets = Arc::new(crate::integrations::oauth::tests::MemorySecrets::default());
+        let runtime = Arc::new(IntegrationRuntime::new(root.path().into(), secrets.clone()));
+        let documents = Arc::new(DocumentService::new(root.path().into()));
+        assert_eq!(
+            runtime
+                .prepare_connection(id, revision.clone(), &documents)
+                .err(),
+            Some(RuntimeError::AuthenticationRequired)
+        );
+        let texts = || crate::integrations::oauth::CallbackPage {
+            success: "Signed in".into(),
+            failure: "Not signed in".into(),
+        };
+        // The browser: follow the redirect the authorization server would send.
+        let browser = |reply: &'static str| {
+            let (page, shown) = tokio::sync::oneshot::channel();
+            let open = move |authorization: &str| {
+                let authorization = reqwest::Url::parse(authorization).unwrap();
+                let query: HashMap<String, String> =
+                    authorization.query_pairs().into_owned().collect();
+                assert_eq!(query["code_challenge_method"], "S256");
+                assert_eq!(query["client_id"], "dynamic-client");
+                assert!(query["redirect_uri"].starts_with("http://127.0.0.1:"));
+                let redirect =
+                    format!("{}?{reply}&state={}", query["redirect_uri"], query["state"]);
+                tokio::spawn(async move {
+                    let _ = page.send(reqwest::get(redirect).await.unwrap().text().await.unwrap());
+                });
+                Ok(())
+            };
+            (open, shown)
+        };
+
+        let (open, shown) = browser("error=access_denied");
+        assert_eq!(
+            runtime.sign_in(id, revision.clone(), open, texts()).await,
+            Err(RuntimeError::AuthorizationDenied)
+        );
+        assert!(shown.await.unwrap().contains("Not signed in"));
+        assert!(!runtime.signed_in(id).unwrap());
+
+        let (open, shown) = browser("code=granted");
+        runtime
+            .sign_in(id, revision.clone(), open, texts())
+            .await
+            .unwrap();
+        assert!(shown.await.unwrap().contains("Signed in"));
+        assert!(runtime.signed_in(id).unwrap());
+        // Tokens never reach configuration or the review shown to the user.
+        let review = runtime
+            .prepare_connection(id, revision.clone(), &documents)
+            .unwrap();
+        let shown = serde_json::to_value(&review).unwrap();
+        assert_eq!(shown["oauth"], true);
+        assert!(!shown.to_string().contains("at-1"));
+        assert!(
+            !std::fs::read_to_string(root.path().join("integrations.json"))
+                .unwrap()
+                .contains("at-1")
+        );
+
+        runtime
+            .connect(review.ticket_id, documents.clone())
+            .await
+            .unwrap();
+        let connected = |refreshes: usize| {
+            let (runtime, documents, authority) =
+                (runtime.clone(), documents.clone(), authority.clone());
+            async move {
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    loop {
+                        let status = runtime.connections.status(id, &documents).unwrap().unwrap();
+                        if status.phase == ConnectionPhase::Connected
+                            && authority.lock().unwrap().refreshes == refreshes
+                        {
+                            return status;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap()
+            }
+        };
+        let status = connected(0).await;
+
+        // The server revokes the token: one refresh, one retry, and the
+        // catalog refresh succeeds with the new token.
+        authority.lock().unwrap().revoked.push("at-1".into());
+        runtime
+            .connections
+            .refresh(status.connection_id, &documents)
+            .unwrap();
+        connected(1).await;
+        let lists = |token: &str| {
+            log.lock()
+                .unwrap()
+                .iter()
+                .filter(|seen| {
+                    seen.body["method"] == "tools/list"
+                        && seen.headers.get("authorization").map(String::as_str)
+                            == Some(&format!("Bearer {token}"))
+                })
+                .count()
+        };
+        assert_eq!(
+            lists("at-1"),
+            2,
+            "initial discovery, then the rejected refresh"
+        );
+        assert_eq!(lists("at-2"), 1);
+
+        runtime.sign_out(id).await.unwrap();
+        assert!(!runtime.signed_in(id).unwrap());
+        assert!(secrets.0.lock().unwrap().is_empty());
+        assert_eq!(
+            runtime.prepare_connection(id, revision, &documents).err(),
+            Some(RuntimeError::AuthenticationRequired)
+        );
+        runtime.shutdown().await;
+    }
 
     #[tokio::test]
     async fn an_expired_session_ends_the_call_without_replaying_it() {
@@ -998,10 +1274,10 @@ mod tests {
 
     #[test]
     fn resolution_binds_secrets_and_flags_plain_http_to_other_hosts() {
-        let secrets = Secrets::default();
+        let secrets = Arc::new(Secrets::default());
         let id = Uuid::new_v4();
         assert_eq!(
-            PreparedHttp::resolve("https://example.com/mcp", &headers(), id, &secrets).err(),
+            resolve("https://example.com/mcp", &headers(), id, &secrets).err(),
             Some(RuntimeError::SecretMissing)
         );
         secrets
@@ -1009,15 +1285,13 @@ mod tests {
             .lock()
             .unwrap()
             .insert((id, "token".into()), "Bearer one".into());
-        let first =
-            PreparedHttp::resolve("https://example.com/mcp", &headers(), id, &secrets).unwrap();
+        let first = resolve("https://example.com/mcp", &headers(), id, &secrets).unwrap();
         secrets
             .0
             .lock()
             .unwrap()
             .insert((id, "token".into()), "Bearer two".into());
-        let second =
-            PreparedHttp::resolve("https://example.com/mcp", &headers(), id, &secrets).unwrap();
+        let second = resolve("https://example.com/mcp", &headers(), id, &secrets).unwrap();
         assert_ne!(first.fingerprint, second.fingerprint);
         assert!(!first.insecure);
         secrets
@@ -1026,7 +1300,7 @@ mod tests {
             .unwrap()
             .insert((id, "token".into()), "Bearer\r\nInjected: yes".into());
         assert_eq!(
-            PreparedHttp::resolve("https://example.com/mcp", &headers(), id, &secrets).err(),
+            resolve("https://example.com/mcp", &headers(), id, &secrets).err(),
             Some(RuntimeError::InvalidSecret)
         );
         for (url, insecure) in [

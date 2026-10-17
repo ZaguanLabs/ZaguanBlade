@@ -13,6 +13,7 @@ pub mod launch;
 pub mod mcp_session;
 pub(crate) mod native_catalog;
 pub(crate) mod native_turn;
+pub mod oauth;
 pub(crate) mod permissions;
 pub mod probe;
 pub mod process;
@@ -58,4 +59,8 @@ pub enum RuntimeError {
     ServerUnreachable,
     ResourceUnavailable,
     PromptUnavailable,
+    #[serde(rename = "oauth_unsupported")]
+    OAuthUnsupported,
+    AuthorizationFailed,
+    AuthorizationDenied,
 }

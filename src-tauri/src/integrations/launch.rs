@@ -7,7 +7,7 @@ use super::{
     process::PreparedProcess,
     RuntimeError,
 };
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 use uuid::Uuid;
 
 pub enum PreparedTransport {
@@ -20,7 +20,7 @@ impl PreparedTransport {
         connection: &ConnectionConfig,
         integration: Uuid,
         workspace: &Path,
-        secrets: &dyn SecretStore,
+        secrets: &Arc<dyn SecretStore>,
     ) -> Result<Self, RuntimeError> {
         Ok(match connection {
             ConnectionConfig::Mcp {
@@ -30,11 +30,22 @@ impl PreparedTransport {
                 process,
                 integration,
                 workspace,
-                secrets,
+                secrets.as_ref(),
             )?),
             ConnectionConfig::Mcp {
-                transport: McpTransport::StreamableHttp { url, headers },
-            } => Self::Http(PreparedHttp::resolve(url, headers, integration, secrets)?),
+                transport:
+                    McpTransport::StreamableHttp {
+                        url,
+                        headers,
+                        oauth,
+                    },
+            } => Self::Http(PreparedHttp::resolve(
+                url,
+                headers,
+                oauth.as_ref(),
+                integration,
+                secrets,
+            )?),
         })
     }
 

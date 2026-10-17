@@ -9,7 +9,13 @@ export interface IntegrationProcess {
 
 export type McpTransport =
     | { type: 'stdio'; process: IntegrationProcess }
-    | { type: 'streamable_http'; url: string; headers: Record<string, ConfigValue> };
+    | { type: 'streamable_http'; url: string; headers: Record<string, ConfigValue>; oauth?: McpOAuthSettings };
+
+/** Tokens are never part of configuration; they live in the OS keyring. */
+export interface McpOAuthSettings {
+    client_id?: string;
+    scopes?: string[];
+}
 
 export type IntegrationConnection =
     | { protocol: 'mcp'; transport: McpTransport }
@@ -41,7 +47,7 @@ export interface WorkspaceIntegrationSettings {
 /** What a one-use approval authorizes. Environment and header values are never included. */
 export type IntegrationLaunchReview = { ticket_id: string } & (
     | { kind: 'process'; executable: string; cwd: string; args: string[] }
-    | { kind: 'http'; url: string; header_names: string[]; insecure: boolean }
+    | { kind: 'http'; url: string; header_names: string[]; insecure: boolean; oauth: boolean }
 );
 
 export interface IntegrationProbeResult {

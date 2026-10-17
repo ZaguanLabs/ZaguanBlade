@@ -25,7 +25,7 @@ export function replaceIntegration(config: IntegrationConfig, entry: Integration
 const errorCodes = new Set([
     'unsupported_version', 'invalid_config', 'invalid_id', 'duplicate_id', 'invalid_name',
     'invalid_command', 'invalid_arguments', 'invalid_directory', 'invalid_environment',
-    'invalid_url', 'invalid_headers', 'invalid_reference', 'too_large', 'read_failed',
+    'invalid_url', 'invalid_headers', 'invalid_oauth', 'invalid_reference', 'too_large', 'read_failed',
     'write_failed', 'conflict', 'desktop_only',
 ]);
 

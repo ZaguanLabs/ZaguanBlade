@@ -22,12 +22,14 @@ for (const [language, translation] of Object.entries({ en, es })) {
         const i18n = await setup();
         const render = (review: IntegrationLaunchReview, purpose: 'test' | 'connection') =>
             renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(LaunchReviewDetails, { review, purpose })));
-        const http: IntegrationLaunchReview = { ticket_id: 'ticket', kind: 'http', url: 'https://tools.example/mcp', header_names: ['Authorization', 'X-Client'], insecure: false };
+        const http: IntegrationLaunchReview = { ticket_id: 'ticket', kind: 'http', url: 'https://tools.example/mcp', header_names: ['Authorization', 'X-Client'], insecure: false, oauth: false };
         const secure = render(http, 'connection');
         assert.ok(secure.includes('https://tools.example/mcp'));
         assert.ok(secure.includes('Authorization\nX-Client'));
         assert.ok(secure.includes(translation.settings.integrations.connection.reviewHelpHttp));
         assert.ok(!secure.includes(translation.settings.integrations.review.insecure));
+        assert.ok(!secure.includes(translation.settings.integrations.review.oauth));
+        assert.ok(render({ ...http, header_names: [], oauth: true }, 'connection').includes(translation.settings.integrations.review.oauth));
         const insecure = render({ ...http, url: 'http://192.168.1.4/mcp', header_names: [], insecure: true }, 'test');
         assert.ok(insecure.includes(translation.settings.integrations.review.insecure));
         assert.ok(insecure.includes(translation.settings.integrations.review.noHeaders));
@@ -50,6 +52,24 @@ for (const [language, translation] of Object.entries({ en, es })) {
         assert.ok(html.includes(translation.settings.integrations.connection.title));
         assert.ok(html.includes(i18n.t('settings.integrations.environment.credential', { name: 'authorization' })));
         assert.ok(!html.includes('settings.integrations.'));
+    });
+
+    test(`OAuth servers offer sign-in only for saved settings in ${language}`, async () => {
+        const i18n = await setup();
+        const oauth = translation.settings.integrations.oauth;
+        const config: IntegrationConfig = { schema_version: 1, entries: [{ id: 'remote', name: 'Remote', enabled: true, connection: { protocol: 'mcp',
+            transport: { type: 'streamable_http', url: 'https://tools.example/mcp', headers: {}, oauth: { client_id: 'blade', scopes: ['read', 'write'] } } } }] };
+        const html = renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(IntegrationSettings, { config, onChange: () => {} })));
+        assert.ok(html.includes(oauth.title));
+        assert.ok(html.includes('value="blade"'));
+        assert.ok(html.includes('value="read write"'));
+        assert.ok(html.includes(oauth.saveFirst));
+        assert.ok(html.includes(`>${oauth.signIn}</button>`));
+        assert.ok(!html.includes('settings.integrations.'));
+        const plain: IntegrationConfig = { ...config, entries: [{ ...config.entries[0], connection: { protocol: 'mcp', transport: { type: 'streamable_http', url: 'https://tools.example/mcp', headers: {} } } }] };
+        const off = renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(IntegrationSettings, { config: plain, onChange: () => {} })));
+        assert.ok(off.includes(oauth.enable.replace(/'/g, '&#x27;')));
+        assert.ok(!off.includes(`>${oauth.signIn}</button>`));
     });
 }
 

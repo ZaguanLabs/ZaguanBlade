@@ -813,6 +813,25 @@
       "remove": "Eliminar",
       "removeDefinition": "Eliminar {{name}}",
       "forwardedServers": "Servidores MCP disponibles para las nuevas sesiones del agente",
+      "oauth": {
+        "title": "Inicio de sesión con OAuth",
+        "enable": "Iniciar sesión mediante el servidor de autorización del servidor",
+        "help": "Para servidores que usan OAuth. Blade abre la página de inicio de sesión en tu navegador y guarda los tokens obtenidos en el llavero del sistema, nunca en el archivo de ajustes. Los tokens solo se envían a la URL de este servidor.",
+        "clientId": "ID de cliente (opcional)",
+        "clientIdPlaceholder": "Déjalo vacío para que Blade se registre automáticamente",
+        "scopes": "Ámbitos (opcional)",
+        "scopesPlaceholder": "Separados por espacios; déjalo vacío para usar los del servidor",
+        "saveFirst": "Guarda los ajustes antes de iniciar sesión. El inicio de sesión usa la URL del servidor y los ajustes de OAuth guardados.",
+        "checking": "Comprobando la sesión…",
+        "waiting": "Esperando a que termines de iniciar sesión en el navegador…",
+        "signedIn": "Sesión iniciada en este equipo.",
+        "signedOut": "No has iniciado sesión.",
+        "signIn": "Iniciar sesión",
+        "signInAgain": "Volver a iniciar sesión",
+        "signOut": "Cerrar sesión",
+        "browserSuccess": "Has iniciado sesión. Puedes cerrar esta pestaña y volver a Zaguán Blade.",
+        "browserFailure": "No se ha completado el inicio de sesión. Cierra esta pestaña y vuelve a intentarlo desde Zaguán Blade."
+      },
       "errors": {
         "unsupported_version": "Esta versión del archivo de configuración de integraciones no es compatible. Actualiza Blade antes de editarlo.",
         "invalid_config": "El archivo de configuración de integraciones tiene un formato incorrecto o contiene campos desconocidos. Corrige el archivo y vuelve a cargar los ajustes.",
@@ -825,6 +844,7 @@
         "invalid_environment": "El nombre o el valor de una variable de entorno no es válido.",
         "invalid_url": "Introduce una URL HTTP o HTTPS sin nombre de usuario, contraseña ni fragmento.",
         "invalid_headers": "Las cabeceras HTTP no son válidas. Las cabeceras de autenticación deben hacer referencia a un secreto almacenado.",
+        "invalid_oauth": "Los ajustes de OAuth no son válidos. OAuth necesita HTTPS (o un servidor en este equipo), no puede combinarse con una cabecera Authorization, y los ID de cliente y ámbitos no pueden contener espacios ni comillas.",
         "invalid_reference": "Un agente ACP hace referencia a un servidor MCP que no existe o aparece más de una vez.",
         "too_large": "La configuración de integraciones es demasiado grande. Usa como máximo 128 definiciones y un archivo de menos de 1 MiB.",
         "read_failed": "No se ha podido leer la configuración de integraciones. Comprueba el acceso al archivo e inténtalo de nuevo.",
@@ -873,10 +893,13 @@
           "unsupported_result": "El servidor ha solicitado una interacción o tarea en segundo plano no compatible. La llamada puede haber producido efectos y no se ha vuelto a ejecutar.",
           "artifact_unavailable": "El resultado completo no está disponible; se conserva la vista previa en la conversación.",
           "call_limit": "Este turno ha alcanzado el límite de llamadas MCP o ha repetido un identificador de llamada.",
-          "authentication_required": "El servidor requiere autenticación o ha rechazado las credenciales configuradas. Revisa las cabeceras y las credenciales guardadas. El inicio de sesión con OAuth aún no está disponible.",
+          "authentication_required": "El servidor requiere autenticación o ha rechazado las credenciales configuradas. Revisa las cabeceras y las credenciales guardadas, o vuelve a iniciar sesión en «Inicio de sesión con OAuth».",
           "server_unreachable": "No se ha podido contactar con el servidor. Comprueba la URL, la conexión de red y el certificado del servidor.",
           "resource_unavailable": "El servidor no ha podido proporcionar este recurso. Revisa la dirección o los valores de la plantilla.",
-          "prompt_unavailable": "El servidor no ha podido generar este prompt. Revisa los valores de los argumentos."
+          "prompt_unavailable": "El servidor no ha podido generar este prompt. Revisa los valores de los argumentos.",
+          "oauth_unsupported": "Este servidor no publica un servidor de autorización OAuth utilizable (endpoints HTTPS con PKCE). Usa en su lugar una cabecera con una credencial guardada.",
+          "authorization_failed": "No se ha podido iniciar sesión. El servidor de autorización ha rechazado la solicitud o Blade no ha podido registrarse en él. Vuelve a intentarlo o introduce un ID de cliente registrado para Blade.",
+          "authorization_denied": "Se ha rechazado el inicio de sesión en el navegador."
         },
         "mcpResult_other": "{{count}} herramientas; recursos: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "El agente anuncia {{count}} métodos de autenticación. No se ha iniciado ninguna sesión.",
@@ -965,7 +988,9 @@
       "review": {
         "headers": "Cabeceras enviadas",
         "noHeaders": "Ninguna",
-        "insecure": "Este servidor usa HTTP sin cifrar en otro equipo. Cualquiera que tenga acceso a la red intermedia podría leer o modificar las cabeceras, las credenciales, los argumentos de las herramientas y sus resultados. Usa HTTPS salvo que confíes en la red."
+        "insecure": "Este servidor usa HTTP sin cifrar en otro equipo. Cualquiera que tenga acceso a la red intermedia podría leer o modificar las cabeceras, las credenciales, los argumentos de las herramientas y sus resultados. Usa HTTPS salvo que confíes en la red.",
+        "authentication": "Autenticación",
+        "oauth": "Tu sesión de OAuth para este servidor"
       }
     },
     "retryLoading": "Volver a cargar los ajustes",

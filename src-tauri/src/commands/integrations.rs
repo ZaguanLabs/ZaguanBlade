@@ -107,6 +107,76 @@ pub async fn set_integration_secret(
     .map_err(|_| RuntimeError::SecretUnavailable)?
 }
 
+/// Interactive OAuth sign-in for a saved Streamable HTTP server. Opens the
+/// authorization page in the user's browser and waits for its redirect to a
+/// loopback port. `success` and `failure` are the translated texts the
+/// browser shows afterwards.
+#[tauri::command]
+pub async fn sign_in_mcp_server(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    integration_id: Uuid,
+    expected_revision: String,
+    success: String,
+    failure: String,
+) -> Result<(), RuntimeError> {
+    use tauri_plugin_opener::OpenerExt;
+    runtime_desktop_only(&window)?;
+    let bounded = |text: String| text.chars().take(512).collect::<String>();
+    let texts = crate::integrations::oauth::CallbackPage {
+        success: bounded(success),
+        failure: bounded(failure),
+    };
+    let runtime = state.integrations.clone();
+    runtime
+        .sign_in(
+            integration_id,
+            expected_revision,
+            |url| {
+                app.opener()
+                    .open_url(url, None::<&str>)
+                    .map_err(|_| RuntimeError::AuthorizationFailed)
+            },
+            texts,
+        )
+        .await
+}
+
+#[tauri::command]
+pub fn cancel_mcp_sign_in(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), RuntimeError> {
+    runtime_desktop_only(&window)?;
+    state.integrations.cancel_sign_in();
+    Ok(())
+}
+
+/// Forgets this server's tokens on this computer and stops its connections.
+#[tauri::command]
+pub async fn sign_out_mcp_server(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    integration_id: Uuid,
+) -> Result<(), RuntimeError> {
+    runtime_desktop_only(&window)?;
+    state.integrations.sign_out(integration_id).await
+}
+
+#[tauri::command]
+pub async fn get_mcp_sign_in_status(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    integration_id: Uuid,
+) -> Result<bool, RuntimeError> {
+    runtime_desktop_only(&window)?;
+    let runtime = state.integrations.clone();
+    tokio::task::spawn_blocking(move || runtime.signed_in(integration_id))
+        .await
+        .map_err(|_| RuntimeError::SecretUnavailable)?
+}
+
 fn desktop_only(window: &tauri::WebviewWindow) -> Result<(), ConfigError> {
     if window.label() != "main" {
         return Err(ConfigError::DesktopOnly);

@@ -21,6 +21,8 @@ pub enum ConfigError {
     InvalidEnvironment,
     InvalidUrl,
     InvalidHeaders,
+    #[serde(rename = "invalid_oauth")]
+    InvalidOAuth,
     InvalidReference,
     TooLarge,
     ReadFailed,
@@ -93,7 +95,40 @@ pub enum McpTransport {
         url: String,
         #[serde(default)]
         headers: BTreeMap<String, ConfigValue>,
+        /// Sign in through the server's OAuth authorization server. Tokens live
+        /// in the OS keyring, never in this file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        oauth: Option<OAuthSettings>,
     },
+}
+
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OAuthSettings {
+    /// A client registered with the authorization server in advance. Without
+    /// one, Blade registers itself (client metadata document or dynamic
+    /// registration), as the authorization server allows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    /// Empty lets the server's metadata and challenge choose.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scopes: Vec<String>,
+}
+
+impl OAuthSettings {
+    fn validate(&self) -> bool {
+        // RFC 6749 client_id and scope-token character sets, bounded.
+        let token = |value: &str, max: usize| {
+            !value.is_empty()
+                && value.len() <= max
+                && value
+                    .bytes()
+                    .all(|c| (0x21..=0x7e).contains(&c) && c != b'"' && c != b'\\')
+        };
+        self.client_id.as_deref().is_none_or(|id| token(id, 256))
+            && self.scopes.len() <= 32
+            && self.scopes.iter().all(|scope| token(scope, 128))
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -218,7 +253,12 @@ impl IntegrationConfig {
                 }
                 | ConnectionConfig::Acp { process, .. } => process.validate()?,
                 ConnectionConfig::Mcp {
-                    transport: McpTransport::StreamableHttp { url, headers },
+                    transport:
+                        McpTransport::StreamableHttp {
+                            url,
+                            headers,
+                            oauth,
+                        },
                 } => {
                     let parsed = reqwest::Url::parse(url).map_err(|_| ConfigError::InvalidUrl)?;
                     if url.len() > 8192
@@ -251,6 +291,16 @@ impl IntegrationConfig {
                         ) && matches!(value, ConfigValue::Text { .. })
                         {
                             return Err(ConfigError::InvalidHeaders);
+                        }
+                    }
+                    if let Some(oauth) = oauth {
+                        // Tokens never travel in plain text, and a configured
+                        // Authorization header would compete with the sign-in.
+                        if !oauth.validate()
+                            || (parsed.scheme() == "http" && !super::http::loopback(&parsed))
+                            || names.contains("authorization")
+                        {
+                            return Err(ConfigError::InvalidOAuth);
                         }
                     }
                 }
@@ -357,6 +407,7 @@ mod tests {
                 transport: McpTransport::StreamableHttp {
                     url: url.into(),
                     headers: BTreeMap::new(),
+                    oauth: None,
                 },
             };
             assert_eq!(config.validate(), Err(ConfigError::InvalidUrl));
@@ -370,6 +421,7 @@ mod tests {
                         value: "Bearer sensitive".into(),
                     },
                 )]),
+                oauth: None,
             },
         };
         assert_eq!(config.validate(), Err(ConfigError::InvalidHeaders));
@@ -403,6 +455,62 @@ mod tests {
             );
             assert_eq!(reserved.validate(), Err(ConfigError::InvalidHeaders));
         }
+    }
+
+    #[test]
+    fn oauth_requires_a_protected_destination_and_valid_client_data() {
+        let mut config = fixture();
+        let mut set = |url: &str, oauth: OAuthSettings, headers: BTreeMap<String, ConfigValue>| {
+            config.entries[0].connection = ConnectionConfig::Mcp {
+                transport: McpTransport::StreamableHttp {
+                    url: url.into(),
+                    headers,
+                    oauth: Some(oauth),
+                },
+            };
+            config.validate()
+        };
+        let none = BTreeMap::new;
+        assert!(set("https://example.com/mcp", OAuthSettings::default(), none()).is_ok());
+        assert!(set(
+            "http://127.0.0.1:8080/mcp",
+            OAuthSettings::default(),
+            none()
+        )
+        .is_ok());
+        assert_eq!(
+            set("http://example.com/mcp", OAuthSettings::default(), none()),
+            Err(ConfigError::InvalidOAuth)
+        );
+        let bad_scope = OAuthSettings {
+            client_id: Some("blade".into()),
+            scopes: vec!["read write".into()],
+        };
+        assert_eq!(
+            set("https://example.com/mcp", bad_scope, none()),
+            Err(ConfigError::InvalidOAuth)
+        );
+        let authorization = BTreeMap::from([(
+            "Authorization".into(),
+            ConfigValue::Secret {
+                name: "token".into(),
+            },
+        )]);
+        assert_eq!(
+            set(
+                "https://example.com/mcp",
+                OAuthSettings::default(),
+                authorization
+            ),
+            Err(ConfigError::InvalidOAuth)
+        );
+        // Old files without the field keep working and serialize unchanged.
+        let value = json!({"type":"streamable_http","url":"https://example.com/mcp"});
+        let transport: McpTransport = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&transport).unwrap()["oauth"],
+            serde_json::Value::Null
+        );
     }
 
     #[test]

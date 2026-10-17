@@ -90,7 +90,7 @@ impl IntegrationRuntime {
                 &current.connection,
                 current.id,
                 validation_documents.workspace_root(),
-                runtime.secrets.as_ref(),
+                &runtime.secrets,
             )?;
             if resolved.fingerprint() != binding.fingerprint {
                 return Err(RuntimeError::ConfigChanged);

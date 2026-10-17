@@ -12,6 +12,7 @@ export function LaunchReviewDetails({ review, purpose }: { review: IntegrationLa
             <dt>{t('settings.integrations.url')}</dt><dd className="font-mono text-xs">{review.url}</dd>
             <dt className="mt-2">{t('settings.integrations.review.headers')}</dt>
             <dd className="font-mono text-xs whitespace-pre-wrap">{review.header_names.length ? review.header_names.join('\n') : t('settings.integrations.review.noHeaders')}</dd>
+            {review.oauth ? <><dt className="mt-2">{t('settings.integrations.review.authentication')}</dt><dd className="text-xs">{t('settings.integrations.review.oauth')}</dd></> : null}
         </dl>
     </div>;
     return <div className="space-y-3">

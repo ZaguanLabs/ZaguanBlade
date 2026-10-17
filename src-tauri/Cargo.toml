@@ -49,7 +49,9 @@ ignore = "0.4.33"
 similar = "3.2.0"
 gix = "0.89.0"
 keyring = "4.2.0"
-rmcp = { version = "=3.5.1", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client"] }
+rmcp = { version = "=3.5.1", default-features = false, features = ["auth", "client", "transport-async-rw", "transport-streamable-http-client"] }
+oauth2 = { version = "5.0.0", default-features = false }
+async-trait = "0.1.91"
 sse-stream = "=0.2.6"
 bytes = "1.12.1"
 agent-client-protocol = { version = "=3.3.0", default-features = false }

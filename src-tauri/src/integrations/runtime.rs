@@ -48,6 +48,8 @@ pub enum ReviewTarget {
         url: String,
         header_names: Vec<String>,
         insecure: bool,
+        /// Requests carry the user's OAuth sign-in for this server.
+        oauth: bool,
     },
 }
 
@@ -63,6 +65,7 @@ impl From<&PreparedTransport> for ReviewTarget {
                 url: http.url.clone(),
                 header_names: http.header_names.clone(),
                 insecure: http.insecure,
+                oauth: http.oauth.is_some(),
             },
         }
     }
@@ -100,6 +103,8 @@ pub struct IntegrationRuntime {
     pub(super) shutting_down: AtomicBool,
     pub(super) permissions: super::permissions::PermissionRegistry,
     pub(super) invoking: Arc<tokio::sync::Semaphore>,
+    /// The one interactive OAuth sign-in that may run at a time.
+    signing_in: Mutex<Option<(Uuid, CancellationToken)>>,
 }
 
 impl IntegrationRuntime {
@@ -113,6 +118,112 @@ impl IntegrationRuntime {
             shutting_down: AtomicBool::new(false),
             permissions: Default::default(),
             invoking: Arc::new(tokio::sync::Semaphore::new(4)),
+            signing_in: Mutex::new(None),
+        }
+    }
+
+    /// The saved URL and OAuth settings of a Streamable HTTP server that signs in.
+    fn oauth_target(
+        &self,
+        integration: Uuid,
+        revision: Option<&str>,
+    ) -> Result<(String, super::config::OAuthSettings), RuntimeError> {
+        let snapshot = IntegrationStore::new(self.directory.clone())
+            .load()
+            .map_err(|_| RuntimeError::ConfigChanged)?;
+        if revision.is_some_and(|revision| revision != snapshot.revision) {
+            return Err(RuntimeError::ConfigChanged);
+        }
+        match snapshot
+            .config
+            .entries
+            .into_iter()
+            .find(|entry| entry.id == integration)
+            .map(|entry| entry.connection)
+        {
+            Some(ConnectionConfig::Mcp {
+                transport:
+                    super::config::McpTransport::StreamableHttp {
+                        url,
+                        oauth: Some(settings),
+                        ..
+                    },
+            }) => Ok((url, settings)),
+            Some(_) => Err(RuntimeError::OAuthUnsupported),
+            None => Err(RuntimeError::ConfigChanged),
+        }
+    }
+
+    /// Interactive sign-in against the saved configuration `revision`. On
+    /// success, live connections and pending approvals for this server stop so
+    /// the next connection uses the new sign-in.
+    pub async fn sign_in(
+        &self,
+        integration: Uuid,
+        revision: String,
+        open: impl FnOnce(&str) -> Result<(), RuntimeError>,
+        texts: super::oauth::CallbackPage,
+    ) -> Result<(), RuntimeError> {
+        if self.shutting_down.load(Ordering::Acquire) {
+            return Err(RuntimeError::Cancelled);
+        }
+        let (url, settings) = self.oauth_target(integration, Some(&revision))?;
+        let cancel = CancellationToken::new();
+        let attempt = Uuid::new_v4();
+        {
+            let mut active = self.signing_in.lock().map_err(|_| RuntimeError::Busy)?;
+            if active
+                .as_ref()
+                .is_some_and(|(_, active)| !active.is_cancelled())
+            {
+                return Err(RuntimeError::Busy);
+            }
+            *active = Some((attempt, cancel.clone()));
+        }
+        let result = super::oauth::sign_in(
+            &url,
+            &settings,
+            integration,
+            self.secrets.clone(),
+            open,
+            &texts,
+            &cancel,
+        )
+        .await;
+        if let Ok(mut active) = self.signing_in.lock() {
+            if active.as_ref().is_some_and(|(id, _)| *id == attempt) {
+                *active = None;
+            }
+        }
+        if result.is_ok() {
+            self.credentials_changed(integration);
+        }
+        result
+    }
+
+    pub fn cancel_sign_in(&self) {
+        if let Some((_, cancel)) = self
+            .signing_in
+            .lock()
+            .ok()
+            .and_then(|mut active| active.take())
+        {
+            cancel.cancel();
+        }
+    }
+
+    pub async fn sign_out(&self, integration: Uuid) -> Result<(), RuntimeError> {
+        super::oauth::sign_out(self.secrets.clone(), integration).await?;
+        self.credentials_changed(integration);
+        Ok(())
+    }
+
+    /// Whether the saved server has stored tokens for its current URL.
+    pub fn signed_in(&self, integration: Uuid) -> Result<bool, RuntimeError> {
+        match self.oauth_target(integration, None) {
+            Ok((url, _)) => super::oauth::signed_in(self.secrets.as_ref(), integration, &url),
+            Err(RuntimeError::OAuthUnsupported) => Ok(false),
+            Err(error) => Err(error),
         }
     }
 
@@ -142,7 +253,7 @@ impl IntegrationRuntime {
                 &entry.connection,
                 integration,
                 documents.workspace_root(),
-                self.secrets.as_ref(),
+                &self.secrets,
             )?,
             matches!(entry.connection, ConnectionConfig::Acp { .. }),
         ))
@@ -218,6 +329,7 @@ impl IntegrationRuntime {
     /// Called from the final Tauri Exit event while the async runtime is alive.
     pub async fn shutdown(&self) {
         self.shutting_down.store(true, Ordering::Release);
+        self.cancel_sign_in();
         self.permissions.clear();
         if let Ok(mut requests) = self.requests.lock() {
             for (_, ticket) in requests.pending.drain() {

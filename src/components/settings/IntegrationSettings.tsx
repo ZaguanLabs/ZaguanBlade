@@ -8,6 +8,7 @@ import { SymbolsIndexSettings } from './SymbolsIndexSettings';
 import { McpConnection, type LiveConnectionContext } from './McpConnection';
 import { useMcpConnections } from '../../hooks/useMcpConnections';
 import { IntegrationEnvironment, IntegrationHeaders, IntegrationSecrets } from './IntegrationEnvironment';
+import { McpOAuth } from './McpOAuth';
 
 const inputClass = 'w-full rounded-md border border-(--border-default) bg-(--bg-input) px-3 py-2 text-sm text-(--fg-primary) focus:outline-none focus:border-(--border-focus)';
 const buttonClass = 'inline-flex items-center gap-2 rounded-md border border-(--border-default) px-3 py-2 text-sm text-(--fg-secondary) hover:bg-(--bg-surface-hover) disabled:opacity-50';
@@ -97,6 +98,12 @@ function DefinitionFields({ entry, onChange, onRemove, config, testContext, live
                     <IntegrationHeaders headers={connection.transport.headers} onChange={headers => {
                         if (connection.transport.type === 'streamable_http') onChange({ ...entry, connection: { protocol: 'mcp', transport: { ...connection.transport, headers } } });
                     }} />
+                    <McpOAuth entry={entry} oauth={connection.transport.oauth} revision={testContext.revision} canSave={testContext.canTest}
+                        onChange={oauth => {
+                            if (connection.transport.type !== 'streamable_http') return;
+                            const { oauth: _previous, ...transport } = connection.transport;
+                            onChange({ ...entry, connection: { protocol: 'mcp', transport: oauth ? { ...transport, oauth } : transport } });
+                        }} />
                 </div>}
         </> : <>
             <ProcessFields process={connection.process} onChange={process => onChange({ ...entry, connection: { ...connection, process } })} />

@@ -153,7 +153,19 @@ impl McpSession {
     /// `budget` bounds all response bytes received over this session's lifetime.
     pub async fn open_http(prepared: &PreparedHttp, budget: usize) -> Result<Self, RuntimeError> {
         let signals = Arc::new(Signals::default());
-        let transport = prepared.transport(signals.clone(), budget)?;
+        let Some(oauth) = &prepared.oauth else {
+            let transport = prepared.transport(signals.clone(), budget)?;
+            return Self::serve(transport, signals).await;
+        };
+        // A rejected token is refreshed once and the request retried; a 401
+        // means the server did not act on it, so nothing is replayed.
+        let manager =
+            super::oauth::manager(oauth.secrets.clone(), oauth.integration, &prepared.url).await?;
+        let (client, config) = prepared.parts(signals.clone(), budget)?;
+        let transport = rmcp::transport::StreamableHttpClientTransport::with_client(
+            rmcp::transport::AuthClient::new(client, manager),
+            config,
+        );
         Self::serve(transport, signals).await
     }
 
