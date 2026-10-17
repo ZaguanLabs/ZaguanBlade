@@ -3,14 +3,16 @@
 use super::{
     catalog::{CatalogBuilder, McpCatalog},
     http::PreparedHttp,
+    prompts::{PromptListing, PromptRender},
     resources::{ResourceListing, ResourceRead, MAX_ENTRIES, MAX_PAGES},
     RuntimeError,
 };
 use rmcp::{
     model::{
         CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest,
-        PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
-        ServerNotification, ServerResult, SubscriptionFilter,
+        GetPromptRequestParams, GetPromptResponse, PaginatedRequestParams, ProtocolVersion,
+        ReadResourceRequestParams, ReadResourceResponse, ServerNotification, ServerResult,
+        SubscriptionFilter,
     },
     service::{NotificationContext, PeerRequestOptions, RunningService},
     ClientCacheConfig, ClientHandler, ClientLifecycleMode, ClientServiceExt, RoleClient,
@@ -353,6 +355,64 @@ impl McpSession {
             })?;
         match response {
             ReadResourceResponse::Complete(result) => ResourceRead::project(uri, result),
+            _ => Err(RuntimeError::UnsupportedResult),
+        }
+    }
+
+    pub async fn list_prompts(&self) -> Result<PromptListing, RuntimeError> {
+        let mut listing = PromptListing::default();
+        if !self.prompts {
+            return Ok(listing);
+        }
+        let mut cursor = None;
+        let mut seen = std::collections::HashSet::new();
+        for page in 0..MAX_PAGES {
+            let response = self
+                .service
+                .peer()
+                .list_prompts(Some(PaginatedRequestParams::default().with_cursor(cursor)))
+                .await
+                .map_err(|_| self.signals.error())?;
+            for prompt in response.prompts {
+                listing.push(prompt);
+            }
+            cursor = response.next_cursor;
+            let Some(next) = cursor.as_ref() else { break };
+            if page + 1 == MAX_PAGES
+                || listing.prompts.len() >= MAX_ENTRIES
+                || !seen.insert(next.clone())
+            {
+                listing.truncated = true;
+                break;
+            }
+        }
+        Ok(listing)
+    }
+
+    /// One `prompts/get`. MRTR input requests are unsupported, as for tools.
+    pub async fn get_prompt(
+        &self,
+        name: String,
+        arguments: std::collections::HashMap<String, String>,
+    ) -> Result<PromptRender, RuntimeError> {
+        if !self.prompts {
+            return Err(RuntimeError::PromptUnavailable);
+        }
+        let arguments = arguments
+            .into_iter()
+            .map(|(key, value)| (key, serde_json::Value::String(value)))
+            .collect();
+        let response = self
+            .service
+            .peer()
+            .get_prompt_once(GetPromptRequestParams::new(name.clone()).with_arguments(arguments))
+            .await
+            .map_err(|error| match error {
+                rmcp::ServiceError::McpError(_) => RuntimeError::PromptUnavailable,
+                _ => self.signals.error(),
+            })?;
+        match response {
+            GetPromptResponse::Complete(result) => PromptRender::project(name, result),
             _ => Err(RuntimeError::UnsupportedResult),
         }
     }

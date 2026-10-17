@@ -16,6 +16,7 @@ pub(crate) mod native_turn;
 pub(crate) mod permissions;
 pub mod probe;
 pub mod process;
+pub mod prompts;
 pub mod resources;
 pub(crate) mod result_artifact;
 pub mod runtime;
@@ -56,4 +57,5 @@ pub enum RuntimeError {
     AuthenticationRequired,
     ServerUnreachable,
     ResourceUnavailable,
+    PromptUnavailable,
 }

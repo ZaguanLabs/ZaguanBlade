@@ -9,6 +9,7 @@ use super::{
     mcp_session::{McpSession, MAX_SESSION_BYTES},
     permissions::{ApprovedCall, CallTarget},
     process::SupervisedProcess,
+    prompts::{PromptListing, PromptRender},
     resources::{ResourceListing, ResourceRead},
     store::IntegrationStore,
     RuntimeError,
@@ -91,6 +92,16 @@ enum Command {
         OwnedSemaphorePermit,
         String,
         oneshot::Sender<Result<ResourceRead, RuntimeError>>,
+    ),
+    ListPrompts(
+        OwnedSemaphorePermit,
+        oneshot::Sender<Result<PromptListing, RuntimeError>>,
+    ),
+    GetPrompt(
+        OwnedSemaphorePermit,
+        String,
+        HashMap<String, String>,
+        oneshot::Sender<Result<PromptRender, RuntimeError>>,
     ),
 }
 struct CallRequest {
@@ -408,21 +419,29 @@ impl ConnectionRegistry {
         Ok(())
     }
 
-    /// Connected servers in this workspace that offer resources.
-    pub fn resource_servers(
+    /// Connected servers in this workspace that offer resources (or prompts).
+    pub fn feature_servers(
         &self,
         documents: &DocumentService,
+        prompts: bool,
     ) -> Result<Vec<ConnectionStatus>, RuntimeError> {
         Ok(self
             .statuses(documents)?
             .into_iter()
-            .filter(|status| status.phase == ConnectionPhase::Connected && status.resources)
+            .filter(|status| {
+                status.phase == ConnectionPhase::Connected
+                    && if prompts {
+                        status.prompts
+                    } else {
+                        status.resources
+                    }
+            })
             .collect())
     }
 
-    /// Resource operations are serialized with calls and refreshes on the
-    /// connection actor, which rechecks policy before touching the server.
-    async fn resource_operation<T>(
+    /// Resource and prompt operations are serialized with calls and refreshes
+    /// on the connection actor, which rechecks policy before touching the server.
+    async fn session_operation<T>(
         &self,
         id: Uuid,
         documents: &DocumentService,
@@ -451,7 +470,7 @@ impl ConnectionRegistry {
         id: Uuid,
         documents: &DocumentService,
     ) -> Result<ResourceListing, RuntimeError> {
-        self.resource_operation(id, documents, Command::ListResources)
+        self.session_operation(id, documents, Command::ListResources)
             .await
     }
     pub async fn read_resource(
@@ -463,8 +482,29 @@ impl ConnectionRegistry {
         if uri.is_empty() || uri.len() > super::uri_template::MAX_TEMPLATE_BYTES {
             return Err(RuntimeError::InvalidArguments);
         }
-        self.resource_operation(id, documents, |slot, response| {
+        self.session_operation(id, documents, |slot, response| {
             Command::ReadResource(slot, uri, response)
+        })
+        .await
+    }
+    pub async fn list_prompts(
+        &self,
+        id: Uuid,
+        documents: &DocumentService,
+    ) -> Result<PromptListing, RuntimeError> {
+        self.session_operation(id, documents, Command::ListPrompts)
+            .await
+    }
+    pub async fn get_prompt(
+        &self,
+        id: Uuid,
+        documents: &DocumentService,
+        name: String,
+        arguments: HashMap<String, String>,
+    ) -> Result<PromptRender, RuntimeError> {
+        super::prompts::check_arguments(&name, &arguments)?;
+        self.session_operation(id, documents, |slot, response| {
+            Command::GetPrompt(slot, name, arguments, response)
         })
         .await
     }
@@ -778,6 +818,18 @@ async fn run(
                                     let _ = response.send(result);
                                     continue;
                                 }
+                                Command::ListPrompts(_slot, response) => {
+                                    tokio::time::timeout(DISCOVERY_TIMEOUT, verify(&directory, &connection)).await.map_err(|_| RuntimeError::TimedOut)??;
+                                    let result = tokio::time::timeout(DISCOVERY_TIMEOUT, active.list_prompts()).await.unwrap_or(Err(RuntimeError::TimedOut));
+                                    let _ = response.send(result);
+                                    continue;
+                                }
+                                Command::GetPrompt(_slot, name, arguments, response) => {
+                                    tokio::time::timeout(DISCOVERY_TIMEOUT, verify(&directory, &connection)).await.map_err(|_| RuntimeError::TimedOut)??;
+                                    let result = tokio::time::timeout(DISCOVERY_TIMEOUT, active.get_prompt(name, arguments)).await.unwrap_or(Err(RuntimeError::TimedOut));
+                                    let _ = response.send(result);
+                                    continue;
+                                }
                                 Command::Refresh(slot) => slot,
                             };
                             tokio::time::timeout(DISCOVERY_TIMEOUT, rediscover()).await.map_err(|_| RuntimeError::TimedOut)??;
@@ -873,6 +925,9 @@ for line in sys.stdin:
         print(json.dumps({'jsonrpc':'2.0','method':'notifications/subscriptions/acknowledged','params':{'_meta':meta,'notifications':{'toolsListChanged':True}}}),flush=True)
         print(json.dumps({'jsonrpc':'2.0','method':'notifications/tools/list_changed','params':{'_meta':meta}}),flush=True)
         continue
+    if method=='prompts/get' and (req['params']['name']!='review' or 'file' not in (req['params'].get('arguments') or {})):
+        print(json.dumps({'jsonrpc':'2.0','id':req['id'],'error':{'code':-32602,'message':'Invalid prompt'}}),flush=True)
+        continue
     if method=='resources/read' and req['params']['uri'] not in ('mem://a','mem://item/7'):
         print(json.dumps({'jsonrpc':'2.0','id':req['id'],'error':{'code':-32002,'message':'Resource not found'}}),flush=True)
         continue
@@ -880,12 +935,25 @@ for line in sys.stdin:
         tools={'listChanged':True} if mode=='notify' else {}
         capabilities={'tools':tools}
         if mode=='resources': capabilities['resources']={}
+        if mode=='prompts': capabilities['prompts']={}
         result={'protocolVersion':'2025-11-25','capabilities':capabilities,'serverInfo':{'name':'fixture','version':'1'}}
     elif method=='resources/list':
         if (req.get('params') or {}).get('cursor')=='p2':
             result={'resources':[{'uri':'mem://b','name':'B'}]}
         else:
             result={'resources':[{'uri':'mem://a','name':'A','mimeType':'text/plain'}],'nextCursor':'p2'}
+    elif method=='prompts/list':
+        if (req.get('params') or {}).get('cursor')=='p2':
+            result={'prompts':[{'name':'hello'}]}
+        else:
+            result={'prompts':[{'name':'review','title':'Review','arguments':[{'name':'file','required':True}]}],'nextCursor':'p2'}
+    elif method=='prompts/get':
+        file=req['params']['arguments']['file']
+        result={'description':'Code review','messages':[
+            {'role':'user','content':{'type':'text','text':'Review '+file}},
+            {'role':'assistant','content':{'type':'text','text':'Sure.'}},
+            {'role':'user','content':{'type':'resource','resource':{'uri':'mem://'+file,'mimeType':'text/plain','text':'body'}}},
+            {'role':'user','content':{'type':'audio','data':'AAAA','mimeType':'audio/wav'}}]}
     elif method=='resources/templates/list':
         result={'resourceTemplates':[{'uriTemplate':'mem://item/{id}','name':'Item'}]}
     elif method=='resources/read':
@@ -1216,7 +1284,10 @@ for line in sys.stdin:
         assert_eq!(connected.name, "Fixture");
         let connections = &fixture.runtime.connections;
         assert_eq!(
-            connections.resource_servers(&fixture.documents).unwrap()[0].connection_id,
+            connections
+                .feature_servers(&fixture.documents, false)
+                .unwrap()[0]
+                .connection_id,
             status.connection_id
         );
         let listing = connections
@@ -1271,7 +1342,7 @@ for line in sys.stdin:
         assert!(normal
             .runtime
             .connections
-            .resource_servers(&normal.documents)
+            .feature_servers(&normal.documents, false)
             .unwrap()
             .is_empty());
         assert_eq!(
@@ -1284,6 +1355,91 @@ for line in sys.stdin:
         );
         fixture.runtime.shutdown().await;
         normal.runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn prompts_list_paginate_and_render_through_the_actor() {
+        use crate::integrations::prompts::PromptPart;
+        let fixture = Fixture::new("prompts");
+        let status = fixture.connect().await;
+        let connected = fixture.phase(ConnectionPhase::Connected).await;
+        assert!(connected.prompts && !connected.resources);
+        let connections = &fixture.runtime.connections;
+        assert!(connections
+            .feature_servers(&fixture.documents, false)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            connections
+                .feature_servers(&fixture.documents, true)
+                .unwrap()[0]
+                .connection_id,
+            status.connection_id
+        );
+        let listing = connections
+            .list_prompts(status.connection_id, &fixture.documents)
+            .await
+            .unwrap();
+        let names: Vec<_> = listing
+            .prompts
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect();
+        assert_eq!(names, ["review", "hello"]);
+        assert!(listing.prompts[0].arguments[0].required && !listing.truncated);
+        let render = connections
+            .get_prompt(
+                status.connection_id,
+                &fixture.documents,
+                "review".into(),
+                [("file".to_owned(), "main.rs".to_owned())].into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(render.description.as_deref(), Some("Code review"));
+        let roles: Vec<_> = render.messages.iter().map(|message| message.role).collect();
+        assert_eq!(roles, ["user", "assistant", "user", "user"]);
+        assert_eq!(
+            render.messages[0].part,
+            PromptPart::Text {
+                text: "Review main.rs".into()
+            }
+        );
+        assert!(
+            matches!(&render.messages[2].part, PromptPart::Resource { uri, text, .. } if uri == "mem://main.rs" && text == "body")
+        );
+        assert_eq!(render.messages[3].part, PromptPart::Unsupported);
+        // The server rejecting arguments is its answer, not a broken connection.
+        assert_eq!(
+            connections
+                .get_prompt(
+                    status.connection_id,
+                    &fixture.documents,
+                    "review".into(),
+                    HashMap::new()
+                )
+                .await,
+            Err(RuntimeError::PromptUnavailable)
+        );
+        assert_eq!(
+            connections
+                .get_prompt(
+                    status.connection_id,
+                    &fixture.documents,
+                    String::new(),
+                    HashMap::new()
+                )
+                .await,
+            Err(RuntimeError::InvalidArguments)
+        );
+        assert_eq!(
+            fixture
+                .phase(ConnectionPhase::Connected)
+                .await
+                .connection_id,
+            status.connection_id
+        );
+        fixture.runtime.shutdown().await;
     }
 
     #[tokio::test]

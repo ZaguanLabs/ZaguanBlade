@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { ChevronDown, Database, ImageUp, Monitor, Plus, ScanLine } from 'lucide-react';
+import { ChevronDown, Database, ImageUp, MessageSquareText, Monitor, Plus, ScanLine } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { WindowPicker } from '../../components/WindowPicker';
 import { RegionSelector } from '../../components/RegionSelector';
@@ -14,7 +14,8 @@ export const ScreenshotPickerLauncher: React.FC<{
     onCapture: (result: CaptureResult, name: string) => void;
     onError: (message: string) => void;
     onAttachResource?: () => void;
-}> = ({ disabled, imagesDisabled, imageDisabledReason, onUploadImage, onCapture, onError, onAttachResource }) => {
+    onUsePrompt?: () => void;
+}> = ({ disabled, imagesDisabled, imageDisabledReason, onUploadImage, onCapture, onError, onAttachResource, onUsePrompt }) => {
     const { t } = useTranslation();
     const menuRef = useRef<HTMLDivElement>(null);
     const menuId = useId();
@@ -218,6 +219,22 @@ export const ScreenshotPickerLauncher: React.FC<{
                                 <span className="min-w-0">
                                     <span className="block text-[12px] font-medium">{t('screenshot.launcher.mcpResource')}</span>
                                     <span className="block truncate text-[10px] text-(--fg-tertiary)">{t('screenshot.launcher.mcpResourceDescription')}</span>
+                                </span>
+                            </button>
+                        ) : null}
+                        {onUsePrompt ? (
+                            <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => runAction(onUsePrompt)}
+                                className="flex w-full items-center gap-2 rounded-[calc(var(--panel-radius)*0.45)] px-2 py-2 text-left text-(--fg-secondary) transition-colors hover:bg-(--bg-app) hover:text-(--fg-primary)"
+                            >
+                                <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[calc(var(--panel-radius)*0.45)] border border-(--border-subtle) bg-(--bg-app) text-(--accent-ai)">
+                                    <MessageSquareText className="h-3.5 w-3.5" aria-hidden="true" />
+                                </span>
+                                <span className="min-w-0">
+                                    <span className="block text-[12px] font-medium">{t('screenshot.launcher.mcpPrompt')}</span>
+                                    <span className="block truncate text-[10px] text-(--fg-tertiary)">{t('screenshot.launcher.mcpPromptDescription')}</span>
                                 </span>
                             </button>
                         ) : null}

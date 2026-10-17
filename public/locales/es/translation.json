@@ -251,6 +251,34 @@
         "duplicate": "Este recurso ya está adjunto."
       }
     },
+    "mcpPrompts": {
+      "title": "Usar prompt MCP",
+      "help": "Elige un prompt de un servidor MCP conectado y rellena sus argumentos. El texto generado se inserta en el editor de mensajes para que puedas revisarlo y editarlo antes de enviarlo.",
+      "loading": "Cargando…",
+      "noServers": "Ningún servidor MCP conectado en este espacio de trabajo ofrece prompts. Conecta uno en Ajustes → MCP / ACP.",
+      "server": "Servidor",
+      "chooseServer": "Elige un servidor",
+      "filter": "Filtrar prompts",
+      "empty": "Este servidor no ofrece prompts.",
+      "listTruncated": "Solo se muestra una parte de la lista de prompts de este servidor.",
+      "optional": "(opcional)",
+      "generate": "Generar vista previa",
+      "preview": "Vista previa",
+      "roleUser": "Usuario",
+      "roleAssistant": "Asistente",
+      "partResource": "Recurso incrustado {{uri}}, adjuntado como recurso MCP",
+      "partImage": "Imagen, añadida como imagen adjunta",
+      "partLink": "Enlace a {{uri}}, no se descarga",
+      "partUnsupported": "Contenido que Blade no puede insertar",
+      "mixedRoles": "Este prompt incluye mensajes del asistente. Se insertan como texto etiquetado en tu mensaje; Blade nunca añade respuestas que el modelo no haya escrito.",
+      "truncated": "El prompt se ha recortado para ajustarse al límite del mensaje.",
+      "links_one": "{{count}} recurso enlazado no se descarga. Adjúntalo desde «Recurso MCP» si lo necesitas.",
+      "links_other": "{{count}} recursos enlazados no se descargan. Adjúntalos desde «Recurso MCP» si los necesitas.",
+      "unsupported_one": "{{count}} parte no se puede insertar y se omitirá.",
+      "unsupported_other": "{{count}} partes no se pueden insertar y se omitirán.",
+      "nothing": "Este prompt no ha generado nada que se pueda insertar.",
+      "insert": "Insertar"
+    },
     "system": {
       "requestFailed": "La solicitud ha fallado",
       "contextLimitReachedTitle": "Se ha alcanzado el límite de contexto",
@@ -847,7 +875,8 @@
           "call_limit": "Este turno ha alcanzado el límite de llamadas MCP o ha repetido un identificador de llamada.",
           "authentication_required": "El servidor requiere autenticación o ha rechazado las credenciales configuradas. Revisa las cabeceras y las credenciales guardadas. El inicio de sesión con OAuth aún no está disponible.",
           "server_unreachable": "No se ha podido contactar con el servidor. Comprueba la URL, la conexión de red y el certificado del servidor.",
-          "resource_unavailable": "El servidor no ha podido proporcionar este recurso. Revisa la dirección o los valores de la plantilla."
+          "resource_unavailable": "El servidor no ha podido proporcionar este recurso. Revisa la dirección o los valores de la plantilla.",
+          "prompt_unavailable": "El servidor no ha podido generar este prompt. Revisa los valores de los argumentos."
         },
         "mcpResult_other": "{{count}} herramientas; recursos: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "El agente anuncia {{count}} métodos de autenticación. No se ha iniciado ninguna sesión.",
@@ -1411,7 +1440,9 @@
       "image": "Imagen",
       "imageDescription": "Añade una imagen desde el disco.",
       "mcpResource": "Recurso MCP",
-      "mcpResourceDescription": "Añade contenido de un servidor MCP conectado."
+      "mcpResourceDescription": "Añade contenido de un servidor MCP conectado.",
+      "mcpPrompt": "Prompt MCP",
+      "mcpPromptDescription": "Inserta un prompt de un servidor MCP conectado."
     },
     "preview": {
       "title": "Captura realizada",

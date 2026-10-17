@@ -251,6 +251,34 @@
         "duplicate": "This resource is already attached."
       }
     },
+    "mcpPrompts": {
+      "title": "Use MCP prompt",
+      "help": "Choose a prompt from a connected MCP server and fill in its arguments. The generated text is inserted into the composer so you can review and edit it before sending.",
+      "loading": "Loading…",
+      "noServers": "No connected MCP server in this workspace offers prompts. Connect one in Settings → MCP / ACP.",
+      "server": "Server",
+      "chooseServer": "Choose a server",
+      "filter": "Filter prompts",
+      "empty": "This server offers no prompts.",
+      "listTruncated": "Only part of this server's prompt list is shown.",
+      "optional": "(optional)",
+      "generate": "Generate preview",
+      "preview": "Preview",
+      "roleUser": "User",
+      "roleAssistant": "Assistant",
+      "partResource": "Embedded resource {{uri}}, attached as an MCP resource",
+      "partImage": "Image, added as an image attachment",
+      "partLink": "Link to {{uri}}, not fetched",
+      "partUnsupported": "Content Blade cannot insert",
+      "mixedRoles": "This prompt includes assistant messages. They are inserted as labelled text in your message; Blade never adds replies the model did not write.",
+      "truncated": "The prompt was shortened to fit the message limit.",
+      "links_one": "{{count}} linked resource is not fetched. Attach it from \"MCP resource\" if you need it.",
+      "links_other": "{{count}} linked resources are not fetched. Attach them from \"MCP resource\" if you need them.",
+      "unsupported_one": "{{count}} part cannot be inserted and will be left out.",
+      "unsupported_other": "{{count}} parts cannot be inserted and will be left out.",
+      "nothing": "This prompt produced nothing that can be inserted.",
+      "insert": "Insert"
+    },
     "system": {
       "requestFailed": "Request failed",
       "contextLimitReachedTitle": "Context Limit Reached",
@@ -847,7 +875,8 @@
           "call_limit": "This turn has reached its MCP call limit or repeated a call identifier.",
           "authentication_required": "The server requires authentication or rejected the configured credentials. Check the headers and stored credentials. OAuth sign-in is not supported yet.",
           "server_unreachable": "Could not reach the server. Check the URL, your network connection and the server certificate.",
-          "resource_unavailable": "The server could not provide this resource. Check the address or the template values."
+          "resource_unavailable": "The server could not provide this resource. Check the address or the template values.",
+          "prompt_unavailable": "The server could not generate this prompt. Check the argument values."
         },
         "mcpResult_other": "{{count}} tools; resources: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "{{count}} authentication methods advertised. No session was started.",
@@ -1411,7 +1440,9 @@
       "image": "Image",
       "imageDescription": "Add an image from disk.",
       "mcpResource": "MCP resource",
-      "mcpResourceDescription": "Add content from a connected MCP server."
+      "mcpResourceDescription": "Add content from a connected MCP server.",
+      "mcpPrompt": "MCP prompt",
+      "mcpPromptDescription": "Insert a prompt from a connected MCP server."
     },
     "preview": {
       "title": "Screenshot captured",

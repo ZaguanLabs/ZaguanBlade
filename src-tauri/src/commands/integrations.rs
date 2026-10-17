@@ -314,21 +314,21 @@ pub struct McpResourceServer {
     name: String,
 }
 
-/// Connected servers offering resources, for the chat composer. Scoped to the
-/// workspace that is open now; the webview cannot name another.
-#[tauri::command]
-pub fn get_mcp_resource_servers(
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, AppState>,
+/// Connected servers offering resources or prompts, for the chat composer.
+/// Scoped to the workspace that is open now; the webview cannot name another.
+fn feature_servers(
+    window: &tauri::WebviewWindow,
+    state: &AppState,
+    prompts: bool,
 ) -> Result<Vec<McpResourceServer>, RuntimeError> {
-    runtime_desktop_only(&window)?;
+    runtime_desktop_only(window)?;
     let documents = state
         .document_service()
         .map_err(|_| RuntimeError::WorkspaceChanged)?;
     Ok(state
         .integrations
         .connections
-        .resource_servers(&documents)?
+        .feature_servers(&documents, prompts)?
         .into_iter()
         .map(|status| McpResourceServer {
             connection_id: status.connection_id,
@@ -336,6 +336,20 @@ pub fn get_mcp_resource_servers(
             name: status.name,
         })
         .collect())
+}
+#[tauri::command]
+pub fn get_mcp_resource_servers(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<McpResourceServer>, RuntimeError> {
+    feature_servers(&window, &state, false)
+}
+#[tauri::command]
+pub fn get_mcp_prompt_servers(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<McpResourceServer>, RuntimeError> {
+    feature_servers(&window, &state, true)
 }
 
 #[tauri::command]
@@ -381,6 +395,44 @@ pub async fn read_mcp_resource(
         .integrations
         .connections
         .read_resource(connection_id, &documents, uri)
+        .await
+}
+
+#[tauri::command]
+pub async fn list_mcp_prompts(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    connection_id: Uuid,
+) -> Result<crate::integrations::prompts::PromptListing, RuntimeError> {
+    runtime_desktop_only(&window)?;
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    state
+        .integrations
+        .connections
+        .list_prompts(connection_id, &documents)
+        .await
+}
+
+/// Generates one user-selected prompt for preview. Nothing reaches a
+/// conversation until the user inserts it into the composer and sends it.
+#[tauri::command]
+pub async fn get_mcp_prompt(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    connection_id: Uuid,
+    name: String,
+    arguments: std::collections::HashMap<String, String>,
+) -> Result<crate::integrations::prompts::PromptRender, RuntimeError> {
+    runtime_desktop_only(&window)?;
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    state
+        .integrations
+        .connections
+        .get_prompt(connection_id, &documents, name, arguments)
         .await
 }
 

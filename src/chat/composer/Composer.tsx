@@ -13,6 +13,8 @@ import { ScreenshotCapturePreview } from '../../components/image-annotation/Scre
 import { extractBase64FromDataUrl, extractMimeTypeFromDataUrl } from '../../utils/imageUtils';
 import { attachRefusal, MAX_RESOURCE_ATTACHMENTS, MAX_RESOURCE_TEXT_BYTES, type ResourceSelection } from '../../utils/mcpResources';
 import { McpResourcePicker } from './McpResourcePicker';
+import { McpPromptPicker } from './McpPromptPicker';
+import { insertionRefusal, type PromptInsertion } from '../../utils/mcpPrompts';
 
 const MAX_COMPOSER_HISTORY = 20;
 
@@ -64,6 +66,7 @@ export const Composer: React.FC<ComposerProps> = ({
     const [editingCapture, setEditingCapture] = useState<PendingCapture | null>(null);
     const [resources, setResources] = useState<ResourceAttachment[]>([]);
     const [resourcePickerOpen, setResourcePickerOpen] = useState(false);
+    const [promptPickerOpen, setPromptPickerOpen] = useState(false);
     const textareaRef = useRef<ComposerTextareaHandle>(null);
     const textareaDomCursorRef = useRef(0);
     const textRef = useRef('');
@@ -161,6 +164,36 @@ export const Composer: React.FC<ComposerProps> = ({
             void attachments.appendDataUrl(image.dataUrl, image.name);
         }
         setResourcePickerOpen(false);
+    }, [attachments, resources, t]);
+
+    // The prompt lands in the composer for the user to edit and send.
+    const insertPrompt = useCallback((insertion: PromptInsertion) => {
+        const refusal = insertionRefusal(resources, insertion);
+        if (refusal) {
+            attachments.setAttachmentError(t(`chat.mcpResources.refused.${refusal}`, {
+                max: MAX_RESOURCE_ATTACHMENTS,
+                kb: MAX_RESOURCE_TEXT_BYTES / 1024,
+            }));
+            return;
+        }
+        if (insertion.text) {
+            const current = textRef.current;
+            const next = current.trim() ? `${current.replace(/\s+$/, '')}\n\n${insertion.text}` : insertion.text;
+            textRef.current = next;
+            setText(next);
+        }
+        if (insertion.resources.length > 0) {
+            setResources((current) => [...current, ...insertion.resources]);
+        }
+        attachments.setAttachmentError(null);
+        for (const image of insertion.images) {
+            void attachments.appendDataUrl(image.dataUrl, image.name);
+        }
+        setPromptPickerOpen(false);
+        requestAnimationFrame(() => {
+            textareaRef.current?.focus();
+            textareaRef.current?.resize();
+        });
     }, [attachments, resources, t]);
 
     const updateTextFromHistory = useCallback((nextText: string) => {
@@ -309,6 +342,7 @@ export const Composer: React.FC<ComposerProps> = ({
                         onCapture={capture}
                         onAttachmentError={attachments.setAttachmentError}
                         onAttachResource={() => setResourcePickerOpen(true)}
+                        onUsePrompt={() => setPromptPickerOpen(true)}
                         onSubmit={submit}
                         onStop={onStop}
                     />
@@ -379,6 +413,9 @@ export const Composer: React.FC<ComposerProps> = ({
             )}
             {resourcePickerOpen && (
                 <McpResourcePicker onAttach={attachResource} onClose={() => setResourcePickerOpen(false)} />
+            )}
+            {promptPickerOpen && (
+                <McpPromptPicker onInsert={insertPrompt} onClose={() => setPromptPickerOpen(false)} />
             )}
             {editingCapture && (
                 <ScreenshotAnnotationModal

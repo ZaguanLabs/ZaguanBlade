@@ -129,3 +129,43 @@ export interface McpResourceRead {
     parts: McpResourcePart[];
     truncated: boolean;
 }
+
+export type McpPromptServer = McpResourceServer;
+
+export interface McpPromptArgument {
+    name: string;
+    title: string | null;
+    description: string | null;
+    required: boolean;
+}
+
+export interface McpPromptEntry {
+    name: string;
+    title: string | null;
+    description: string | null;
+    arguments: McpPromptArgument[];
+}
+
+export interface McpPromptListing {
+    prompts: McpPromptEntry[];
+    truncated: boolean;
+}
+
+export type McpPromptPart =
+    | { kind: 'text'; text: string }
+    | { kind: 'image'; mime_type: string; data: string }
+    | { kind: 'resource'; uri: string; mime_type: string | null; text: string }
+    | { kind: 'link'; uri: string; name: string }
+    | { kind: 'unsupported' };
+
+export interface McpPromptMessage {
+    role: 'user' | 'assistant';
+    part: McpPromptPart;
+}
+
+export interface McpPromptRender {
+    name: string;
+    description: string | null;
+    messages: McpPromptMessage[];
+    truncated: boolean;
+}
