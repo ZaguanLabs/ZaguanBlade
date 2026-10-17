@@ -63,6 +63,9 @@ pub struct ChatMessage {
     pub content_before_tools: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_after_tools: Option<String>,
+    /// What an ACP agent reported during this turn. Display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_activity: Option<crate::integrations::acp_session::AgentActivity>,
 }
 
 impl ChatMessage {
@@ -81,6 +84,7 @@ impl ChatMessage {
             progress: None,
             content_before_tools: None,
             content_after_tools: None,
+            agent_activity: None,
         }
     }
 }

@@ -1,3 +1,4 @@
+pub mod acp;
 pub mod cache;
 
 pub mod chat;

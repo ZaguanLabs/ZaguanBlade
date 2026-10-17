@@ -69,6 +69,11 @@ pub mod event_names {
 
     /// History entry added (snapshot created)
     pub const HISTORY_ENTRY_ADDED: &str = "history-entry-added";
+
+    // === ACP agents ===
+
+    /// Activity of the live ACP agent session: `{ conversationId, event }`
+    pub const ACP_EVENT: &str = "acp-event";
 }
 
 /// Payload for history-entry-added event

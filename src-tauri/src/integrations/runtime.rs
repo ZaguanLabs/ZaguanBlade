@@ -75,6 +75,7 @@ impl From<&PreparedTransport> for ReviewTarget {
 enum Purpose {
     Probe,
     Connection,
+    Agent,
 }
 
 struct Ticket {
@@ -105,6 +106,7 @@ pub struct IntegrationRuntime {
     pub(super) invoking: Arc<tokio::sync::Semaphore>,
     /// The one interactive OAuth sign-in that may run at a time.
     signing_in: Mutex<Option<(Uuid, CancellationToken)>>,
+    pub agents: Arc<super::agent_sessions::AgentSessions>,
 }
 
 impl IntegrationRuntime {
@@ -119,6 +121,7 @@ impl IntegrationRuntime {
             permissions: Default::default(),
             invoking: Arc::new(tokio::sync::Semaphore::new(4)),
             signing_in: Mutex::new(None),
+            agents: Default::default(),
         }
     }
 
@@ -268,6 +271,74 @@ impl IntegrationRuntime {
         self.prepare_for(integration, revision, documents, Purpose::Probe)
     }
 
+    /// A launch review for an ACP agent conversation.
+    pub fn prepare_agent(
+        &self,
+        integration: Uuid,
+        revision: String,
+        documents: &DocumentService,
+    ) -> Result<LaunchReview, RuntimeError> {
+        self.prepare_for(integration, revision, documents, Purpose::Agent)
+    }
+
+    /// Starts the approved agent program. The ticket is used up either way.
+    pub async fn launch_agent(
+        self: &Arc<Self>,
+        ticket_id: Uuid,
+        documents: Arc<DocumentService>,
+    ) -> Result<LaunchedAgent, RuntimeError> {
+        let ticket = self.take_ticket(ticket_id, Purpose::Agent, &documents)?;
+        let _running = RunningRequest {
+            runtime: self.clone(),
+            id: ticket_id,
+        };
+        let runtime = self.clone();
+        let resolve_documents = documents.clone();
+        let integration = ticket.integration;
+        let revision = ticket.revision.clone();
+        let preparation = tokio::task::spawn_blocking(move || {
+            let definition = agent_policy(&runtime.directory, &resolve_documents, integration)?;
+            let (prepared, _) = runtime.resolve(integration, &revision, &resolve_documents)?;
+            Ok::<_, RuntimeError>((prepared, definition))
+        });
+        let work = async {
+            let (prepared, definition) = preparation
+                .await
+                .map_err(|_| RuntimeError::LaunchFailed)??;
+            if prepared.fingerprint() != ticket.fingerprint {
+                return Err(RuntimeError::ConfigChanged);
+            }
+            if ticket.expires <= Instant::now() {
+                return Err(RuntimeError::ApprovalExpired);
+            }
+            if ticket.cancel.is_cancelled() {
+                return Err(RuntimeError::Cancelled);
+            }
+            if ticket.workspace_cancel.is_cancelled() {
+                return Err(RuntimeError::WorkspaceChanged);
+            }
+            let PreparedTransport::Process(prepared) = prepared else {
+                return Err(RuntimeError::UnsupportedTransport);
+            };
+            let (process, read, write) = SupervisedProcess::spawn(&prepared)?;
+            Ok(LaunchedAgent {
+                integration,
+                name: definition.name,
+                workspace: ticket.workspace.clone(),
+                workspace_cancel: ticket.workspace_cancel.clone(),
+                process,
+                read: Box::new(read),
+                write: Box::new(write),
+            })
+        };
+        tokio::select! {
+            biased;
+            _ = ticket.workspace_cancel.cancelled() => Err(RuntimeError::WorkspaceChanged),
+            _ = ticket.cancel.cancelled() => Err(RuntimeError::Cancelled),
+            result = tokio::time::timeout(PROBE_TIMEOUT, work) => result.unwrap_or(Err(RuntimeError::TimedOut)),
+        }
+    }
+
     pub fn prepare_connection(
         &self,
         integration: Uuid,
@@ -292,8 +363,14 @@ impl IntegrationRuntime {
             .clone()
             .try_acquire_owned()
             .map_err(|_| RuntimeError::Busy)?;
-        if purpose == Purpose::Connection {
-            connections::read_policy(&self.directory, documents, integration)?;
+        match purpose {
+            Purpose::Connection => {
+                connections::read_policy(&self.directory, documents, integration)?;
+            }
+            Purpose::Agent => {
+                agent_policy(&self.directory, documents, integration)?;
+            }
+            Purpose::Probe => {}
         }
         let (prepared, _) = self.resolve(integration, &revision, documents)?;
         let review = LaunchReview {
@@ -330,6 +407,7 @@ impl IntegrationRuntime {
     pub async fn shutdown(&self) {
         self.shutting_down.store(true, Ordering::Release);
         self.cancel_sign_in();
+        self.agents.close_all();
         self.permissions.clear();
         if let Ok(mut requests) = self.requests.lock() {
             for (_, ticket) in requests.pending.drain() {
@@ -549,6 +627,29 @@ impl IntegrationRuntime {
     }
 }
 
+/// A started agent program, before the ACP handshake.
+pub struct LaunchedAgent {
+    pub integration: Uuid,
+    pub name: String,
+    pub workspace: WorkspaceIdentity,
+    pub workspace_cancel: CancellationToken,
+    pub process: SupervisedProcess,
+    pub read: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
+    pub write: Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
+}
+
+fn agent_policy(
+    directory: &std::path::Path,
+    documents: &DocumentService,
+    integration: Uuid,
+) -> Result<super::config::IntegrationDefinition, RuntimeError> {
+    let entry = connections::read_entry_policy(directory, documents, integration)?;
+    if !matches!(entry.connection, ConnectionConfig::Acp { .. }) {
+        return Err(RuntimeError::UnsupportedTransport);
+    }
+    Ok(entry)
+}
+
 struct RunningRequest {
     runtime: Arc<IntegrationRuntime>,
     id: Uuid,
@@ -738,6 +839,70 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.unwrap_err(), RuntimeError::TimedOut);
+        assert!(fixture.runtime.requests.lock().unwrap().running.is_empty());
+    }
+
+    #[tokio::test]
+    async fn agents_launch_only_from_an_agent_ticket_under_workspace_policy() {
+        let mut fixture = Fixture::new();
+        assert_eq!(
+            fixture
+                .runtime
+                .prepare_agent(fixture.id, fixture.revision.clone(), &fixture.documents)
+                .err(),
+            Some(RuntimeError::IntegrationDisabled)
+        );
+        let store = IntegrationStore::new(fixture.runtime.directory.clone());
+        let mut snapshot = store.load().unwrap();
+        snapshot.config.entries[0].enabled = true;
+        fixture.revision = store
+            .save(&snapshot.revision, snapshot.config)
+            .unwrap()
+            .revision;
+        assert_eq!(
+            fixture
+                .runtime
+                .prepare_connection(fixture.id, fixture.revision.clone(), &fixture.documents)
+                .err(),
+            Some(RuntimeError::UnsupportedTransport),
+            "an agent is not an MCP server"
+        );
+        let review = fixture
+            .runtime
+            .prepare_agent(fixture.id, fixture.revision.clone(), &fixture.documents)
+            .unwrap();
+        assert!(matches!(review.target, ReviewTarget::Process { .. }));
+        assert_eq!(
+            fixture
+                .runtime
+                .connect(review.ticket_id, fixture.documents.clone())
+                .await
+                .err(),
+            Some(RuntimeError::ApprovalExpired),
+            "an agent ticket does not start a connection"
+        );
+        let review = fixture
+            .runtime
+            .prepare_agent(fixture.id, fixture.revision.clone(), &fixture.documents)
+            .unwrap();
+        let launched = fixture
+            .runtime
+            .launch_agent(review.ticket_id, fixture.documents.clone())
+            .await
+            .unwrap();
+        assert_eq!(launched.integration, fixture.id);
+        assert_eq!(launched.name, "Fixture");
+        assert_eq!(launched.workspace, *fixture.documents.identity());
+        launched.process.shutdown().await;
+        assert_eq!(
+            fixture
+                .runtime
+                .launch_agent(review.ticket_id, fixture.documents.clone())
+                .await
+                .err(),
+            Some(RuntimeError::ApprovalExpired),
+            "tickets are single use"
+        );
         assert!(fixture.runtime.requests.lock().unwrap().running.is_empty());
     }
 

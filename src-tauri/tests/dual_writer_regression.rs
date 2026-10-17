@@ -68,6 +68,7 @@ fn stores_no_longer_clobber_each_other() {
             runtime_mode: Some("code".to_string()),
             mode_source: Some("manual".to_string()),
             format_version: None,
+            execution: None,
         },
         messages: vec![],
     };

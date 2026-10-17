@@ -661,6 +661,19 @@ pub(super) fn read_policy(
     documents: &DocumentService,
     integration: Uuid,
 ) -> Result<IntegrationDefinition, RuntimeError> {
+    let entry = read_entry_policy(directory, documents, integration)?;
+    if !matches!(entry.connection, ConnectionConfig::Mcp { .. }) {
+        return Err(RuntimeError::UnsupportedTransport);
+    }
+    Ok(entry)
+}
+
+/// The saved definition, if this workspace allows it, whatever its protocol.
+pub(super) fn read_entry_policy(
+    directory: &Path,
+    documents: &DocumentService,
+    integration: Uuid,
+) -> Result<IntegrationDefinition, RuntimeError> {
     if documents.cancellation().is_cancelled() {
         return Err(RuntimeError::WorkspaceChanged);
     }
@@ -691,9 +704,6 @@ pub(super) fn read_policy(
     };
     if !settings.integrations.allows(&entry) {
         return Err(RuntimeError::IntegrationDisabled);
-    }
-    if !matches!(entry.connection, ConnectionConfig::Mcp { .. }) {
-        return Err(RuntimeError::UnsupportedTransport);
     }
     Ok(entry)
 }

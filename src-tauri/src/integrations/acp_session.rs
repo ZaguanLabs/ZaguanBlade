@@ -20,7 +20,7 @@ use agent_client_protocol::{
     },
     Agent, ByteStreams, Client, ConnectionTo, Responder,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
     future::Future,
@@ -67,14 +67,14 @@ const CANCEL_GRACE: Duration = Duration::from_secs(10);
 #[cfg(test)]
 const CANCEL_GRACE: Duration = Duration::from_millis(300);
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentInfo {
     pub name: String,
     pub title: Option<String>,
     pub version: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AuthMethodInfo {
     pub id: String,
     pub name: String,
@@ -84,7 +84,7 @@ pub struct AuthMethodInfo {
 }
 
 /// What the agent declared in `initialize`, kept with the conversation.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSnapshot {
     pub protocol_version: u16,
     pub agent: Option<AgentInfo>,
@@ -213,7 +213,7 @@ fn prompt_blocks(
         .collect()
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentView {
     Text { text: String },
@@ -268,13 +268,13 @@ fn content_view(block: &ContentBlock, budget: usize) -> (ContentView, bool) {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LocationView {
     pub path: String,
     pub line: Option<u32>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolContentView {
     Content {
@@ -293,7 +293,7 @@ pub enum ToolContentView {
 
 /// The merged state of one tool call the agent reported. Reports are display
 /// only: Blade runs nothing because of them.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCallView {
     pub id: String,
     pub title: String,
@@ -373,21 +373,21 @@ impl ToolCallView {
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlanEntryView {
     pub content: String,
     pub priority: PlanEntryPriority,
     pub status: PlanEntryStatus,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PermissionOptionView {
     pub id: String,
     pub name: String,
     pub kind: PermissionOptionKind,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PermissionView {
     pub request_id: Uuid,
     pub tool_call: ToolCallView,
@@ -452,6 +452,131 @@ pub enum AcpEvent {
 }
 
 pub type Sink = Arc<dyn Fn(AcpEvent) + Send + Sync>;
+
+/// Stored with the transcript so a finished turn stays readable without the
+/// agent. Tool calls and diffs are the agent's reports, never Blade actions.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentActivity {
+    pub agent_name: String,
+    #[serde(default)]
+    pub tool_calls: Vec<ToolCallView>,
+    /// Reports beyond the stored limit.
+    #[serde(default)]
+    pub omitted_tool_calls: usize,
+    #[serde(default)]
+    pub plan: Vec<PlanEntryView>,
+    #[serde(default)]
+    pub stop_reason: Option<StopReason>,
+    /// A runtime error code when the turn did not end normally.
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub text_truncated: bool,
+}
+
+pub struct FinishedTurn {
+    pub turn: u64,
+    pub text: String,
+    pub reasoning: String,
+    pub activity: AgentActivity,
+}
+
+const MAX_STORED_TOOL_CALLS: usize = 128;
+
+/// Collects one turn's events into what the transcript keeps.
+#[derive(Default)]
+pub struct TurnRecorder {
+    turn: Option<u64>,
+    text: String,
+    reasoning: String,
+    tools: Vec<ToolCallView>,
+    omitted: usize,
+    plan: Vec<PlanEntryView>,
+    truncated: bool,
+}
+
+impl TurnRecorder {
+    /// Returns the finished turn when `event` ends the one being recorded.
+    pub fn observe(&mut self, event: &AcpEvent, agent_name: &str) -> Option<FinishedTurn> {
+        let turn = match event {
+            AcpEvent::MessageChunk { turn, .. }
+            | AcpEvent::ThoughtChunk { turn, .. }
+            | AcpEvent::TextTruncated { turn }
+            | AcpEvent::ToolCall { turn, .. }
+            | AcpEvent::Plan { turn, .. } => *turn,
+            AcpEvent::TurnEnded { turn, .. } | AcpEvent::TurnFailed { turn, .. } => Some(*turn),
+            _ => None,
+        }?;
+        if self.turn != Some(turn) {
+            *self = Self {
+                turn: Some(turn),
+                ..Self::default()
+            };
+        }
+        match event {
+            AcpEvent::MessageChunk {
+                content: ContentView::Text { text },
+                ..
+            } => self.text.push_str(text),
+            AcpEvent::ThoughtChunk {
+                content: ContentView::Text { text },
+                ..
+            } => self.reasoning.push_str(text),
+            AcpEvent::TextTruncated { .. } => self.truncated = true,
+            AcpEvent::ToolCall { call, .. } => {
+                if let Some(known) = self.tools.iter_mut().find(|known| known.id == call.id) {
+                    *known = call.clone();
+                } else if self.tools.len() < MAX_STORED_TOOL_CALLS {
+                    self.tools.push(call.clone());
+                } else {
+                    self.omitted += 1;
+                }
+            }
+            AcpEvent::Plan { entries, .. } => self.plan = entries.clone(),
+            AcpEvent::TurnEnded { stop_reason, .. } => {
+                return Some(self.finish(agent_name, Some(*stop_reason), None))
+            }
+            AcpEvent::TurnFailed { error, .. } => {
+                return Some(self.finish(agent_name, None, Some(*error)))
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Ends a turn that the user abandoned by closing the session.
+    pub fn abandon(&mut self, agent_name: &str) -> Option<FinishedTurn> {
+        self.turn?;
+        Some(self.finish(agent_name, None, Some(RuntimeError::Cancelled)))
+    }
+
+    fn finish(
+        &mut self,
+        agent_name: &str,
+        stop_reason: Option<StopReason>,
+        error: Option<RuntimeError>,
+    ) -> FinishedTurn {
+        let recorded = std::mem::take(self);
+        FinishedTurn {
+            turn: recorded.turn.unwrap_or_default(),
+            text: recorded.text,
+            reasoning: recorded.reasoning,
+            activity: AgentActivity {
+                agent_name: agent_name.to_owned(),
+                tool_calls: recorded.tools,
+                omitted_tool_calls: recorded.omitted,
+                plan: recorded.plan,
+                stop_reason,
+                error: error.and_then(|error| {
+                    serde_json::to_value(error)
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                }),
+                text_truncated: recorded.truncated,
+            },
+        }
+    }
+}
 
 enum Incoming {
     Update(SessionNotification),
@@ -1294,7 +1419,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for FrameGuard<R> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serde_json::{json, Value};
     use std::sync::Mutex;
@@ -1302,7 +1427,7 @@ mod tests {
         AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, Lines, ReadHalf, WriteHalf,
     };
 
-    struct Wire {
+    pub(crate) struct Wire {
         input: Lines<BufReader<ReadHalf<DuplexStream>>>,
         output: WriteHalf<DuplexStream>,
     }
@@ -1385,7 +1510,7 @@ mod tests {
         }
     }
 
-    struct Fixture {
+    pub(crate) struct Fixture {
         events: Arc<Mutex<Vec<AcpEvent>>>,
         notify: Arc<tokio::sync::Notify>,
     }
@@ -1436,7 +1561,8 @@ mod tests {
         )
     }
 
-    async fn ready() -> (Wire, AcpSession, Fixture) {
+    /// A session with a fake agent that answered `initialize` and `session/new`.
+    pub(crate) async fn ready() -> (Wire, AcpSession, Fixture) {
         let (mut wire, start, fixture) = connect();
         let (started, ()) = tokio::join!(start, wire.handshake(false));
         let started = started.unwrap();
@@ -1828,5 +1954,106 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert!(eof.is_cancelled());
+    }
+}
+
+#[cfg(test)]
+mod recorder_tests {
+    use super::*;
+
+    fn call(id: &str, status: ToolCallStatus) -> ToolCallView {
+        ToolCallView {
+            status,
+            ..ToolCallView::empty(id.into())
+        }
+    }
+
+    #[test]
+    fn a_turn_keeps_its_text_and_the_latest_report_of_each_tool_call() {
+        let mut recorder = TurnRecorder::default();
+        let text = |turn, text: &str| AcpEvent::MessageChunk {
+            turn,
+            content: ContentView::Text { text: text.into() },
+        };
+        assert!(recorder
+            .observe(&text(None, "outside a turn"), "Agent")
+            .is_none());
+        for event in [
+            text(Some(1), "Hello "),
+            AcpEvent::ThoughtChunk {
+                turn: Some(1),
+                content: ContentView::Text {
+                    text: "thinking".into(),
+                },
+            },
+            AcpEvent::ToolCall {
+                turn: Some(1),
+                call: call("a", ToolCallStatus::Pending),
+            },
+            AcpEvent::ToolCall {
+                turn: Some(1),
+                call: call("b", ToolCallStatus::Pending),
+            },
+            AcpEvent::ToolCall {
+                turn: Some(1),
+                call: call("a", ToolCallStatus::Completed),
+            },
+            text(Some(1), "world"),
+        ] {
+            assert!(recorder.observe(&event, "Agent").is_none());
+        }
+        let finished = recorder
+            .observe(
+                &AcpEvent::TurnEnded {
+                    turn: 1,
+                    stop_reason: StopReason::EndTurn,
+                },
+                "Agent",
+            )
+            .unwrap();
+        assert_eq!(finished.turn, 1);
+        assert_eq!(finished.text, "Hello world");
+        assert_eq!(finished.reasoning, "thinking");
+        let ids: Vec<_> = finished
+            .activity
+            .tool_calls
+            .iter()
+            .map(|call| (call.id.as_str(), call.status))
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                ("a", ToolCallStatus::Completed),
+                ("b", ToolCallStatus::Pending)
+            ]
+        );
+        assert_eq!(finished.activity.stop_reason, Some(StopReason::EndTurn));
+        assert!(
+            recorder.abandon("Agent").is_none(),
+            "nothing left to record"
+        );
+
+        recorder.observe(&text(Some(2), "partial"), "Agent");
+        let failed = recorder
+            .observe(
+                &AcpEvent::TurnFailed {
+                    turn: 2,
+                    error: RuntimeError::AgentExited,
+                },
+                "Agent",
+            )
+            .unwrap();
+        assert_eq!(failed.text, "partial");
+        assert_eq!(failed.activity.error.as_deref(), Some("agent_exited"));
+
+        recorder.observe(&text(Some(3), "cut off"), "Agent");
+        let abandoned = recorder.abandon("Agent").unwrap();
+        assert_eq!(abandoned.turn, 3);
+        assert_eq!(abandoned.activity.error.as_deref(), Some("cancelled"));
+        let stored = serde_json::to_value(&abandoned.activity).unwrap();
+        assert_eq!(
+            serde_json::from_value::<AgentActivity>(stored).unwrap(),
+            abandoned.activity
+        );
     }
 }

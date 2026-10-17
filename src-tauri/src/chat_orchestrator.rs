@@ -272,6 +272,18 @@ pub async fn handle_send_message<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<(), String> {
     println!("Received message from frontend: {}", message);
+    // An ACP agent runs its own loop; its conversations never reach Blade's
+    // native or cloud model routing.
+    if state
+        .conversation
+        .lock()
+        .map_err(|e| format!("Failed to lock conversation: {}", e))?
+        .metadata
+        .execution
+        .is_some()
+    {
+        return Err("This conversation is run by an ACP agent.".to_string());
+    }
 
     let workspace_root = {
         let workspace = state

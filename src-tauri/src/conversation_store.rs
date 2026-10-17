@@ -27,6 +27,25 @@ pub struct ConversationMetadata {
     pub mode_source: Option<String>,
     #[serde(default)]
     pub format_version: Option<u32>,
+    /// Set when an ACP agent, not Blade, runs this conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ConversationExecution>,
+}
+
+/// The agent that owns a conversation and what it declared when the session
+/// started. The local transcript stays readable without it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ConversationExecution {
+    /// Always `acp` for now.
+    pub kind: String,
+    pub agent_id: String,
+    pub agent_name: String,
+    #[serde(default)]
+    pub external_session_id: Option<String>,
+    pub workspace_id: String,
+    pub protocol_version: u16,
+    #[serde(default)]
+    pub capabilities: serde_json::Value,
 }
 
 /// A complete conversation with metadata and messages
@@ -63,6 +82,8 @@ pub struct SerializableChatMessage {
     pub content_before_tools: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_after_tools: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_activity: Option<crate::integrations::acp_session::AgentActivity>,
 }
 
 impl From<&ChatMessage> for SerializableChatMessage {
@@ -86,6 +107,7 @@ impl From<&ChatMessage> for SerializableChatMessage {
             progress: msg.progress.clone(),
             content_before_tools: msg.content_before_tools.clone(),
             content_after_tools: msg.content_after_tools.clone(),
+            agent_activity: msg.agent_activity.clone(),
         }
     }
 }
@@ -111,6 +133,7 @@ impl From<ChatMessage> for SerializableChatMessage {
             progress: msg.progress,
             content_before_tools: msg.content_before_tools,
             content_after_tools: msg.content_after_tools,
+            agent_activity: msg.agent_activity,
         }
     }
 }
@@ -140,6 +163,7 @@ impl From<SerializableChatMessage> for ChatMessage {
         chat_msg.progress = msg.progress;
         chat_msg.content_before_tools = msg.content_before_tools;
         chat_msg.content_after_tools = msg.content_after_tools;
+        chat_msg.agent_activity = msg.agent_activity;
         chat_msg
     }
 }
@@ -743,6 +767,23 @@ impl ConversationStore {
         self.save_index()
     }
 
+    /// Append one message to a stored conversation that is not loaded.
+    pub fn append_message(
+        &mut self,
+        id: &str,
+        message: &SerializableChatMessage,
+    ) -> Result<(), String> {
+        let mut metadata = self.load_metadata(id)?;
+        self.write_message(id, metadata.message_count, message)?;
+        metadata.message_count += 1;
+        metadata.updated_at = Utc::now();
+        let metadata_bytes = serde_json::to_vec(&metadata)
+            .map_err(|e| format!("Failed to serialize metadata: {e}"))?;
+        atomic_write(&self.metadata_path(id), &metadata_bytes)?;
+        self.upsert_metadata(&metadata);
+        self.save_index()
+    }
+
     /// List all conversations, sorted by most recent first
     pub fn list_conversations(&self) -> Vec<ConversationMetadata> {
         let mut conversations = self.index.conversations.clone();
@@ -903,6 +944,15 @@ impl ConversationStore {
         &mut self,
         model_id: String,
     ) -> Result<ConversationMetadata, String> {
+        self.create_conversation(model_id, None)
+    }
+
+    /// Persist a new empty conversation, optionally owned by an ACP agent.
+    pub fn create_conversation(
+        &mut self,
+        model_id: String,
+        execution: Option<ConversationExecution>,
+    ) -> Result<ConversationMetadata, String> {
         let now = Utc::now();
         let metadata = ConversationMetadata {
             id: Uuid::new_v4().to_string(),
@@ -916,6 +966,7 @@ impl ConversationStore {
             runtime_mode: None,
             mode_source: None,
             format_version: Some(STORE_VERSION),
+            execution,
         };
 
         fs::create_dir_all(self.messages_dir(&metadata.id))
@@ -1016,6 +1067,7 @@ mod tests {
             runtime_mode: Some("code".to_string()),
             mode_source: Some("test".to_string()),
             format_version: None,
+            execution: None,
         }
     }
 
@@ -1037,6 +1089,58 @@ mod tests {
         let mut metadata = metadata(id);
         metadata.message_count = messages.len();
         StoredConversation { metadata, messages }
+    }
+
+    #[test]
+    fn agent_conversations_keep_their_owner_and_take_appended_messages() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("conversations");
+        let mut store = ConversationStore::new(path.clone()).unwrap();
+        let execution = ConversationExecution {
+            kind: "acp".into(),
+            agent_id: "agent".into(),
+            agent_name: "Agent".into(),
+            external_session_id: Some("s1".into()),
+            workspace_id: "workspace".into(),
+            protocol_version: 1,
+            capabilities: serde_json::json!({"load_session": false}),
+        };
+        let metadata = store
+            .create_conversation("acp:agent".into(), Some(execution.clone()))
+            .unwrap();
+        let mut reply = ChatMessage::new(ChatRole::Assistant, "Done".into());
+        reply.agent_activity = Some(crate::integrations::acp_session::AgentActivity {
+            agent_name: "Agent".into(),
+            tool_calls: Vec::new(),
+            omitted_tool_calls: 0,
+            plan: Vec::new(),
+            stop_reason: None,
+            error: Some("cancelled".into()),
+            text_truncated: false,
+        });
+        store
+            .append_message(&metadata.id, &(&reply).into())
+            .unwrap();
+
+        let reopened = ConversationStore::new(path).unwrap();
+        let loaded = reopened.load_conversation(&metadata.id).unwrap();
+        assert_eq!(loaded.metadata.execution, Some(execution));
+        assert_eq!(loaded.metadata.message_count, 1);
+        let message = ChatMessage::from(loaded.messages[0].clone());
+        assert_eq!(message.content, "Done");
+        assert_eq!(message.agent_activity, reply.agent_activity);
+        assert_eq!(
+            reopened.list_conversations()[0].message_count,
+            1,
+            "the index follows the append"
+        );
+        // Native conversations do not write the field at all.
+        let native = serde_json::to_string(&ConversationMetadata {
+            execution: None,
+            ..loaded.metadata
+        })
+        .unwrap();
+        assert!(!native.contains("execution"));
     }
 
     #[test]

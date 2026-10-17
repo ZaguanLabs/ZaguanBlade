@@ -198,6 +198,7 @@ pub async fn load_conversation(
     app: AppHandle,
 ) -> Result<(), String> {
     graceful_close_active_chat_session(state.inner()).await;
+    crate::commands::acp::end_agent_session_unless(&app, Some(&id));
 
     let blocking_id = id.clone();
     let app_for_task = app.clone();
@@ -257,6 +258,7 @@ pub async fn new_conversation(
     app: AppHandle,
 ) -> Result<String, String> {
     graceful_close_active_chat_session(state.inner()).await;
+    crate::commands::acp::end_agent_session_unless(&app, None);
 
     let blocking_model_id = model_id.clone();
     let app_for_task = app.clone();

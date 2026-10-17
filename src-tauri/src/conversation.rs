@@ -32,6 +32,7 @@ impl ConversationHistory {
                 runtime_mode: None,
                 mode_source: None,
                 format_version: None,
+                execution: None,
             },
         }
     }

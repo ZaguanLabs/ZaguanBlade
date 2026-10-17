@@ -2,6 +2,7 @@
 //! Saving configuration never starts a process or grants launch permission.
 
 pub mod acp_session;
+pub mod agent_sessions;
 pub(crate) mod call_result;
 pub mod catalog;
 pub mod config;
