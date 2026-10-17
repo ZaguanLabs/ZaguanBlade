@@ -8,7 +8,7 @@ import { X, Database, Cloud, Shield, Zap, HardDrive, Server, ChevronRight, Chevr
 import type { BackendSettings, LocalAiConfig, RemoteAiConfig } from '../types/settings';
 import type { IntegrationConfig, IntegrationConfigSnapshot } from '../types/integrations';
 import { IntegrationSettings } from './settings/IntegrationSettings';
-import { emptyIntegrationConfig, integrationErrorKey } from '../utils/integrationSettings';
+import { emptyIntegrationConfig, integrationErrorKey, setIntegrationEnabled } from '../utils/integrationSettings';
 import { saveSettingsChanges, type SettingsPayload } from '../utils/settingsPersistence';
 import { projectSettingsFromBackend, projectSettingsToBackend, type ProjectPreferences } from '../utils/projectSettings';
 import i18n, { normalizeAppLanguage, supportedAppLanguages, languageI18nKey, type AppLanguage } from '../i18n';
@@ -194,6 +194,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
     const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
     const [integrationRevision, setIntegrationRevision] = useState<string | null>(null);
     const [isLoaded, setIsLoaded] = useState(false);
+    const [isSavingEnabled, setIsSavingEnabled] = useState(false);
     const [reloadCount, setReloadCount] = useState(0);
     const settingsSession = useRef(0);
 
@@ -299,7 +300,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
     }, []);
 
     const handleSave = () => {
-        if (isSaving || isLoading || !isLoaded || !hasChanges || integrationRevision === null) return;
+        if (isSaving || isSavingEnabled || isLoading || !isLoaded || !hasChanges || integrationRevision === null) return;
         const session = settingsSession.current;
 
         const settingsSnapshot = settings;
@@ -345,6 +346,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                 if (session === settingsSession.current) setError(formatUnknownBackendError(error));
             } finally {
                 if (session === settingsSession.current) setIsSaving(false);
+            }
+        })();
+    };
+
+    // Connecting needs the saved configuration, and Save closes Settings, so the
+    // Enabled switch of a saved entry is written at once on top of what is saved.
+    // Other draft edits stay unsaved. New entries are saved with the rest.
+    const handleIntegrationEnabled = (id: string, enabled: boolean) => {
+        const draft = () => {
+            setSettings(previous => ({ ...previous, integrationConfig: setIntegrationEnabled(previous.integrationConfig, id, enabled) }));
+            setHasChanges(true);
+        };
+        if (isSaving || isSavingEnabled || !isLoaded || integrationRevision === null
+            || !loadedSettings.integrationConfig.entries.some(entry => entry.id === id)) {
+            draft();
+            return;
+        }
+        const session = settingsSession.current;
+        setIsSavingEnabled(true);
+        setError(null);
+        void (async () => {
+            try {
+                const saved = await invoke<IntegrationConfigSnapshot>('save_integration_settings', {
+                    expectedRevision: integrationRevision, config: setIntegrationEnabled(loadedSettings.integrationConfig, id, enabled),
+                });
+                if (session !== settingsSession.current) return;
+                setIntegrationRevision(saved.revision);
+                setLoadedSettings(previous => ({ ...previous, integrationConfig: saved.config }));
+                setSettings(previous => ({ ...previous, integrationConfig: setIntegrationEnabled(previous.integrationConfig, id, enabled) }));
+            } catch (error) {
+                if (session === settingsSession.current) setError(i18n.t(integrationErrorKey(error)));
+            } finally {
+                if (session === settingsSession.current) setIsSavingEnabled(false);
             }
         })();
     };
@@ -441,10 +475,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                                 <fieldset disabled={isSaving || !isLoaded} className="min-w-0 disabled:opacity-60">
                                     {activeSection === 'integrations' && (
                                         <IntegrationSettings config={settings.integrationConfig} revision={integrationRevision}
+                                            onEnabledChange={handleIntegrationEnabled} enabledBusy={isSavingEnabled}
                                             workspace={settings.workspaceIntegrations} onWorkspaceChange={workspaceIntegrations => {
                                                 setSettings(previous => ({ ...previous, workspaceIntegrations })); setHasChanges(true);
                                             }}
-                                            workspacePath={workspacePath} canTest={isLoaded && !hasChanges && !isSaving} onChange={integrationConfig => {
+                                            workspacePath={workspacePath} canTest={isLoaded && !hasChanges && !isSaving && !isSavingEnabled} onChange={integrationConfig => {
                                             setSettings(previous => ({ ...previous, integrationConfig }));
                                             setHasChanges(true);
                                         }} />
@@ -532,7 +567,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                         <button
                             type="button"
                             onClick={handleSave}
-                            disabled={!hasChanges || isSaving || isLoading || !isLoaded}
+                            disabled={!hasChanges || isSaving || isSavingEnabled || isLoading || !isLoaded}
                             className="flex items-center gap-2 rounded-[calc(var(--panel-radius)*0.65)] bg-(--accent-ai) px-4 py-2 text-sm font-medium text-(--fg-bright) transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                             {isSaving && <Loader2 aria-hidden="true" className="w-4 h-4 animate-spin" />}

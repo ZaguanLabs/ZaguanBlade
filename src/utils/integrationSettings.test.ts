@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { integrationErrorKey, newIntegrationProcess, removeIntegration, replaceIntegration } from './integrationSettings';
+import { integrationErrorKey, newIntegrationProcess, removeIntegration, replaceIntegration, setIntegrationEnabled } from './integrationSettings';
 import type { IntegrationConfig } from '../types/integrations';
 
 function fixture(): IntegrationConfig {
@@ -11,6 +11,14 @@ function fixture(): IntegrationConfig {
 }
 
 describe('integration configuration edits', () => {
+    test('switching an entry on changes only that entry\'s flag', () => {
+        const original = fixture();
+        const next = setIntegrationEnabled(original, 'mcp-id', true);
+        assert.deepEqual(next.entries[0], { ...original.entries[0], enabled: true });
+        assert.deepEqual(next.entries[1], original.entries[1]);
+        assert.equal(original.entries[0].enabled, false);
+        assert.deepEqual(setIntegrationEnabled(original, 'missing', true), original);
+    });
     test('renaming preserves IDs, forwarding and fields outside the edited form', () => {
         const original = fixture();
         const next = replaceIntegration(original, { ...original.entries[0], name: 'Renamed' });

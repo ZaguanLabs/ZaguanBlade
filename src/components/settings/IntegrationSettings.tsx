@@ -50,9 +50,11 @@ function ProcessFields({ process, onChange }: { process: IntegrationProcess; onC
     </div>;
 }
 
-function DefinitionFields({ entry, onChange, onRemove, config, testContext, live }: {
+function DefinitionFields({ entry, onChange, onEnabledChange, enabledBusy, onRemove, config, testContext, live }: {
     entry: IntegrationDefinition;
     onChange: (entry: IntegrationDefinition) => void;
+    onEnabledChange: (enabled: boolean) => void;
+    enabledBusy?: boolean;
     onRemove: () => void;
     config: IntegrationConfig;
     testContext: ConnectionTestContext;
@@ -64,7 +66,7 @@ function DefinitionFields({ entry, onChange, onRemove, config, testContext, live
     return <section className="rounded-lg border border-(--border-default) bg-(--bg-panel) p-4 space-y-4">
         <div className="flex items-center justify-between gap-3">
             <label className="flex items-center gap-2 text-sm text-(--fg-primary)">
-                <input type="checkbox" checked={entry.enabled} onChange={event => onChange({ ...entry, enabled: event.target.checked })} />
+                <input type="checkbox" checked={entry.enabled} disabled={enabledBusy} onChange={event => onEnabledChange(event.target.checked)} />
                 {t('settings.integrations.enabled')}
             </label>
             <span className="ml-auto text-xs text-(--fg-tertiary)">{connection.protocol === 'mcp' ? t(`settings.integrations.connection.${live.phase === 'ready' ? live.status?.phase ?? 'disconnected' : live.phase === 'failed' ? 'statusUnavailable' : 'checking'}`) : t('settings.integrations.notConnected')}</span>
@@ -128,7 +130,17 @@ function DefinitionFields({ entry, onChange, onRemove, config, testContext, live
     </section>;
 }
 
-export function IntegrationSettings({ config, onChange, workspace, onWorkspaceChange, ...testContext }: ConnectionTestContext & { config: IntegrationConfig; onChange: (config: IntegrationConfig) => void; workspace?: WorkspaceIntegrationSettings; onWorkspaceChange?: (workspace: WorkspaceIntegrationSettings) => void }) {
+/** `onEnabledChange` saves the Enabled switch straight away when the host can,
+ * because connecting needs the saved configuration. Without it the switch is
+ * an ordinary draft edit. */
+export function IntegrationSettings({ config, onChange, onEnabledChange, enabledBusy, workspace, onWorkspaceChange, ...testContext }: ConnectionTestContext & {
+    config: IntegrationConfig;
+    onChange: (config: IntegrationConfig) => void;
+    onEnabledChange?: (id: string, enabled: boolean) => void;
+    enabledBusy?: boolean;
+    workspace?: WorkspaceIntegrationSettings;
+    onWorkspaceChange?: (workspace: WorkspaceIntegrationSettings) => void;
+}) {
     const { t } = useTranslation();
     const live = useMcpConnections(testContext.workspacePath);
     const add = (protocol: 'mcp' | 'acp') => {
@@ -153,6 +165,7 @@ export function IntegrationSettings({ config, onChange, workspace, onWorkspaceCh
             {config.entries.filter(entry => entry.connection.protocol === protocol).map(entry => <DefinitionFields key={entry.id}
                 entry={entry} config={config} testContext={testContext} live={{ status: live.statuses.find(status => status.integration_id === entry.id), phase: live.phase, update: live.update,
                     remembered: live.remembered.includes(entry.id), setRemembered: value => live.setRemembered(entry.id, value) }} onChange={updated => onChange(replaceIntegration(config, updated))}
+                onEnabledChange={enabled => onEnabledChange ? onEnabledChange(entry.id, enabled) : onChange(replaceIntegration(config, { ...entry, enabled }))} enabledBusy={enabledBusy}
                 onRemove={() => onChange(removeIntegration(config, entry.id))} />)}
             {!config.entries.some(entry => entry.connection.protocol === protocol) ? <p className="text-sm text-(--fg-tertiary)">
                 {t(`settings.integrations.${protocol === 'mcp' ? 'noServers' : 'noAgents'}`)}
