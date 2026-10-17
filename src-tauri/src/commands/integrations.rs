@@ -307,6 +307,83 @@ pub fn get_mcp_catalog(
         .catalog(connection_id, &documents)
 }
 
+#[derive(serde::Serialize)]
+pub struct McpResourceServer {
+    connection_id: Uuid,
+    integration_id: Uuid,
+    name: String,
+}
+
+/// Connected servers offering resources, for the chat composer. Scoped to the
+/// workspace that is open now; the webview cannot name another.
+#[tauri::command]
+pub fn get_mcp_resource_servers(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<McpResourceServer>, RuntimeError> {
+    runtime_desktop_only(&window)?;
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    Ok(state
+        .integrations
+        .connections
+        .resource_servers(&documents)?
+        .into_iter()
+        .map(|status| McpResourceServer {
+            connection_id: status.connection_id,
+            integration_id: status.integration_id,
+            name: status.name,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn list_mcp_resources(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    connection_id: Uuid,
+) -> Result<crate::integrations::resources::ResourceListing, RuntimeError> {
+    runtime_desktop_only(&window)?;
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    state
+        .integrations
+        .connections
+        .list_resources(connection_id, &documents)
+        .await
+}
+
+/// Reads one user-selected resource, by URI or by expanding a template with
+/// user-entered values. Selecting it in the picker is the authorization.
+#[tauri::command]
+pub async fn read_mcp_resource(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    connection_id: Uuid,
+    uri: Option<String>,
+    template: Option<String>,
+    values: Option<std::collections::HashMap<String, String>>,
+) -> Result<crate::integrations::resources::ResourceRead, RuntimeError> {
+    runtime_desktop_only(&window)?;
+    let uri = match (uri, template) {
+        (Some(uri), None) => uri,
+        (None, Some(template)) => {
+            crate::integrations::uri_template::expand(&template, &values.unwrap_or_default())?
+        }
+        _ => return Err(RuntimeError::InvalidArguments),
+    };
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    state
+        .integrations
+        .connections
+        .read_resource(connection_id, &documents, uri)
+        .await
+}
+
 // Conversation decisions are desktop-only and resolve backend-owned contexts.
 // The webview cannot choose arguments, a connection, or a workspace generation.
 fn current_mcp_turn(

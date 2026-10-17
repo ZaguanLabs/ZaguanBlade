@@ -3,13 +3,14 @@
 use super::{
     catalog::{CatalogBuilder, McpCatalog},
     http::PreparedHttp,
+    resources::{ResourceListing, ResourceRead, MAX_ENTRIES, MAX_PAGES},
     RuntimeError,
 };
 use rmcp::{
     model::{
         CallToolRequest, CallToolRequestParams, CallToolResult, ClientRequest,
-        PaginatedRequestParams, ProtocolVersion, ServerNotification, ServerResult,
-        SubscriptionFilter,
+        PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
+        ServerNotification, ServerResult, SubscriptionFilter,
     },
     service::{NotificationContext, PeerRequestOptions, RunningService},
     ClientCacheConfig, ClientHandler, ClientLifecycleMode, ClientServiceExt, RoleClient,
@@ -275,6 +276,85 @@ impl McpSession {
             }
         }
         catalog.finish()
+    }
+
+    /// Resources and templates, each paginated and bounded. Entries past the
+    /// bounds are reported through `truncated`, never silently dropped.
+    pub async fn list_resources(&self) -> Result<ResourceListing, RuntimeError> {
+        let mut listing = ResourceListing::default();
+        if !self.resources {
+            return Ok(listing);
+        }
+        let peer = self.service.peer();
+        let mut cursor = None;
+        let mut seen = std::collections::HashSet::new();
+        for page in 0..MAX_PAGES {
+            let response = peer
+                .list_resources(Some(PaginatedRequestParams::default().with_cursor(cursor)))
+                .await
+                .map_err(|_| self.signals.error())?;
+            for resource in response.resources {
+                listing.push_resource(resource);
+            }
+            cursor = response.next_cursor;
+            let Some(next) = cursor.as_ref() else { break };
+            if page + 1 == MAX_PAGES
+                || listing.resources.len() >= MAX_ENTRIES
+                || !seen.insert(next.clone())
+            {
+                listing.truncated = true;
+                break;
+            }
+        }
+        let mut cursor = None;
+        let mut seen = std::collections::HashSet::new();
+        for page in 0..MAX_PAGES {
+            // Servers without templates may reject the method; resources still list.
+            let Ok(response) = peer
+                .list_resource_templates(Some(
+                    PaginatedRequestParams::default().with_cursor(cursor),
+                ))
+                .await
+            else {
+                if self.is_closed() {
+                    return Err(self.signals.error());
+                }
+                break;
+            };
+            for template in response.resource_templates {
+                listing.push_template(template);
+            }
+            cursor = response.next_cursor;
+            let Some(next) = cursor.as_ref() else { break };
+            if page + 1 == MAX_PAGES
+                || listing.resources.len() + listing.templates.len() >= MAX_ENTRIES
+                || !seen.insert(next.clone())
+            {
+                listing.truncated = true;
+                break;
+            }
+        }
+        Ok(listing)
+    }
+
+    /// One `resources/read`. MRTR input requests are unsupported, as for tools.
+    pub async fn read_resource(&self, uri: String) -> Result<ResourceRead, RuntimeError> {
+        if !self.resources {
+            return Err(RuntimeError::ResourceUnavailable);
+        }
+        let response = self
+            .service
+            .peer()
+            .read_resource_once(ReadResourceRequestParams::new(uri.clone()))
+            .await
+            .map_err(|error| match error {
+                rmcp::ServiceError::McpError(_) => RuntimeError::ResourceUnavailable,
+                _ => self.signals.error(),
+            })?;
+        match response {
+            ReadResourceResponse::Complete(result) => ResourceRead::project(uri, result),
+            _ => Err(RuntimeError::UnsupportedResult),
+        }
     }
 
     pub fn is_closed(&self) -> bool {

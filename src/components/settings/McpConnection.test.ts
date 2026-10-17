@@ -14,7 +14,7 @@ for (const [language, translation] of Object.entries({ en, es })) {
         const i18n = createInstance();
         await i18n.init({ lng: language, resources: { [language]: { translation } }, interpolation: { escapeValue: false } });
         const entry: IntegrationDefinition = { id: 'server', name: 'Atlas Scout', enabled: true, connection: { protocol: 'mcp', transport: { type: 'stdio', process: newIntegrationProcess('atlas-scout', ['mcp']) } } };
-        const status: McpConnectionStatus = { integration_id: entry.id, connection_id: 'connection', workspace: { workspace_id: 'workspace', generation: 'generation' }, phase: 'connected', protocol_version: '2025-11-25', catalog_revision: 'catalog', tools: 14, error: null };
+        const status: McpConnectionStatus = { integration_id: entry.id, connection_id: 'connection', name: entry.name, workspace: { workspace_id: 'workspace', generation: 'generation' }, phase: 'connected', protocol_version: '2025-11-25', catalog_revision: 'catalog', tools: 14, resources: false, prompts: false, error: null };
         const render = (value: McpConnectionStatus | undefined) => renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(McpConnection, { entry, revision: 'saved', workspacePath: '/workspace', canTest: true, live: { status: value, phase: 'ready', update: () => {} } })));
         const html = render(status);
         assert.ok(html.includes(translation.settings.integrations.connection.connected));

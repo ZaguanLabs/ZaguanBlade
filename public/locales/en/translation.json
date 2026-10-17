@@ -222,6 +222,35 @@
       "missingMimeType": "Missing image MIME type.",
       "unsupportedType": "Unsupported image type ({{mimeType}})."
     },
+    "mcpResources": {
+      "title": "Attach MCP resource",
+      "help": "Choose a resource from a connected MCP server. Its content is added to your next message as external data and sent to the selected model.",
+      "loading": "Loading…",
+      "noServers": "No connected MCP server in this workspace offers resources. Connect one in Settings → MCP / ACP.",
+      "server": "Server",
+      "chooseServer": "Choose a server",
+      "filter": "Filter resources",
+      "empty": "This server lists no resources.",
+      "listTruncated": "Only part of this server's list is shown.",
+      "template": "Template",
+      "read": "Read resource",
+      "preview": "Preview",
+      "size": "About {{kb}} KB of text",
+      "truncated": "The content was shortened to fit the attachment limit.",
+      "images_one": "{{count}} image will be added as an image attachment.",
+      "images_other": "{{count}} images will be added as image attachments.",
+      "unsupported_one": "{{count}} binary part can't be attached and will be left out.",
+      "unsupported_other": "{{count}} binary parts can't be attached and will be left out.",
+      "nothing": "This resource has no content that can be attached.",
+      "attach": "Attach",
+      "remove": "Remove resource {{name}}",
+      "attached": "MCP resources",
+      "refused": {
+        "count": "You can attach up to {{max}} resources per message.",
+        "size": "Attached resources are limited to {{kb}} KB of text per message.",
+        "duplicate": "This resource is already attached."
+      }
+    },
     "system": {
       "requestFailed": "Request failed",
       "contextLimitReachedTitle": "Context Limit Reached",
@@ -817,7 +846,8 @@
           "artifact_unavailable": "The full result is unavailable; the transcript preview is still retained.",
           "call_limit": "This turn has reached its MCP call limit or repeated a call identifier.",
           "authentication_required": "The server requires authentication or rejected the configured credentials. Check the headers and stored credentials. OAuth sign-in is not supported yet.",
-          "server_unreachable": "Could not reach the server. Check the URL, your network connection and the server certificate."
+          "server_unreachable": "Could not reach the server. Check the URL, your network connection and the server certificate.",
+          "resource_unavailable": "The server could not provide this resource. Check the address or the template values."
         },
         "mcpResult_other": "{{count}} tools; resources: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "{{count}} authentication methods advertised. No session was started.",
@@ -1379,7 +1409,9 @@
       "region": "Region",
       "regionDescription": "Crop a selected window before attaching.",
       "image": "Image",
-      "imageDescription": "Add an image from disk."
+      "imageDescription": "Add an image from disk.",
+      "mcpResource": "MCP resource",
+      "mcpResourceDescription": "Add content from a connected MCP server."
     },
     "preview": {
       "title": "Screenshot captured",

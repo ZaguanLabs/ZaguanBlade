@@ -47,6 +47,8 @@ pub struct SerializableChatMessage {
     pub backend_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<crate::protocol::ChatImage>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<Vec<crate::protocol::ChatResource>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mentions: Option<Vec<crate::protocol::ChatMention>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -76,6 +78,7 @@ impl From<&ChatMessage> for SerializableChatMessage {
             content: msg.content.clone(),
             backend_content: msg.backend_content.clone(),
             images: msg.images.clone(),
+            resources: msg.resources.clone(),
             mentions: msg.mentions.clone(),
             reasoning: msg.reasoning.clone(),
             tool_call_id: msg.tool_call_id.clone(),
@@ -100,6 +103,7 @@ impl From<ChatMessage> for SerializableChatMessage {
             content: msg.content,
             backend_content: msg.backend_content,
             images: msg.images,
+            resources: msg.resources,
             mentions: msg.mentions,
             reasoning: msg.reasoning,
             tool_call_id: msg.tool_call_id,
@@ -128,6 +132,7 @@ impl From<SerializableChatMessage> for ChatMessage {
         }
         chat_msg.backend_content = msg.backend_content;
         chat_msg.images = msg.images;
+        chat_msg.resources = msg.resources;
         chat_msg.mentions = msg.mentions;
         chat_msg.reasoning = msg.reasoning;
         chat_msg.tool_call_id = msg.tool_call_id;

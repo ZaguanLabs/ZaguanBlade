@@ -77,10 +77,55 @@ export interface McpCatalog {
 export interface McpConnectionStatus {
     connection_id: string;
     integration_id: string;
+    name: string;
     workspace: { workspace_id: string; generation: string };
     phase: 'connecting' | 'connected' | 'refreshing' | 'stopping' | 'disconnected' | 'failed';
     protocol_version: string | null;
     catalog_revision: string | null;
     tools: number;
+    resources: boolean;
+    prompts: boolean;
     error: string | null;
+}
+
+/** A connected MCP server in the current workspace that offers resources. */
+export interface McpResourceServer {
+    connection_id: string;
+    integration_id: string;
+    name: string;
+}
+
+export interface McpResourceEntry {
+    uri: string;
+    name: string;
+    title: string | null;
+    description: string | null;
+    mime_type: string | null;
+    size: number | null;
+}
+
+export interface McpResourceTemplateEntry {
+    uri_template: string;
+    name: string;
+    title: string | null;
+    description: string | null;
+    mime_type: string | null;
+    variables: string[];
+}
+
+export interface McpResourceListing {
+    resources: McpResourceEntry[];
+    templates: McpResourceTemplateEntry[];
+    truncated: boolean;
+}
+
+export type McpResourcePart =
+    | { kind: 'text'; uri: string; mime_type: string | null; text: string }
+    | { kind: 'image'; uri: string; mime_type: string; data: string }
+    | { kind: 'unsupported'; uri: string; mime_type: string | null };
+
+export interface McpResourceRead {
+    uri: string;
+    parts: McpResourcePart[];
+    truncated: boolean;
 }

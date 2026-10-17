@@ -10,7 +10,7 @@ import { MessageBuffer } from '../utils/eventBuffer';
 import { ensureMessagesHaveBlocks, insertAssistantMessageAfterLastUser, insertToolCallBlockPreservingOrder, moveExistingContentAfterTools, upsertSplitTextBlocks } from '../utils/messageBlocks';
 import { EventNames, type ApprovalRequestPayload, type ChatDonePayload, type ChatErrorPayload, type ContextLengthExceededPayload, type MessageTooLargePayload, type RequestConfirmationPayload, type StructuredAction, type ToolExecutionCompletedPayload, type TodoItem } from '../types/events';
 import type { ChatMention } from '../types/blade';
-import type { ChatImage, ChatMessage, ChatMode, ComposerMention, CommandExecution, HookApprovalRequest, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
+import type { ChatImage, ChatMessage, ChatMode, ChatResource, ComposerMention, CommandExecution, HookApprovalRequest, ImageAttachment, MessageBlock, ModelInfo, QueuedRequest, ResourceAttachment, StreamingState, ToolActivityState, ToolCall } from '../types/chat';
 import type { ChatActivity } from '../utils/chatTimeline';
 import { buildContextLengthSystemMessage, buildMessageTooLargeSystemMessage, formatChatErrorPayload } from '../utils/localizedEvents';
 import { getStreamRenderIntervalMs } from '../utils/streamRendering';
@@ -88,6 +88,11 @@ function isImageAttachment(image: ChatImage): image is ImageAttachment {
     return typeof candidate.id === 'string'
         && typeof candidate.dataUrl === 'string'
         && typeof candidate.thumbnailUrl === 'string';
+}
+
+/** Transcript provenance only; the text itself travels in the request. */
+function toChatResource({ server, name, uri, mime_type, bytes, truncated }: ResourceAttachment): ChatResource {
+    return { server, name, uri, mime_type, bytes, truncated };
 }
 
 function areToolActivitiesEqual(a: ToolActivityState | null, b: ToolActivityState | null): boolean {
@@ -2117,7 +2122,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
         };
     }, [applyDeferredRunCommandCompletion, cancelMessageCompletionCleanup, clearPendingTimers, finalizeActiveStreamingMessages, flushPendingUpdates, flushPendingUpdatesImmediately, queueMessageUpdate, scheduleMessageCompletionCleanup, setMessages, setToolActivity, updateMessages, updateToolCallsStatusLocally]);
 
-    const dispatchToBackend = useCallback(async (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode): Promise<boolean> => {
+    const dispatchToBackend = useCallback(async (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode, resources?: ResourceAttachment[]): Promise<boolean> => {
         try {
             dispatchInFlightRef.current = true;
             dispatch({ type: 'loading/set', loading: true });
@@ -2137,6 +2142,7 @@ export function useChatV2(options: UseChatV2Options = {}) {
                     })),
                     context,
                     mentions: toChatMentions(mentions),
+                    resources: resources?.map(({ server, name, uri, mime_type, text, truncated }) => ({ server, name, uri, mime_type: mime_type ?? null, text, truncated })),
                     mode: mode ?? chatModeRef.current,
                 },
             });
@@ -2167,11 +2173,12 @@ export function useChatV2(options: UseChatV2Options = {}) {
                 role: 'User',
                 content: nextMessage.text,
                 images: nextMessage.attachments,
+                resources: nextMessage.resources?.map(toChatResource),
                 mentions: nextMessage.mentions,
             };
             updateMessages((messages) => [...messages, userMessage]);
 
-            const accepted = await dispatchToBackend(nextMessage.text, nextMessage.attachments, nextMessage.mentions, nextMessage.mode);
+            const accepted = await dispatchToBackend(nextMessage.text, nextMessage.attachments, nextMessage.mentions, nextMessage.mode, nextMessage.resources);
             if (accepted) {
                 blockedQueuedRequestRef.current = null;
                 dispatch({ type: 'queue/shift' });
@@ -2181,9 +2188,9 @@ export function useChatV2(options: UseChatV2Options = {}) {
         })();
     }, [dispatchToBackend, state.loading, state.messageQueue, updateMessages]);
 
-    const sendMessage = useCallback((text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode) => {
+    const sendMessage = useCallback((text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode, resources?: ResourceAttachment[]) => {
         const requestMode = mode ?? chatModeRef.current;
-        const request = { text, attachments, mentions, mode: requestMode };
+        const request = { text, attachments, resources, mentions, mode: requestMode };
 
         if (!loadingRef.current && !dispatchInFlightRef.current && messageQueueRef.current.length === 0) {
             const userMessage: ChatMessage = {
@@ -2191,10 +2198,11 @@ export function useChatV2(options: UseChatV2Options = {}) {
                 role: 'User',
                 content: request.text,
                 images: request.attachments,
+                resources: request.resources?.map(toChatResource),
                 mentions: request.mentions,
             };
             updateMessages((messages) => [...messages, userMessage]);
-            void dispatchToBackend(request.text, request.attachments, request.mentions, request.mode);
+            void dispatchToBackend(request.text, request.attachments, request.mentions, request.mode, request.resources);
             return;
         }
 

@@ -9,6 +9,7 @@ use super::{
     mcp_session::{McpSession, MAX_SESSION_BYTES},
     permissions::{ApprovedCall, CallTarget},
     process::SupervisedProcess,
+    resources::{ResourceListing, ResourceRead},
     store::IntegrationStore,
     RuntimeError,
 };
@@ -53,11 +54,15 @@ impl ConnectionPhase {
 pub struct ConnectionStatus {
     pub connection_id: Uuid,
     pub integration_id: Uuid,
+    pub name: String,
     pub workspace: WorkspaceIdentity,
     pub phase: ConnectionPhase,
     pub protocol_version: Option<String>,
     pub catalog_revision: Option<String>,
     pub tools: usize,
+    /// Server capabilities, known once connected.
+    pub resources: bool,
+    pub prompts: bool,
     pub error: Option<RuntimeError>,
 }
 struct Snapshot {
@@ -78,6 +83,15 @@ struct Connection {
 enum Command {
     Refresh(OwnedSemaphorePermit),
     Call(CallRequest),
+    ListResources(
+        OwnedSemaphorePermit,
+        oneshot::Sender<Result<ResourceListing, RuntimeError>>,
+    ),
+    ReadResource(
+        OwnedSemaphorePermit,
+        String,
+        oneshot::Sender<Result<ResourceRead, RuntimeError>>,
+    ),
 }
 struct CallRequest {
     approved: ApprovedCall,
@@ -130,6 +144,8 @@ impl Connection {
         }
         snapshot.status.phase = ConnectionPhase::Connected;
         snapshot.status.protocol_version = Some(session.protocol_version.clone());
+        snapshot.status.resources = session.resources;
+        snapshot.status.prompts = session.prompts;
         snapshot.status.catalog_revision = Some(catalog.revision().to_owned());
         snapshot.status.tools = catalog.tools().len();
         snapshot.catalog = Some(catalog);
@@ -197,11 +213,14 @@ impl ConnectionRegistry {
         let status = ConnectionStatus {
             connection_id: id,
             integration_id: definition.id,
+            name: definition.name.clone(),
             workspace: documents.identity().clone(),
             phase: ConnectionPhase::Connecting,
             protocol_version: None,
             catalog_revision: None,
             tools: 0,
+            resources: false,
+            prompts: false,
             error: None,
         };
         let (commands, receiver) = mpsc::channel(1);
@@ -387,6 +406,67 @@ impl ConnectionRegistry {
             return Err(RuntimeError::ConnectionNotReady);
         }
         Ok(())
+    }
+
+    /// Connected servers in this workspace that offer resources.
+    pub fn resource_servers(
+        &self,
+        documents: &DocumentService,
+    ) -> Result<Vec<ConnectionStatus>, RuntimeError> {
+        Ok(self
+            .statuses(documents)?
+            .into_iter()
+            .filter(|status| status.phase == ConnectionPhase::Connected && status.resources)
+            .collect())
+    }
+
+    /// Resource operations are serialized with calls and refreshes on the
+    /// connection actor, which rechecks policy before touching the server.
+    async fn resource_operation<T>(
+        &self,
+        id: Uuid,
+        documents: &DocumentService,
+        command: impl FnOnce(OwnedSemaphorePermit, oneshot::Sender<Result<T, RuntimeError>>) -> Command,
+    ) -> Result<T, RuntimeError> {
+        let entry = self.owned(id, documents)?;
+        let slot = entry
+            .operation
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| RuntimeError::Busy)?;
+        if entry.status()?.phase != ConnectionPhase::Connected || entry.cancel.is_cancelled() {
+            return Err(RuntimeError::ConnectionNotReady);
+        }
+        let (response, result) = oneshot::channel();
+        entry
+            .commands
+            .try_send(command(slot, response))
+            .map_err(|_| RuntimeError::ConnectionNotReady)?;
+        result
+            .await
+            .unwrap_or(Err(RuntimeError::ConnectionNotReady))
+    }
+    pub async fn list_resources(
+        &self,
+        id: Uuid,
+        documents: &DocumentService,
+    ) -> Result<ResourceListing, RuntimeError> {
+        self.resource_operation(id, documents, Command::ListResources)
+            .await
+    }
+    pub async fn read_resource(
+        &self,
+        id: Uuid,
+        documents: &DocumentService,
+        uri: String,
+    ) -> Result<ResourceRead, RuntimeError> {
+        if uri.is_empty() || uri.len() > super::uri_template::MAX_TEMPLATE_BYTES {
+            return Err(RuntimeError::InvalidArguments);
+        }
+        self.resource_operation(id, documents, |slot, response| {
+            Command::ReadResource(slot, uri, response)
+        })
+        .await
     }
 
     pub(super) fn call_binding(
@@ -686,6 +766,18 @@ async fn run(
                                     run_call(&connection, &directory, active, request).await?;
                                     continue;
                                 }
+                                Command::ListResources(_slot, response) => {
+                                    tokio::time::timeout(DISCOVERY_TIMEOUT, verify(&directory, &connection)).await.map_err(|_| RuntimeError::TimedOut)??;
+                                    let result = tokio::time::timeout(DISCOVERY_TIMEOUT, active.list_resources()).await.unwrap_or(Err(RuntimeError::TimedOut));
+                                    let _ = response.send(result);
+                                    continue;
+                                }
+                                Command::ReadResource(_slot, uri, response) => {
+                                    tokio::time::timeout(DISCOVERY_TIMEOUT, verify(&directory, &connection)).await.map_err(|_| RuntimeError::TimedOut)??;
+                                    let result = tokio::time::timeout(DISCOVERY_TIMEOUT, active.read_resource(uri)).await.unwrap_or(Err(RuntimeError::TimedOut));
+                                    let _ = response.send(result);
+                                    continue;
+                                }
                                 Command::Refresh(slot) => slot,
                             };
                             tokio::time::timeout(DISCOVERY_TIMEOUT, rediscover()).await.map_err(|_| RuntimeError::TimedOut)??;
@@ -781,9 +873,24 @@ for line in sys.stdin:
         print(json.dumps({'jsonrpc':'2.0','method':'notifications/subscriptions/acknowledged','params':{'_meta':meta,'notifications':{'toolsListChanged':True}}}),flush=True)
         print(json.dumps({'jsonrpc':'2.0','method':'notifications/tools/list_changed','params':{'_meta':meta}}),flush=True)
         continue
+    if method=='resources/read' and req['params']['uri'] not in ('mem://a','mem://item/7'):
+        print(json.dumps({'jsonrpc':'2.0','id':req['id'],'error':{'code':-32002,'message':'Resource not found'}}),flush=True)
+        continue
     if method=='initialize':
         tools={'listChanged':True} if mode=='notify' else {}
-        result={'protocolVersion':'2025-11-25','capabilities':{'tools':tools},'serverInfo':{'name':'fixture','version':'1'}}
+        capabilities={'tools':tools}
+        if mode=='resources': capabilities['resources']={}
+        result={'protocolVersion':'2025-11-25','capabilities':capabilities,'serverInfo':{'name':'fixture','version':'1'}}
+    elif method=='resources/list':
+        if (req.get('params') or {}).get('cursor')=='p2':
+            result={'resources':[{'uri':'mem://b','name':'B'}]}
+        else:
+            result={'resources':[{'uri':'mem://a','name':'A','mimeType':'text/plain'}],'nextCursor':'p2'}
+    elif method=='resources/templates/list':
+        result={'resourceTemplates':[{'uriTemplate':'mem://item/{id}','name':'Item'}]}
+    elif method=='resources/read':
+        uri=req['params']['uri']
+        result={'contents':[{'uri':uri,'mimeType':'text/plain','text':'alpha' if uri=='mem://a' else 'item 7'}]}
     elif method=='tools/list':
         pages+=1
         Path('lists').write_text(str(pages))
@@ -1098,6 +1205,85 @@ for line in sys.stdin:
             );
             fixture.runtime.shutdown().await;
         }
+    }
+
+    #[tokio::test]
+    async fn resources_list_paginate_and_read_through_the_actor() {
+        let fixture = Fixture::new("resources");
+        let status = fixture.connect().await;
+        let connected = fixture.phase(ConnectionPhase::Connected).await;
+        assert!(connected.resources && !connected.prompts);
+        assert_eq!(connected.name, "Fixture");
+        let connections = &fixture.runtime.connections;
+        assert_eq!(
+            connections.resource_servers(&fixture.documents).unwrap()[0].connection_id,
+            status.connection_id
+        );
+        let listing = connections
+            .list_resources(status.connection_id, &fixture.documents)
+            .await
+            .unwrap();
+        let uris: Vec<_> = listing
+            .resources
+            .iter()
+            .map(|item| item.uri.as_str())
+            .collect();
+        assert_eq!(uris, ["mem://a", "mem://b"]);
+        assert_eq!(listing.templates[0].variables, ["id"]);
+        assert!(!listing.truncated);
+        let read = connections
+            .read_resource(status.connection_id, &fixture.documents, "mem://a".into())
+            .await
+            .unwrap();
+        assert!(
+            matches!(&read.parts[0], crate::integrations::resources::ResourcePart::Text { text, .. } if text == "alpha")
+        );
+        let uri = crate::integrations::uri_template::expand(
+            &listing.templates[0].uri_template,
+            &[("id".to_owned(), "7".to_owned())].into(),
+        )
+        .unwrap();
+        assert!(connections
+            .read_resource(status.connection_id, &fixture.documents, uri)
+            .await
+            .is_ok());
+        assert_eq!(
+            connections
+                .read_resource(
+                    status.connection_id,
+                    &fixture.documents,
+                    "mem://missing".into()
+                )
+                .await,
+            Err(RuntimeError::ResourceUnavailable)
+        );
+        // A failed read is the server's answer, not a broken connection.
+        assert_eq!(
+            fixture
+                .phase(ConnectionPhase::Connected)
+                .await
+                .connection_id,
+            status.connection_id
+        );
+        let normal = Fixture::new("normal");
+        let other = normal.connect().await;
+        normal.phase(ConnectionPhase::Connected).await;
+        assert!(normal
+            .runtime
+            .connections
+            .resource_servers(&normal.documents)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            normal
+                .runtime
+                .connections
+                .read_resource(other.connection_id, &normal.documents, "mem://a".into())
+                .await,
+            Err(RuntimeError::ResourceUnavailable)
+        );
+        fixture.runtime.shutdown().await;
+        normal.runtime.shutdown().await;
     }
 
     #[tokio::test]

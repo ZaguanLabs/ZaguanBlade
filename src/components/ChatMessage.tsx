@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ChatMessage as ChatMessageType, ChatImage, HookApprovalRequest, ImageAttachment } from '../types/chat';
-import { User, Bot, Terminal, Brain, ChevronDown, ChevronRight, Loader2, Copy, RotateCcw, Pencil, MessageSquare, Check, FileText, Folder } from 'lucide-react';
+import type { ChatMessage as ChatMessageType, ChatImage, ChatResource, HookApprovalRequest, ImageAttachment } from '../types/chat';
+import { User, Bot, Terminal, Brain, ChevronDown, ChevronRight, Loader2, Copy, RotateCcw, Pencil, MessageSquare, Check, FileText, Folder, Database } from 'lucide-react';
 import { ToolCallDisplay } from './ToolCallDisplay';
 import { CommandOutputDisplay } from './CommandOutputDisplay';
 import { CommandApprovalCard } from './CommandApprovalCard';
@@ -274,6 +274,31 @@ const PlanSummaryDisplay: React.FC<{ todos: import('../types/events').TodoItem[]
                     ))}
                 </div>
             )}
+        </div>
+    );
+};
+
+/** Provenance of MCP resources the user attached; their text is not shown. */
+export const AttachedResourcesDisplay: React.FC<{ resources: ChatResource[] }> = ({ resources }) => {
+    const { t } = useTranslation();
+    return (
+        <div className="overflow-hidden rounded-[calc(var(--panel-radius)*0.75)] border border-(--accent-ai)/15 bg-[color-mix(in_srgb,var(--accent-ai)_6%,transparent)]">
+            <div className="flex items-center gap-2 border-b border-(--accent-ai)/10 px-3 py-1.5 text-[10px] text-(--accent-ai)/90">
+                <span className="font-semibold uppercase tracking-[0.16em]">{t('chat.mcpResources.attached')}</span>
+                <span className="text-(--accent-ai)/60">{resources.length}</span>
+            </div>
+            <ul className="flex flex-wrap gap-1.5 px-3 py-2">
+                {resources.map((resource) => (
+                    <li
+                        key={`${resource.server}:${resource.uri}`}
+                        title={`${resource.server} · ${resource.uri}${resource.truncated ? ` · ${t('chat.mcpResources.truncated')}` : ''}`}
+                        className="inline-flex max-w-full items-center gap-1.5 rounded-[calc(var(--panel-radius)*0.45)] border border-(--accent-ai)/15 bg-(--bg-app)/30 px-2 py-1 text-[10px] text-(--fg-secondary)"
+                    >
+                        <Database className="h-3 w-3 shrink-0 text-(--accent-ai)/80" aria-hidden="true" />
+                        <span className="truncate">{resource.server}: {resource.name}</span>
+                    </li>
+                ))}
+            </ul>
         </div>
     );
 };
@@ -901,6 +926,10 @@ const ChatMessageComponent: React.FC<ChatMessageProps> = ({
                     </div>
                 )}
 
+                {isUser && message.resources && message.resources.length > 0 && (
+                    <AttachedResourcesDisplay resources={message.resources} />
+                )}
+
                 {isUser && message.mentions && message.mentions.length > 0 && (
                     <ReferencedPathsDisplay mentions={message.mentions} onOpenFile={onOpenFile} />
                 )}
@@ -1229,6 +1258,8 @@ export const ChatMessage = React.memo(ChatMessageComponent, (prevProps, nextProp
     if ((prevMsg.streaming?.activeKind ?? null) !== (nextMsg.streaming?.activeKind ?? null)) return false;
     if ((prevMsg.streaming?.activeBlockId ?? null) !== (nextMsg.streaming?.activeBlockId ?? null)) return false;
     if (!areMentionsEqual(prevMsg.mentions, nextMsg.mentions)) return false;
+    // Attached resources are fixed when a message is created.
+    if (prevMsg.resources?.length !== nextMsg.resources?.length) return false;
     if (prevMsg.tool_calls?.length !== nextMsg.tool_calls?.length) return false;
     if (prevMsg.commandExecutions?.length !== nextMsg.commandExecutions?.length) return false;
     if (prevMsg.blocks?.length !== nextMsg.blocks?.length) return false;

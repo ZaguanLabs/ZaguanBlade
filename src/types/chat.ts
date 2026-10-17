@@ -15,6 +15,22 @@ export interface ImageAttachment extends ChatImage {
     thumbnailUrl: string;
 }
 
+/** An MCP resource attached to a user message. Text lives in the model-facing
+ * message only; the transcript keeps this provenance. */
+export interface ChatResource {
+    server: string;
+    name: string;
+    uri: string;
+    mime_type?: string | null;
+    bytes: number;
+    truncated: boolean;
+}
+
+export interface ResourceAttachment extends ChatResource {
+    id: string;
+    text: string;
+}
+
 export interface ComposerMention {
     kind: 'path';
     path: string;
@@ -24,6 +40,7 @@ export interface ComposerMention {
 export interface QueuedRequest {
     text: string;
     attachments?: ImageAttachment[];
+    resources?: ResourceAttachment[];
     mentions?: ComposerMention[];
     mode: ChatMode;
 }
@@ -33,6 +50,7 @@ export interface ChatMessage {
     role: 'User' | 'Assistant' | 'System' | 'Tool';
     content: string;
     images?: ChatImage[];
+    resources?: ChatResource[];
     mentions?: ComposerMention[];
     reasoning?: string;
     tool_call_id?: string;

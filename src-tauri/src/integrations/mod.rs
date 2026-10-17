@@ -16,9 +16,11 @@ pub(crate) mod native_turn;
 pub(crate) mod permissions;
 pub mod probe;
 pub mod process;
+pub mod resources;
 pub(crate) mod result_artifact;
 pub mod runtime;
 pub mod store;
+pub mod uri_template;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -53,4 +55,5 @@ pub enum RuntimeError {
     CallLimit,
     AuthenticationRequired,
     ServerUnreachable,
+    ResourceUnavailable,
 }

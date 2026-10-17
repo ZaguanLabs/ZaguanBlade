@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { McpConnectionRequest } from './mcpConnection';
 import type { IntegrationLaunchReview, McpConnectionStatus } from '../types/integrations';
 const review: IntegrationLaunchReview = { ticket_id: 'ticket', kind: 'process', executable: '/server', cwd: '/workspace', args: [] };
-const status: McpConnectionStatus = { connection_id: 'ticket', integration_id: 'server', workspace: { workspace_id: 'workspace', generation: 'generation' }, phase: 'connecting', protocol_version: null, catalog_revision: null, tools: 0, error: null };
+const status: McpConnectionStatus = { connection_id: 'ticket', integration_id: 'server', name: 'Server', workspace: { workspace_id: 'workspace', generation: 'generation' }, phase: 'connecting', protocol_version: null, catalog_revision: null, tools: 0, resources: false, prompts: false, error: null };
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
 
 test('late prepare is cancelled and never becomes launchable', async () => {

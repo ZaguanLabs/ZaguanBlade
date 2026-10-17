@@ -222,6 +222,35 @@
       "missingMimeType": "Falta el tipo MIME de la imagen.",
       "unsupportedType": "Tipo de imagen no compatible ({{mimeType}})."
     },
+    "mcpResources": {
+      "title": "Adjuntar recurso MCP",
+      "help": "Elige un recurso de un servidor MCP conectado. Su contenido se añade a tu próximo mensaje como datos externos y se envía al modelo seleccionado.",
+      "loading": "Cargando…",
+      "noServers": "Ningún servidor MCP conectado en este espacio de trabajo ofrece recursos. Conecta uno en Ajustes → MCP / ACP.",
+      "server": "Servidor",
+      "chooseServer": "Elige un servidor",
+      "filter": "Filtrar recursos",
+      "empty": "Este servidor no ofrece recursos.",
+      "listTruncated": "Solo se muestra una parte de la lista de este servidor.",
+      "template": "Plantilla",
+      "read": "Leer recurso",
+      "preview": "Vista previa",
+      "size": "Unos {{kb}} KB de texto",
+      "truncated": "El contenido se ha recortado para ajustarse al límite de adjuntos.",
+      "images_one": "{{count}} imagen se añadirá como imagen adjunta.",
+      "images_other": "{{count}} imágenes se añadirán como imágenes adjuntas.",
+      "unsupported_one": "{{count}} parte binaria no se puede adjuntar y se omitirá.",
+      "unsupported_other": "{{count}} partes binarias no se pueden adjuntar y se omitirán.",
+      "nothing": "Este recurso no tiene contenido que se pueda adjuntar.",
+      "attach": "Adjuntar",
+      "remove": "Quitar el recurso {{name}}",
+      "attached": "Recursos MCP",
+      "refused": {
+        "count": "Puedes adjuntar hasta {{max}} recursos por mensaje.",
+        "size": "Los recursos adjuntos están limitados a {{kb}} KB de texto por mensaje.",
+        "duplicate": "Este recurso ya está adjunto."
+      }
+    },
     "system": {
       "requestFailed": "La solicitud ha fallado",
       "contextLimitReachedTitle": "Se ha alcanzado el límite de contexto",
@@ -817,7 +846,8 @@
           "artifact_unavailable": "El resultado completo no está disponible; se conserva la vista previa en la conversación.",
           "call_limit": "Este turno ha alcanzado el límite de llamadas MCP o ha repetido un identificador de llamada.",
           "authentication_required": "El servidor requiere autenticación o ha rechazado las credenciales configuradas. Revisa las cabeceras y las credenciales guardadas. El inicio de sesión con OAuth aún no está disponible.",
-          "server_unreachable": "No se ha podido contactar con el servidor. Comprueba la URL, la conexión de red y el certificado del servidor."
+          "server_unreachable": "No se ha podido contactar con el servidor. Comprueba la URL, la conexión de red y el certificado del servidor.",
+          "resource_unavailable": "El servidor no ha podido proporcionar este recurso. Revisa la dirección o los valores de la plantilla."
         },
         "mcpResult_other": "{{count}} herramientas; recursos: {{resources}}; prompts: {{prompts}}.",
         "acpResult_other": "El agente anuncia {{count}} métodos de autenticación. No se ha iniciado ninguna sesión.",
@@ -1379,7 +1409,9 @@
       "region": "Región",
       "regionDescription": "Recorta una ventana seleccionada antes de adjuntarla.",
       "image": "Imagen",
-      "imageDescription": "Añade una imagen desde el disco."
+      "imageDescription": "Añade una imagen desde el disco.",
+      "mcpResource": "Recurso MCP",
+      "mcpResourceDescription": "Añade contenido de un servidor MCP conectado."
     },
     "preview": {
       "title": "Captura realizada",

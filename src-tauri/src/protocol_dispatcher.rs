@@ -180,6 +180,7 @@ pub async fn dispatch(
                     images,
                     context,
                     mentions,
+                    resources,
                     mode,
                 } => {
                     // Extract context if available
@@ -221,6 +222,7 @@ pub async fn dispatch(
                         diagnostics,
                         active_buffer_content,
                         mentions,
+                        resources,
                         mode,
                         window.clone(),
                         state.clone(),

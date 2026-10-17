@@ -53,11 +53,21 @@ export type ChatMention = {
 };
 
 export type ChatIntent =
-    | { type: "SendMessage"; payload: { content: string; model: string; images?: ChatImagePayload[]; context?: EditorContext; mentions?: ChatMention[]; mode?: ChatMode } }
+    | { type: "SendMessage"; payload: { content: string; model: string; images?: ChatImagePayload[]; context?: EditorContext; mentions?: ChatMention[]; resources?: ChatResourcePayload[]; mode?: ChatMode } }
     | { type: "StopGeneration"; payload: Record<string, never> }
     | { type: "ClearHistory"; payload: Record<string, never> }
     | { type: "NewConversation"; payload: { model: string } }
     | { type: "SetSelectedModel"; payload: { model: string } };
+
+/** User-selected MCP resource text, bounded again by the backend. */
+export type ChatResourcePayload = {
+    server: string;
+    name: string;
+    uri: string;
+    mime_type: string | null;
+    text: string;
+    truncated: boolean;
+};
 
 export type ChatImagePayload = {
     data: string;

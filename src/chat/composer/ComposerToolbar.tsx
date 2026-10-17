@@ -24,6 +24,7 @@ export const ComposerToolbar: React.FC<{
     onRemoveAttachment: (id: string) => void;
     onCapture: (result: CaptureResult, name: string) => void;
     onAttachmentError: (message: string) => void;
+    onAttachResource?: () => void;
     onSubmit: () => void;
     onStop?: () => void;
 }> = ({
@@ -43,6 +44,7 @@ export const ComposerToolbar: React.FC<{
     onRemoveAttachment,
     onCapture,
     onAttachmentError,
+    onAttachResource,
     onSubmit,
     onStop,
 }) => {
@@ -58,6 +60,7 @@ export const ComposerToolbar: React.FC<{
                     onUploadImage={onUploadImage}
                     onCapture={onCapture}
                     onError={onAttachmentError}
+                    onAttachResource={onAttachResource}
                 />
                 <div className="inline-flex rounded-[calc(var(--panel-radius)*0.55)] border border-(--border-subtle) bg-(--bg-app) p-1">
                     <button type="button" onClick={() => setChatMode('code')} disabled={disabled} aria-pressed={chatMode === 'code'} className={`inline-flex items-center gap-1 rounded-[calc(var(--panel-radius)*0.35)] px-2 py-1 text-[10px] ${chatMode === 'code' ? 'bg-(--accent-ai)/15 text-(--fg-primary)' : 'text-(--fg-tertiary)'}`}>

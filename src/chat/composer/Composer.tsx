@@ -1,7 +1,8 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CaptureResult } from '../../types/screenshot';
-import type { ChatMode, ComposerMention, ModelInfo, QueuedRequest } from '../../types/chat';
+import { X } from 'lucide-react';
+import type { ChatMode, ComposerMention, ModelInfo, QueuedRequest, ResourceAttachment } from '../../types/chat';
 import { ComposerTextarea, type ComposerTextareaHandle, replaceActiveTrigger } from './ComposerTextarea';
 import { ComposerToolbar } from './ComposerToolbar';
 import { MentionSuggestions, type ComposerSuggestion } from './MentionSuggestions';
@@ -10,6 +11,8 @@ import { usePathSuggestions, type WorkspacePathMatch } from './usePathSuggestion
 import { ScreenshotAnnotationModal } from '../../components/image-annotation/ScreenshotAnnotationModal';
 import { ScreenshotCapturePreview } from '../../components/image-annotation/ScreenshotCapturePreview';
 import { extractBase64FromDataUrl, extractMimeTypeFromDataUrl } from '../../utils/imageUtils';
+import { attachRefusal, MAX_RESOURCE_ATTACHMENTS, MAX_RESOURCE_TEXT_BYTES, type ResourceSelection } from '../../utils/mcpResources';
+import { McpResourcePicker } from './McpResourcePicker';
 
 const MAX_COMPOSER_HISTORY = 20;
 
@@ -20,7 +23,7 @@ type PendingCapture = {
 };
 
 interface ComposerProps {
-    onSend: (text: string, attachments?: ReturnType<typeof useComposerAttachments>['attachments'], mentions?: ComposerMention[], mode?: ChatMode) => void;
+    onSend: (text: string, attachments?: ReturnType<typeof useComposerAttachments>['attachments'], mentions?: ComposerMention[], mode?: ChatMode, resources?: ResourceAttachment[]) => void;
     onStop?: () => void;
     disabled?: boolean;
     loading?: boolean;
@@ -59,6 +62,8 @@ export const Composer: React.FC<ComposerProps> = ({
     const [selectedMentions, setSelectedMentions] = useState<Record<string, WorkspacePathMatch>>({});
     const [pendingCapture, setPendingCapture] = useState<PendingCapture | null>(null);
     const [editingCapture, setEditingCapture] = useState<PendingCapture | null>(null);
+    const [resources, setResources] = useState<ResourceAttachment[]>([]);
+    const [resourcePickerOpen, setResourcePickerOpen] = useState(false);
     const textareaRef = useRef<ComposerTextareaHandle>(null);
     const textareaDomCursorRef = useRef(0);
     const textRef = useRef('');
@@ -107,7 +112,8 @@ export const Composer: React.FC<ComposerProps> = ({
         }
         const submittedText = textRef.current;
         const submittedAttachments = attachments.attachments;
-        if (!submittedText.trim() && submittedAttachments.length === 0) {
+        const submittedResources = resources;
+        if (!submittedText.trim() && submittedAttachments.length === 0 && submittedResources.length === 0) {
             return;
         }
         submitLockedRef.current = true;
@@ -128,13 +134,34 @@ export const Composer: React.FC<ComposerProps> = ({
         }
         historyIndexRef.current = null;
         historyDraftRef.current = '';
-        onSend(submittedText, submittedAttachments, collectMentions(submittedText, selectedMentions), chatMode);
+        onSend(submittedText, submittedAttachments, collectMentions(submittedText, selectedMentions), chatMode, submittedResources.length > 0 ? submittedResources : undefined);
         setText('');
         setMentionQuery(null);
         setSelectedMentions({});
+        setResources([]);
         attachments.clearAttachments();
         requestAnimationFrame(() => textareaRef.current?.resize());
-    }, [attachments, chatMode, disabled, onSend, selectedMentions]);
+    }, [attachments, chatMode, disabled, onSend, resources, selectedMentions]);
+
+    const attachResource = useCallback((selection: ResourceSelection) => {
+        const next = selection.attachment;
+        if (next) {
+            const refusal = attachRefusal(resources, next);
+            if (refusal) {
+                attachments.setAttachmentError(t(`chat.mcpResources.refused.${refusal}`, {
+                    max: MAX_RESOURCE_ATTACHMENTS,
+                    kb: MAX_RESOURCE_TEXT_BYTES / 1024,
+                }));
+                return;
+            }
+            setResources((current) => [...current, next]);
+            attachments.setAttachmentError(null);
+        }
+        for (const image of selection.images) {
+            void attachments.appendDataUrl(image.dataUrl, image.name);
+        }
+        setResourcePickerOpen(false);
+    }, [attachments, resources, t]);
 
     const updateTextFromHistory = useCallback((nextText: string) => {
         textRef.current = nextText;
@@ -249,6 +276,7 @@ export const Composer: React.FC<ComposerProps> = ({
         textRef.current = prefillRequest.text;
         setText(prefillRequest.text);
         setChatMode(prefillRequest.mode);
+        setResources(prefillRequest.resources ?? []);
         setSelectedMentions(Object.fromEntries((prefillRequest.mentions || []).map((mention) => [
             mention.path,
             { path: mention.path, is_dir: mention.is_dir },
@@ -266,7 +294,7 @@ export const Composer: React.FC<ComposerProps> = ({
                     <ComposerToolbar
                         loading={loading}
                         disabled={disabled}
-                        canSend={text.trim().length > 0 || attachments.attachments.length > 0}
+                        canSend={text.trim().length > 0 || attachments.attachments.length > 0 || resources.length > 0}
                         chatMode={chatMode}
                         setChatMode={setChatMode}
                         models={models}
@@ -280,9 +308,22 @@ export const Composer: React.FC<ComposerProps> = ({
                         onRemoveAttachment={attachments.removeAttachment}
                         onCapture={capture}
                         onAttachmentError={attachments.setAttachmentError}
+                        onAttachResource={() => setResourcePickerOpen(true)}
                         onSubmit={submit}
                         onStop={onStop}
                     />
+                    {resources.length > 0 && (
+                        <ul className="flex flex-wrap gap-1.5 px-2 pb-1" aria-label={t('chat.mcpResources.attached')}>
+                            {resources.map((resource) => (
+                                <li key={resource.id} title={`${resource.server} · ${resource.uri}`} className="inline-flex max-w-full items-center gap-1 rounded-[calc(var(--panel-radius)*0.45)] border border-[color-mix(in_srgb,var(--accent-ai)_24%,transparent)] bg-[color-mix(in_srgb,var(--accent-ai)_10%,transparent)] px-2 py-1 text-[10px] text-(--fg-secondary)">
+                                    <span className="truncate">{resource.server}: {resource.name}</span>
+                                    <button type="button" aria-label={t('chat.mcpResources.remove', { name: resource.name })} onClick={() => setResources((current) => current.filter((item) => item.id !== resource.id))} className="text-(--fg-tertiary) hover:text-(--fg-primary)">
+                                        <X className="h-3 w-3" aria-hidden="true" />
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
                     {activeMentionChips.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 px-2 pb-1">
                             {activeMentionChips.map((mention) => (
@@ -335,6 +376,9 @@ export const Composer: React.FC<ComposerProps> = ({
                     onEdit={editPendingCapture}
                     onCancel={() => setPendingCapture(null)}
                 />
+            )}
+            {resourcePickerOpen && (
+                <McpResourcePicker onAttach={attachResource} onClose={() => setResourcePickerOpen(false)} />
             )}
             {editingCapture && (
                 <ScreenshotAnnotationModal

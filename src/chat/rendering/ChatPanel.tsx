@@ -1,7 +1,7 @@
 import { McpTurnPanel } from '../../components/McpTurnPanel';
 import React, { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { ChatMessage as ChatMessageType, ChatMode, ComposerMention, HookApprovalRequest, ImageAttachment, ModelInfo, QueuedRequest, ToolActivityState } from '../../types/chat';
+import type { ChatMessage as ChatMessageType, ChatMode, ComposerMention, HookApprovalRequest, ImageAttachment, ModelInfo, QueuedRequest, ResourceAttachment, ToolActivityState } from '../../types/chat';
 import type { StructuredAction, TodoItem } from '../../types/events';
 import type { UncommittedChange } from '../../types/uncommitted';
 import type { ChatActivity } from '../../utils/chatTimeline';
@@ -26,7 +26,7 @@ interface ChatPanelProps {
     messages: ChatMessageType[];
     loading: boolean;
     error: string | null;
-    sendMessage: (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode) => void;
+    sendMessage: (text: string, attachments?: ImageAttachment[], mentions?: ComposerMention[], mode?: ChatMode, resources?: ResourceAttachment[]) => void;
     stopGeneration: () => void;
     models: ModelInfo[];
     selectedModelId: string;

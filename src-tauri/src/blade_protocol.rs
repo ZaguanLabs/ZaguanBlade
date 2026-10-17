@@ -102,6 +102,8 @@ pub enum ChatIntent {
         #[serde(default)]
         mentions: Option<Vec<ChatMention>>,
         #[serde(default)]
+        resources: Option<Vec<crate::integrations::resources::ResourcePayload>>,
+        #[serde(default)]
         mode: Option<String>,
     },
     StopGeneration {},
@@ -1001,6 +1003,7 @@ mod tests {
             images: None,
             context: None,
             mentions: None,
+            resources: None,
             mode: None,
         });
 

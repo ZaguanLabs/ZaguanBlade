@@ -27,6 +27,19 @@ pub struct ChatMention {
     pub is_dir: bool,
 }
 
+/// Provenance of an MCP resource attached to a user message. The attached
+/// text lives in `backend_content` only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatResource {
+    pub server: String,
+    pub name: String,
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    pub bytes: u64,
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub id: Option<String>,
@@ -36,6 +49,8 @@ pub struct ChatMessage {
     pub backend_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<ChatImage>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<Vec<ChatResource>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mentions: Option<Vec<ChatMention>>,
     pub reasoning: Option<String>,
@@ -58,6 +73,7 @@ impl ChatMessage {
             content,
             backend_content: None,
             images: None,
+            resources: None,
             mentions: None,
             reasoning: None,
             tool_call_id: None,

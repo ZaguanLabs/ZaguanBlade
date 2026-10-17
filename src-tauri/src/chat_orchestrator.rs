@@ -265,6 +265,7 @@ pub async fn handle_send_message<R: Runtime>(
     diagnostics: Option<Vec<WorkspaceDiagnostic>>,
     active_buffer_content: Option<String>,
     mentions: Option<Vec<ChatMention>>,
+    resources: Option<Vec<crate::integrations::resources::ResourcePayload>>,
     mode: Option<String>,
     window: tauri::Window<R>,
     state: State<'_, AppState>,
@@ -496,6 +497,21 @@ pub async fn handle_send_message<R: Runtime>(
             .map_err(|e| format!("Failed to lock selection_end_line: {}", e))? = selection_end_line;
     }
 
+    // Attached last: resource text must not steer path inference or the
+    // planning-artifact check above.
+    let resource_provenance =
+        match crate::integrations::resources::attach(resources.unwrap_or_default())? {
+            Some((block, provenance)) => {
+                actual_message = if actual_message.trim().is_empty() {
+                    block
+                } else {
+                    format!("{actual_message}\n\n{block}")
+                };
+                Some(provenance)
+            }
+            None => None,
+        };
+
     // 1. Add User Message
     {
         let mut conversation = state
@@ -508,6 +524,7 @@ pub async fn handle_send_message<R: Runtime>(
         );
         chat_msg.backend_content = Some(actual_message.clone());
         chat_msg.images = images.clone();
+        chat_msg.resources = resource_provenance;
         if !normalized_mentions.is_empty() {
             chat_msg.mentions = Some(
                 normalized_mentions
