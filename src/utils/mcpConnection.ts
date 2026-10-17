@@ -14,12 +14,13 @@ export class McpConnectionRequest {
         this.ticket = review.ticket_id;
         return review;
     }
-    async connect(): Promise<McpConnectionStatus | null> {
+    /** `remember` keeps this exact launch to start automatically in the workspace. */
+    async connect(remember = false): Promise<McpConnectionStatus | null> {
         if (this.disposed || !this.ticket || this.running) return null;
         this.running = true;
         const ticket = this.ticket;
         try {
-            const status = await this.invoke<McpConnectionStatus>('connect_mcp', { ticketId: ticket });
+            const status = await this.invoke<McpConnectionStatus>('connect_mcp', { ticketId: ticket, remember });
             if (this.disposed) { await this.cancel(ticket); return null; }
             return status;
         } finally { this.ticket = null; }

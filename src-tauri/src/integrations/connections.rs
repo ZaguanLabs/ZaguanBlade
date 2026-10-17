@@ -2728,4 +2728,93 @@ for line in sys.stdin:
         assert!(turn.state().unwrap().pending.is_empty());
         fixture.runtime.shutdown().await;
     }
+
+    #[tokio::test]
+    async fn remembered_launches_reconnect_until_the_launch_changes() {
+        let mut fixture = Fixture::new("normal");
+        let review = fixture
+            .runtime
+            .prepare_connection(fixture.id, fixture.revision.clone(), &fixture.documents)
+            .unwrap();
+        let status = fixture
+            .runtime
+            .connect_remembering(review.ticket_id, fixture.documents.clone(), true)
+            .await
+            .unwrap();
+        fixture.phase(ConnectionPhase::Connected).await;
+        assert_eq!(
+            fixture.runtime.remembered_launches(&fixture.documents),
+            vec![fixture.id]
+        );
+        let disconnect = |fixture: &Fixture, connection: Uuid| {
+            fixture
+                .runtime
+                .connections
+                .disconnect(connection, &fixture.documents)
+                .unwrap();
+        };
+        disconnect(&fixture, status.connection_id);
+        fixture.phase(ConnectionPhase::Disconnected).await;
+
+        fixture
+            .runtime
+            .connect_remembered(fixture.documents.clone())
+            .await;
+        let reconnected = fixture.phase(ConnectionPhase::Connected).await;
+        assert_ne!(reconnected.connection_id, status.connection_id);
+        disconnect(&fixture, reconnected.connection_id);
+        fixture.phase(ConnectionPhase::Disconnected).await;
+
+        let other_root = tempfile::tempdir().unwrap();
+        let other = Arc::new(DocumentService::new(other_root.path().into()));
+        assert!(fixture.runtime.remembered_launches(&other).is_empty());
+
+        fixture.configure(|config| {
+            if let ConnectionConfig::Mcp {
+                transport: McpTransport::Stdio { process },
+            } = &mut config.entries[0].connection
+            {
+                process.args.push("changed".into());
+            }
+        });
+        fixture
+            .runtime
+            .connect_remembered(fixture.documents.clone())
+            .await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            fixture
+                .runtime
+                .connections
+                .status(fixture.id, &fixture.documents)
+                .unwrap()
+                .unwrap()
+                .phase,
+            ConnectionPhase::Disconnected
+        );
+        assert!(fixture
+            .runtime
+            .remembered_launches(&fixture.documents)
+            .is_empty());
+
+        let review = fixture
+            .runtime
+            .prepare_connection(fixture.id, fixture.revision.clone(), &fixture.documents)
+            .unwrap();
+        fixture
+            .runtime
+            .connect_remembering(review.ticket_id, fixture.documents.clone(), true)
+            .await
+            .unwrap();
+        fixture.phase(ConnectionPhase::Connected).await;
+        fixture
+            .runtime
+            .forget_launch(fixture.id, &fixture.documents)
+            .unwrap();
+        assert!(fixture
+            .runtime
+            .remembered_launches(&fixture.documents)
+            .is_empty());
+        fixture.runtime.shutdown().await;
+    }
 }

@@ -298,12 +298,61 @@ pub async fn connect_mcp(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, AppState>,
     ticket_id: Uuid,
+    remember: Option<bool>,
 ) -> Result<crate::integrations::connections::ConnectionStatus, RuntimeError> {
     runtime_desktop_only(&window)?;
     let documents = state
         .document_service()
         .map_err(|_| RuntimeError::WorkspaceChanged)?;
-    state.integrations.connect(ticket_id, documents).await
+    match remember {
+        Some(remember) => {
+            state
+                .integrations
+                .connect_remembering(ticket_id, documents, remember)
+                .await
+        }
+        None => state.integrations.connect(ticket_id, documents).await,
+    }
+}
+
+/// Integrations that connect automatically when this workspace opens.
+#[tauri::command]
+pub async fn get_remembered_mcp_launches(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    workspace_path: String,
+) -> Result<Vec<Uuid>, RuntimeError> {
+    runtime_desktop_only(&window)?;
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    let runtime = state.integrations.clone();
+    tokio::task::spawn_blocking(move || {
+        let root =
+            std::fs::canonicalize(workspace_path).map_err(|_| RuntimeError::WorkspaceChanged)?;
+        if root != documents.workspace_root() {
+            return Err(RuntimeError::WorkspaceChanged);
+        }
+        Ok(runtime.remembered_launches(&documents))
+    })
+    .await
+    .map_err(|_| RuntimeError::WorkspaceChanged)?
+}
+
+#[tauri::command]
+pub async fn forget_mcp_launch(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    integration_id: Uuid,
+) -> Result<(), RuntimeError> {
+    runtime_desktop_only(&window)?;
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    let runtime = state.integrations.clone();
+    tokio::task::spawn_blocking(move || runtime.forget_launch(integration_id, &documents))
+        .await
+        .map_err(|_| RuntimeError::PolicyUnavailable)?
 }
 
 #[tauri::command]

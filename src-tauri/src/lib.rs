@@ -257,6 +257,8 @@ pub fn run() {
             commands::integrations::prepare_integration_test,
             commands::integrations::prepare_mcp_connection,
             commands::integrations::connect_mcp,
+            commands::integrations::get_remembered_mcp_launches,
+            commands::integrations::forget_mcp_launch,
             commands::integrations::get_mcp_connections,
             commands::integrations::disconnect_mcp,
             commands::integrations::refresh_mcp_catalog,

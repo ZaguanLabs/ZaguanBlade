@@ -1026,6 +1026,9 @@
         "disconnect": "Disconnect",
         "refresh": "Refresh tools",
         "enableFirst": "Enable this server and save your settings before connecting.",
+        "remember": "Connect automatically when this workspace opens, as long as this launch stays the same",
+        "automatic": "Connects automatically when this workspace opens. Any change to the program, its arguments, its environment or the executable itself needs a new review.",
+        "forget": "Stop connecting automatically",
         "checking": "Checking connection…",
         "connecting": "Connecting…",
         "connected": "Connected",
@@ -1761,6 +1764,12 @@
     "terminalExitedEarly": "Command terminal exited before completion (exit {{code}})."
   },
   "mcpChat": {
+    "notice": {
+      "notConnected_one": "{{names}} is not connected, so this model can't use its tools.",
+      "notConnected_other": "{{names}} are not connected, so this model can't use their tools.",
+      "cloudModel": "Zaguán cloud models can't use MCP tools yet. Choose an Ollama or OpenAI-compatible model to use your connected servers.",
+      "openSettings": "Open MCP settings"
+    },
     "title": "MCP tools",
     "catalog": "MCP: {{count}} tools in this turn (limit {{limit}})",
     "catalogHelp": "The catalog is fixed for this user turn. Connect or refresh servers in Settings, then send a new message to use the updated catalog. Tool schemas are shared with the selected model provider.",

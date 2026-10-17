@@ -55,4 +55,13 @@ impl PreparedTransport {
             Self::Http(http) => &http.fingerprint,
         }
     }
+
+    /// Binds a remembered launch. HTTP launches inherit nothing from the
+    /// desktop session, so their approval fingerprint already qualifies.
+    pub fn trust_fingerprint(&self) -> &str {
+        match self {
+            Self::Process(process) => &process.trust_fingerprint,
+            Self::Http(http) => &http.fingerprint,
+        }
+    }
 }

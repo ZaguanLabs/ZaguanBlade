@@ -90,6 +90,7 @@ pub async fn open_workspace_logic(
 
     crate::fs_watcher::restart_fs_watcher(app_handle);
     crate::blade_event_scheduler::queue_refresh_explorer(app_handle);
+    crate::startup::connect_remembered_integrations(app_handle);
 
     if state
         .startup_services_started

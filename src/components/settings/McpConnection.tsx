@@ -13,6 +13,9 @@ export interface LiveConnectionContext {
     status?: McpConnectionStatus;
     phase: 'loading' | 'ready' | 'failed';
     update: (status: McpConnectionStatus) => void;
+    /** Whether this server connects automatically in the workspace. */
+    remembered?: boolean;
+    setRemembered?: (remembered: boolean) => void;
 }
 const buttonClass = 'rounded-md border border-(--border-default) px-3 py-2 text-sm text-(--fg-secondary) hover:bg-(--bg-surface-hover) disabled:opacity-50';
 export function McpConnection({ entry, revision, workspacePath, canTest, live }: ConnectionTestContext & { entry: IntegrationDefinition; live: LiveConnectionContext }) {
@@ -23,6 +26,7 @@ export function McpConnection({ entry, revision, workspacePath, canTest, live }:
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [catalog, setCatalog] = useState<McpCatalog | null>(null);
+    const [automatic, setAutomatic] = useState(true);
     const status = live.status;
     useEffect(() => {
         setReview(null); setBusy(false); setError(null);
@@ -47,7 +51,7 @@ export function McpConnection({ entry, revision, workspacePath, canTest, live }:
         request.current = current; setBusy(true); setError(null);
         try {
             const next = await current.prepare(entry.id, revision, workspacePath);
-            if (request.current === current) setReview(next);
+            if (request.current === current) { setAutomatic(true); setReview(next); }
         } catch (failure) {
             if (request.current === current) { setError(integrationProbeErrorKey(failure)); cancel(); }
         } finally { if (request.current === current) setBusy(false); }
@@ -57,8 +61,8 @@ export function McpConnection({ entry, revision, workspacePath, canTest, live }:
         if (!current || busy) return;
         setBusy(true); setReview(null);
         try {
-            const next = await current.connect();
-            if (request.current === current && next) live.update(next);
+            const next = await current.connect(automatic);
+            if (request.current === current && next) { live.update(next); live.setRemembered?.(automatic); }
         } catch (failure) {
             if (request.current === current) setError(integrationProbeErrorKey(failure));
         } finally {
@@ -74,6 +78,13 @@ export function McpConnection({ entry, revision, workspacePath, canTest, live }:
         catch (failure) { if (operation.current === current) setError(integrationProbeErrorKey(failure)); }
         finally { if (operation.current === current) setBusy(false); }
     };
+    const forget = async () => {
+        if (busy) return;
+        setBusy(true); setError(null);
+        try { await invoke('forget_mcp_launch', { integrationId: entry.id }); live.setRemembered?.(false); }
+        catch (failure) { setError(integrationProbeErrorKey(failure)); }
+        finally { setBusy(false); }
+    };
     const active = status && ['connecting', 'connected', 'refreshing', 'stopping'].includes(status.phase);
     return <section className="space-y-2 border-t border-(--border-default) pt-3">
         <h4 className="text-sm font-semibold text-(--fg-primary)">{t('settings.integrations.connection.title')}</h4>
@@ -86,10 +97,20 @@ export function McpConnection({ entry, revision, workspacePath, canTest, live }:
             {busy && request.current ? <button type="button" className={buttonClass} onClick={cancel}>{t('common.cancel')}</button> : null}
         </div>
         {!entry.enabled ? <p className="text-xs text-(--fg-tertiary)">{t('settings.integrations.connection.enableFirst')}</p> : null}
+        {live.remembered ? <div className="space-y-1">
+            <p className="text-xs text-(--fg-tertiary)">{t('settings.integrations.connection.automatic')}</p>
+            <button type="button" className={buttonClass} disabled={busy} onClick={() => void forget()}>{t('settings.integrations.connection.forget')}</button>
+        </div> : null}
         {error || status?.error ? <p role="alert" className="text-sm text-(--state-danger)">{t(error ?? integrationProbeErrorKey(status?.error))}</p> : null}
         {catalog && live.phase === 'ready' && status?.phase === 'connected' && catalog.revision === status.catalog_revision ? <IntegrationToolCatalog catalog={catalog} serverName={entry.name} origin="connection" /> : null}
         <ConfirmModal isOpen={!!review} title={t('settings.integrations.connection.reviewTitle', { name: entry.name })}
             confirmLabel={t('settings.integrations.connection.allow')} onConfirm={() => void connect()} onCancel={cancel}
-            message={<LaunchReviewDetails review={review} purpose="connection" />} />
+            message={<>
+                <LaunchReviewDetails review={review} purpose="connection" />
+                <label className="mt-3 flex items-start gap-2 text-sm text-(--fg-secondary)">
+                    <input type="checkbox" className="mt-0.5" checked={automatic} onChange={event => setAutomatic(event.target.checked)} />
+                    {t('settings.integrations.connection.remember')}
+                </label>
+            </>} />
     </section>;
 }

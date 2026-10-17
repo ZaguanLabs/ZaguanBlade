@@ -151,7 +151,8 @@ export function IntegrationSettings({ config, onChange, workspace, onWorkspaceCh
         {(['mcp', 'acp'] as const).map(protocol => <div key={protocol} className="space-y-3">
             <h4 className="text-sm font-semibold text-(--fg-primary)">{t(`settings.integrations.${protocol === 'mcp' ? 'servers' : 'agents'}`)}</h4>
             {config.entries.filter(entry => entry.connection.protocol === protocol).map(entry => <DefinitionFields key={entry.id}
-                entry={entry} config={config} testContext={testContext} live={{ status: live.statuses.find(status => status.integration_id === entry.id), phase: live.phase, update: live.update }} onChange={updated => onChange(replaceIntegration(config, updated))}
+                entry={entry} config={config} testContext={testContext} live={{ status: live.statuses.find(status => status.integration_id === entry.id), phase: live.phase, update: live.update,
+                    remembered: live.remembered.includes(entry.id), setRemembered: value => live.setRemembered(entry.id, value) }} onChange={updated => onChange(replaceIntegration(config, updated))}
                 onRemove={() => onChange(removeIntegration(config, entry.id))} />)}
             {!config.entries.some(entry => entry.connection.protocol === protocol) ? <p className="text-sm text-(--fg-tertiary)">
                 {t(`settings.integrations.${protocol === 'mcp' ? 'noServers' : 'noAgents'}`)}

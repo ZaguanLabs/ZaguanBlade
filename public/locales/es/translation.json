@@ -1026,6 +1026,9 @@
         "disconnect": "Desconectar",
         "refresh": "Actualizar herramientas",
         "enableFirst": "Activa este servidor y guarda los ajustes antes de conectarlo.",
+        "remember": "Conectar automáticamente al abrir este espacio de trabajo, siempre que el lanzamiento no cambie",
+        "automatic": "Se conecta automáticamente al abrir este espacio de trabajo. Cualquier cambio en el programa, sus argumentos, su entorno o el propio ejecutable requerirá una nueva revisión.",
+        "forget": "Dejar de conectar automáticamente",
         "checking": "Comprobando la conexión…",
         "connecting": "Conectando…",
         "connected": "Conectado",
@@ -1761,6 +1764,12 @@
     "terminalExitedEarly": "La terminal del comando terminó antes de completarse (salida {{code}})."
   },
   "mcpChat": {
+    "notice": {
+      "notConnected_one": "{{names}} no está conectado, así que este modelo no puede usar sus herramientas.",
+      "notConnected_other": "{{names}} no están conectados, así que este modelo no puede usar sus herramientas.",
+      "cloudModel": "Los modelos de Zaguán en la nube aún no pueden usar herramientas MCP. Elige un modelo de Ollama o compatible con OpenAI para usar tus servidores conectados.",
+      "openSettings": "Abrir ajustes de MCP"
+    },
     "title": "Herramientas MCP",
     "catalog": "MCP: {{count}} herramientas en este turno (límite: {{limit}})",
     "catalogHelp": "El catálogo se mantiene fijo durante este turno. Conecta o actualiza los servidores en Ajustes y envía un nuevo mensaje para usar el catálogo actualizado. Los esquemas de las herramientas se comparten con el proveedor del modelo seleccionado.",

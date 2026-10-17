@@ -49,6 +49,9 @@ pub struct PreparedProcess {
     pub args: Vec<String>,
     env: BTreeMap<OsString, OsString>,
     pub fingerprint: String,
+    /// Like `fingerprint`, without inherited desktop variables that can
+    /// change between logins. Binds remembered launches.
+    pub trust_fingerprint: String,
 }
 
 impl PreparedProcess {
@@ -79,6 +82,7 @@ impl PreparedProcess {
         if !cwd.is_dir() {
             return Err(RuntimeError::InvalidDirectory);
         }
+        let mut configured = BTreeMap::new();
         for (key, value) in &config.env {
             let value = match value {
                 ConfigValue::Text { value } => value.clone(),
@@ -89,6 +93,7 @@ impl PreparedProcess {
             if value.len() > 8192 || value.contains('\0') {
                 return Err(RuntimeError::InvalidSecret);
             }
+            configured.insert(OsString::from(key), OsString::from(&value));
             env.insert(key.into(), value.into());
         }
         let executable =
@@ -97,31 +102,37 @@ impl PreparedProcess {
         // metadata. No raw environment or digest is returned to the webview.
         let metadata =
             std::fs::metadata(&executable).map_err(|_| RuntimeError::ExecutableNotFound)?;
-        let mut bytes = Vec::new();
-        for value in std::iter::once(executable.as_os_str())
-            .chain(std::iter::once(cwd.as_os_str()))
-            .chain(config.args.iter().map(|arg| std::ffi::OsStr::new(arg)))
-            .chain(
-                env.iter()
-                    .flat_map(|(key, value)| [key.as_os_str(), value.as_os_str()]),
-            )
-        {
-            bytes.extend_from_slice(&(value.as_encoded_bytes().len() as u64).to_le_bytes());
-            bytes.extend_from_slice(value.as_encoded_bytes());
-        }
-        bytes.extend_from_slice(&metadata.len().to_le_bytes());
-        if let Ok(modified) = metadata.modified().and_then(|time| {
-            time.duration_since(std::time::UNIX_EPOCH)
-                .map_err(std::io::Error::other)
-        }) {
-            bytes.extend_from_slice(&modified.as_nanos().to_le_bytes());
-        }
+        let digest = |env: &BTreeMap<OsString, OsString>| {
+            let mut bytes = Vec::new();
+            for value in std::iter::once(executable.as_os_str())
+                .chain(std::iter::once(cwd.as_os_str()))
+                .chain(config.args.iter().map(|arg| std::ffi::OsStr::new(arg)))
+                .chain(
+                    env.iter()
+                        .flat_map(|(key, value)| [key.as_os_str(), value.as_os_str()]),
+                )
+            {
+                bytes.extend_from_slice(&(value.as_encoded_bytes().len() as u64).to_le_bytes());
+                bytes.extend_from_slice(value.as_encoded_bytes());
+            }
+            bytes.extend_from_slice(&metadata.len().to_le_bytes());
+            if let Ok(modified) = metadata.modified().and_then(|time| {
+                time.duration_since(std::time::UNIX_EPOCH)
+                    .map_err(std::io::Error::other)
+            }) {
+                bytes.extend_from_slice(&modified.as_nanos().to_le_bytes());
+            }
+            super::store::fingerprint(&bytes)
+        };
+        let fingerprint = digest(&env);
+        let trust_fingerprint = digest(&configured);
         Ok(Self {
             executable,
             cwd,
             args: config.args.clone(),
             env,
-            fingerprint: super::store::fingerprint(&bytes),
+            fingerprint,
+            trust_fingerprint,
         })
     }
 }
@@ -307,6 +318,51 @@ mod tests {
             PreparedProcess::resolve(&config, Uuid::new_v4(), root.path(), &NoSecrets),
             Err(RuntimeError::SecretMissing)
         ));
+    }
+
+    #[test]
+    fn trust_fingerprints_ignore_inherited_variables_but_not_configured_ones() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = config();
+        config.env.insert(
+            "MODE".into(),
+            ConfigValue::Text {
+                value: "fast".into(),
+            },
+        );
+        let resolve = |config: &ProcessConfig, bus: &str| {
+            PreparedProcess::resolve_with_env(
+                config,
+                Uuid::new_v4(),
+                root.path(),
+                &NoSecrets,
+                [(
+                    OsString::from("DBUS_SESSION_BUS_ADDRESS"),
+                    OsString::from(bus),
+                )]
+                .into(),
+            )
+            .unwrap()
+        };
+        let first = resolve(&config, "unix:abstract=a");
+        let next_login = resolve(&config, "unix:abstract=b");
+        assert_ne!(first.fingerprint, next_login.fingerprint);
+        assert_eq!(first.trust_fingerprint, next_login.trust_fingerprint);
+        config.env.insert(
+            "MODE".into(),
+            ConfigValue::Text {
+                value: "slow".into(),
+            },
+        );
+        assert_ne!(
+            first.trust_fingerprint,
+            resolve(&config, "unix:abstract=a").trust_fingerprint
+        );
+        config.args = vec!["-x".into()];
+        assert_ne!(
+            first.trust_fingerprint,
+            resolve(&config, "unix:abstract=a").trust_fingerprint
+        );
     }
 
     #[test]

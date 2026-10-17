@@ -40,3 +40,14 @@ test('closing Settings preserves an accepted connection and cannot launch it twi
     request.dispose();
     assert.deepEqual(calls, ['prepare_mcp_connection', 'connect_mcp']);
 });
+
+test('connecting sends whether to start this launch automatically', async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const request = new McpConnectionRequest(async <T>(command: string, args: Record<string, unknown>) => {
+        if (command === 'connect_mcp') sent.push(args);
+        return (command === 'prepare_mcp_connection' ? review : status) as T;
+    });
+    await request.prepare('server', 'revision', '/workspace');
+    await request.connect(true);
+    assert.deepEqual(sent, [{ ticketId: review.ticket_id, remember: true }]);
+});

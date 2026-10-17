@@ -52,6 +52,18 @@ pub fn ensure_post_ui_startup<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
     crate::fs_watcher::restart_fs_watcher(app_handle);
 
     refresh_symbols_index(app_handle);
+    connect_remembered_integrations(app_handle);
+}
+
+/// Starts the MCP servers the user chose to connect automatically in the
+/// open workspace, if their launches are unchanged.
+pub fn connect_remembered_integrations<R: Runtime>(app_handle: &tauri::AppHandle<R>) {
+    let state = app_handle.state::<AppState>();
+    let Ok(documents) = state.document_service() else {
+        return;
+    };
+    let runtime = state.integrations.clone();
+    tauri::async_runtime::spawn(async move { runtime.connect_remembered(documents).await });
 }
 
 /// Capture document identity before scheduling; a queued startup must never

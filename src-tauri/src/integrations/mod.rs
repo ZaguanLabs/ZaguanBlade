@@ -13,6 +13,7 @@ pub mod http;
 pub mod identity;
 pub(crate) mod invocation;
 pub mod launch;
+pub mod launch_trust;
 pub mod mcp_session;
 pub(crate) mod native_catalog;
 pub(crate) mod native_turn;

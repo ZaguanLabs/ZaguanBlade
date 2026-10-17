@@ -2,10 +2,12 @@
 //! grants trust. Probe and live-connection tickets have distinct purposes.
 use super::{
     config::ConnectionConfig,
+    config::IntegrationDefinition,
     connections::{self, ConnectionRegistry, ConnectionStatus},
     credentials::SecretStore,
     identity::WorkspaceIdentity,
     launch::PreparedTransport,
+    launch_trust::{LaunchTrust, TrustRecord},
     probe::{self, ProbeResult},
     process::SupervisedProcess,
     store::IntegrationStore,
@@ -107,11 +109,13 @@ pub struct IntegrationRuntime {
     /// The one interactive OAuth sign-in that may run at a time.
     signing_in: Mutex<Option<(Uuid, CancellationToken)>>,
     pub agents: Arc<super::agent_sessions::AgentSessions>,
+    trust: LaunchTrust,
 }
 
 impl IntegrationRuntime {
     pub fn new(directory: PathBuf, secrets: Arc<dyn SecretStore>) -> Self {
         Self {
+            trust: LaunchTrust::new(directory.clone()),
             directory,
             secrets,
             requests: Mutex::new(Requests::default()),
@@ -521,6 +525,148 @@ impl IntegrationRuntime {
         ticket_id: Uuid,
         documents: Arc<DocumentService>,
     ) -> Result<ConnectionStatus, RuntimeError> {
+        self.connect_inner(ticket_id, documents)
+            .await
+            .map(|(status, _)| status)
+    }
+
+    /// Connects, then remembers this exact launch for the workspace, or
+    /// forgets an earlier one when `remember` is off.
+    pub async fn connect_remembering(
+        self: &Arc<Self>,
+        ticket_id: Uuid,
+        documents: Arc<DocumentService>,
+        remember: bool,
+    ) -> Result<ConnectionStatus, RuntimeError> {
+        let workspace_id = documents.identity().workspace_id.clone();
+        let (status, fingerprint) = self.connect_inner(ticket_id, documents).await?;
+        let integration = status.integration_id;
+        let trust = self.clone();
+        let stored = tokio::task::spawn_blocking(move || {
+            if remember {
+                trust.trust.remember(TrustRecord {
+                    integration,
+                    workspace_id,
+                    fingerprint,
+                })
+            } else {
+                trust.trust.forget(integration, &workspace_id)
+            }
+        })
+        .await;
+        if !matches!(stored, Ok(Ok(()))) {
+            eprintln!(
+                "[MCP] Could not update the remembered launch for {}",
+                status.name
+            );
+        }
+        Ok(status)
+    }
+
+    pub fn forget_launch(
+        &self,
+        integration: Uuid,
+        documents: &DocumentService,
+    ) -> Result<(), RuntimeError> {
+        self.trust
+            .forget(integration, &documents.identity().workspace_id)
+    }
+
+    /// Integrations that start automatically in this workspace.
+    pub fn remembered_launches(&self, documents: &DocumentService) -> Vec<Uuid> {
+        self.trust
+            .for_workspace(&documents.identity().workspace_id)
+            .into_iter()
+            .map(|record| record.integration)
+            .collect()
+    }
+
+    /// Starts every remembered, enabled MCP server whose launch still matches
+    /// what the user approved. A changed launch loses its record, so it needs
+    /// a fresh review; one that cannot resolve now is skipped and kept.
+    pub async fn connect_remembered(self: &Arc<Self>, documents: Arc<DocumentService>) {
+        let runtime = self.clone();
+        let resolve_documents = documents.clone();
+        let launches =
+            tokio::task::spawn_blocking(move || runtime.remembered_to_start(&resolve_documents))
+                .await
+                .unwrap_or_default();
+        for (definition, prepared) in launches {
+            if self.shutting_down.load(Ordering::Acquire) || documents.cancellation().is_cancelled()
+            {
+                return;
+            }
+            let name = definition.name.clone();
+            match self.connections.start(
+                Uuid::new_v4(),
+                self.directory.clone(),
+                definition,
+                documents.clone(),
+                CancellationToken::new(),
+                prepared,
+                Instant::now() + APPROVAL_TTL,
+            ) {
+                Ok(_) => eprintln!("[MCP] Connecting {name} with its remembered approval"),
+                Err(error) => eprintln!("[MCP] Did not reconnect {name}: {error:?}"),
+            }
+        }
+    }
+
+    fn remembered_to_start(
+        &self,
+        documents: &DocumentService,
+    ) -> Vec<(IntegrationDefinition, PreparedTransport)> {
+        let workspace_id = &documents.identity().workspace_id;
+        let records = self.trust.for_workspace(workspace_id);
+        if records.is_empty() || self.shutting_down.load(Ordering::Acquire) {
+            return Vec::new();
+        }
+        let Ok(snapshot) = IntegrationStore::new(self.directory.clone()).load() else {
+            return Vec::new();
+        };
+        let mut launches = Vec::new();
+        for record in records {
+            if documents.cancellation().is_cancelled() {
+                return Vec::new();
+            }
+            let Some(entry) = snapshot
+                .config
+                .entries
+                .iter()
+                .find(|entry| entry.id == record.integration)
+            else {
+                let _ = self.trust.forget(record.integration, workspace_id);
+                continue;
+            };
+            let Ok(definition) =
+                connections::read_policy(&self.directory, documents, record.integration)
+            else {
+                continue;
+            };
+            match PreparedTransport::resolve(
+                &entry.connection,
+                record.integration,
+                documents.workspace_root(),
+                &self.secrets,
+            ) {
+                Ok(prepared) if prepared.trust_fingerprint() == record.fingerprint => {
+                    launches.push((definition, prepared));
+                }
+                Ok(_) => {
+                    eprintln!("[MCP] {} changed since it was approved; connect it again to review the launch", entry.name);
+                    let _ = self.trust.forget(record.integration, workspace_id);
+                }
+                Err(_) => {}
+            }
+        }
+        launches
+    }
+
+    async fn connect_inner(
+        self: &Arc<Self>,
+        ticket_id: Uuid,
+        documents: Arc<DocumentService>,
+    ) -> Result<(ConnectionStatus, String), RuntimeError> {
         let ticket = self.take_ticket(ticket_id, Purpose::Connection, &documents)?;
         let _running = RunningRequest {
             runtime: self.clone(),
@@ -555,15 +701,18 @@ impl IntegrationRuntime {
             if ticket.workspace_cancel.is_cancelled() {
                 return Err(RuntimeError::WorkspaceChanged);
             }
-            self.connections.start(
-                ticket_id,
-                self.directory.clone(),
-                definition,
-                documents,
-                ticket.cancel.clone(),
-                prepared,
-                ticket.expires,
-            )
+            let fingerprint = prepared.trust_fingerprint().to_owned();
+            self.connections
+                .start(
+                    ticket_id,
+                    self.directory.clone(),
+                    definition,
+                    documents,
+                    ticket.cancel.clone(),
+                    prepared,
+                    ticket.expires,
+                )
+                .map(|status| (status, fingerprint))
         };
         tokio::select! {
             biased;

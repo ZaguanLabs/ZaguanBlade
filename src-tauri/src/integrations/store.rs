@@ -89,7 +89,7 @@ pub(super) fn fingerprint(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn private_options() -> OpenOptions {
+pub(super) fn private_options() -> OpenOptions {
     let mut options = OpenOptions::new();
     #[cfg(unix)]
     {
@@ -99,7 +99,7 @@ fn private_options() -> OpenOptions {
     options
 }
 
-fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<(), ConfigError> {
+pub(super) fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<(), ConfigError> {
     let parent = path.parent().ok_or(ConfigError::WriteFailed)?;
     let temporary = parent.join(format!(".integrations.{}.tmp", Uuid::new_v4()));
     let result = (|| {

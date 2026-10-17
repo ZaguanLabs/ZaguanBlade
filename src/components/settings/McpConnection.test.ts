@@ -22,6 +22,10 @@ for (const [language, translation] of Object.entries({ en, es })) {
         assert.ok(html.includes(translation.settings.integrations.connection.refresh));
         assert.ok(!html.includes('settings.integrations.'));
         assert.ok(render(undefined).includes(translation.settings.integrations.connection.connect));
+        assert.ok(!html.includes(translation.settings.integrations.connection.forget));
+        const automatic = renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(McpConnection, { entry, revision: 'saved', workspacePath: '/workspace', canTest: true, live: { status, phase: 'ready', update: () => {}, remembered: true } })));
+        assert.ok(automatic.includes(translation.settings.integrations.connection.automatic));
+        assert.ok(automatic.includes(translation.settings.integrations.connection.forget));
         const failed = render({ ...status, phase: 'failed', error: 'integration_disabled' });
         assert.ok(failed.includes(translation.settings.integrations.test.errors.integration_disabled));
     });

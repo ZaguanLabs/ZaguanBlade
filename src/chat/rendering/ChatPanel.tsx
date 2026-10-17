@@ -1,4 +1,5 @@
 import { McpTurnPanel } from '../../components/McpTurnPanel';
+import { McpChatNotice } from '../../components/McpChatNotice';
 import { AcpAgentMenu } from '../../components/AcpAgentMenu';
 import { AcpConversationView } from '../../components/AcpConversation';
 import { useAcpConversation } from '../../hooks/useAcpConversation';
@@ -253,6 +254,8 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
             <ChatHeader activeTab={activeTab} onTabChange={setActiveTab} onNewConversation={handleNewConversation}
                 actions={<AcpAgentMenu workspaceRoot={workspaceRoot} onStarted={handleAgentStarted} />} />
 
+            {activeTab === 'chat' && !agent.chat && !agent.storedOwner && <McpChatNotice workspaceRoot={workspaceRoot}
+                provider={models.find(model => model.id === selectedModelId || model.api_id === selectedModelId)?.provider} />}
             {activeTab === 'chat' && !agent.chat && <McpTurnPanel workspaceRoot={workspaceRoot} />}
 
             {activeTab === 'chat' && agent.chat ? (
