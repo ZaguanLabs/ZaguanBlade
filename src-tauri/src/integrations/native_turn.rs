@@ -15,7 +15,10 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -79,6 +82,8 @@ pub struct NativeMcpTurn {
     elicitations: Mutex<HashMap<Uuid, PendingElicitation>>,
     seen: Mutex<HashSet<String>>,
     blocked: Mutex<Option<&'static str>>,
+    /// The project's YOLO mode: calls are allowed without asking.
+    auto_approve: AtomicBool,
 }
 impl NativeMcpTurn {
     pub fn new(
@@ -132,7 +137,13 @@ impl NativeMcpTurn {
             elicitations: Mutex::new(HashMap::new()),
             seen: Mutex::new(HashSet::new()),
             blocked: Mutex::new(remote.then_some("remote")),
+            auto_approve: AtomicBool::new(false),
         }))
+    }
+    /// Allow every call in this turn without asking, as YOLO mode does for
+    /// commands. Each call still goes through the same review and checks.
+    pub fn set_auto_approve(&self, enabled: bool) {
+        self.auto_approve.store(enabled, Ordering::Release);
     }
     pub fn has_tools(&self) -> bool {
         !self.catalog.tools.is_empty()
@@ -403,6 +414,12 @@ impl NativeMcpTurn {
             id,
             cancel: context.cancel.clone(),
         };
+        if self.auto_approve.load(Ordering::Acquire) {
+            self.respond(id, true)?;
+            eprintln!("[MCP] Auto-approved {server_name} / {tool_name} (YOLO mode)");
+        } else {
+            eprintln!("[MCP] Waiting for approval of {server_name} / {tool_name} (request {id})");
+        }
         let workspace_cancel = self.documents.cancellation();
         let decision = tokio::select! {
             biased;
@@ -415,6 +432,9 @@ impl NativeMcpTurn {
             .lock()
             .map_err(|_| RuntimeError::Busy)?
             .remove(&id);
+        if let Err(error) = &decision {
+            eprintln!("[MCP] {server_name} / {tool_name} was not approved: {error:?}");
+        }
         decision?;
         let _elicitations = ElicitationGuard {
             turn: self,

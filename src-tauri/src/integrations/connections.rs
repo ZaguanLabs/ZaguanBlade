@@ -2304,6 +2304,35 @@ for line in sys.stdin:
         .unwrap()
     }
     #[tokio::test]
+    async fn yolo_turns_run_calls_without_asking() {
+        use super::super::native_turn::NativeMcpTurn;
+        let fixture = Fixture::new("normal");
+        fixture.connect().await;
+        fixture.phase(ConnectionPhase::Connected).await;
+        let turn = NativeMcpTurn::new(
+            fixture.runtime.clone(),
+            fixture.documents.clone(),
+            Uuid::new_v4(),
+            false,
+        )
+        .unwrap();
+        assert!(turn.schemas()[0]["function"]["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("mcp__fixture__search"));
+        turn.set_auto_approve(true);
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            turn.execute(&native_call(&turn, "yolo-1")),
+        )
+        .await
+        .unwrap();
+        assert!(result.success, "{}", result.content);
+        assert!(turn.state().unwrap().pending.is_empty());
+        assert_eq!(fixture.call_count(), 1);
+        fixture.runtime.shutdown().await;
+    }
+    #[tokio::test]
     async fn native_conversation_consent_artifacts_and_remote_gate() {
         use super::super::{native_turn::NativeMcpTurn, result_artifact::ArtifactRef};
         for mode in ["normal", "modern", "tool_error"] {

@@ -605,8 +605,8 @@
       "chatFontSize": "Chat",
       "textSizeScopeHelp": "Ctrl+rueda del ratón sobre el editor o el chat ajusta y guarda estos valores.",
       "yoloModeTitle": "Modo YOLO",
-      "yoloModeDescription": "Aprueba automáticamente las solicitudes run_command en este proyecto sin interrumpir la conversación.",
-      "yoloModeScopeHelp": "Solo se omiten las aprobaciones de run_command. El modelo no recibe esta información.",
+      "yoloModeDescription": "Aprueba automáticamente las solicitudes run_command y las llamadas a herramientas MCP en este proyecto sin interrumpir la conversación.",
+      "yoloModeScopeHelp": "Solo se omiten las aprobaciones de run_command y de las herramientas MCP. El modelo no recibe esta información.",
       "themes": {
         "zaguan-dark": {
           "label": "Zaguán Dark",
@@ -1085,7 +1085,7 @@
     "sync": "Sincronizar",
     "extension": "Extensión",
     "feedback": "Opiniones",
-    "yoloMode": "YOLO: comandos autoaprobados",
+    "yoloMode": "YOLO: comandos y herramientas MCP autoaprobados",
     "index": {
       "indexingFile": "Indexando {{file}} ({{progress}})",
       "indexingFileOnly": "Indexando {{file}}",

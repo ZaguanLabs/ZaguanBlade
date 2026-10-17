@@ -720,6 +720,10 @@ pub async fn handle_send_message<R: Runtime>(
                 state.document_service(),
                 uuid::Uuid::parse_str(&conversation.metadata.id),
             ) {
+                let yolo = crate::project_settings::load_project_settings_or_default(
+                    documents.workspace_root(),
+                )
+                .auto_approve_run_commands;
                 mgr.native_mcp = crate::integrations::native_turn::NativeMcpTurn::new(
                     state.integrations.clone(),
                     documents,
@@ -727,6 +731,9 @@ pub async fn handle_send_message<R: Runtime>(
                     mcp_remote_blocked,
                 )
                 .ok();
+                if let Some(turn) = &mgr.native_mcp {
+                    turn.set_auto_approve(yolo);
+                }
             }
         }
 
