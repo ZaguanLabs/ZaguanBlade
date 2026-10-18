@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import type { IntegrationLaunchReview } from '../../types/integrations';
+import { AcpForwarding } from '../AcpForwarding';
 
 /** Approval details for a one-use launch or connection ticket. */
 export function LaunchReviewDetails({ review, purpose }: { review: IntegrationLaunchReview | null; purpose: 'test' | 'connection' | 'agent' }) {
@@ -22,5 +23,6 @@ export function LaunchReviewDetails({ review, purpose }: { review: IntegrationLa
             <dt className="mt-2">{t('settings.integrations.arguments')}</dt><dd className="font-mono text-xs whitespace-pre-wrap">{JSON.stringify(review.args, null, 2)}</dd>
             <dt className="mt-2">{t('settings.integrations.directory')}</dt><dd className="font-mono text-xs">{review.cwd}</dd>
         </dl>
+        {purpose === 'agent' ? <AcpForwarding forwarding={review.forwarding} review /> : null}
     </div>;
 }

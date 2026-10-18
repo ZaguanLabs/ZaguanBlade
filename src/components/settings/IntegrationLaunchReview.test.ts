@@ -7,6 +7,7 @@ import { I18nextProvider } from 'react-i18next';
 import en from '../../../public/locales/en/translation.json';
 import es from '../../../public/locales/es/translation.json';
 import { LaunchReviewDetails } from './IntegrationLaunchReview';
+import { AcpForwarding } from '../AcpForwarding';
 import { IntegrationSettings } from './IntegrationSettings';
 import { validHeaderName } from './IntegrationEnvironment';
 import type { IntegrationConfig, IntegrationLaunchReview } from '../../types/integrations';
@@ -38,6 +39,28 @@ for (const [language, translation] of Object.entries({ en, es })) {
         assert.ok(process.includes('/usr/bin/atlas-scout'));
         assert.ok(process.includes(translation.settings.integrations.test.reviewHelp));
         for (const html of [secure, insecure, process]) assert.ok(!html.includes('settings.integrations.'));
+    });
+
+    test(`agent approvals name the shared MCP servers and their secrets in ${language}`, async () => {
+        const i18n = await setup();
+        const forwarding = {
+            shared: [{ id: 'a', name: 'Bit Lantern', transport: 'stdio' as const, secrets: ['API_KEY'] }, { id: 'b', name: 'Remote', transport: 'http' as const, secrets: [] }],
+            skipped: [{ id: 'c', name: 'Signed in', reason: 'oauth' as const }, { id: 'd', name: 'Broken', reason: 'unavailable' as const, error: 'secret_missing' }],
+        };
+        const review: IntegrationLaunchReview = { ticket_id: 'ticket', kind: 'process', executable: '/usr/bin/opencode', cwd: '/workspace', args: ['acp'], forwarding };
+        const html = renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(LaunchReviewDetails, { review, purpose: 'agent' })));
+        const forwarded = translation.settings.integrations.forwarding;
+        for (const text of [forwarded.title, forwarded.reviewHelp, forwarded.httpNote, forwarded.skippedTitle, forwarded.skipped.oauth,
+            i18n.t('settings.integrations.forwarding.secrets', { names: 'API_KEY' }), 'Bit Lantern', 'Remote',
+            i18n.t('settings.integrations.forwarding.skipped.unavailable', { reason: translation.settings.integrations.test.errors.secret_missing })]) {
+            assert.ok(html.includes(text.replace(/'/g, '&#x27;')), text);
+        }
+        assert.ok(!html.includes('settings.integrations.'));
+        const plain = renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(LaunchReviewDetails, { review: { ...review, forwarding: undefined }, purpose: 'agent' })));
+        assert.ok(!plain.includes(forwarded.title));
+        const session = renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(AcpForwarding, { forwarding })));
+        assert.ok(session.includes(i18n.t('settings.integrations.forwarding.summary', { count: 2, names: 'Bit Lantern, Remote' })));
+        assert.ok(!session.includes(forwarded.reviewHelp.replace(/'/g, '&#x27;')));
     });
 
     test(`HTTP servers can be tested and connected from Settings in ${language}`, async () => {

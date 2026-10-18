@@ -2,6 +2,7 @@
 //! conversation: switching conversations, changing workspace or shutting down
 //! ends it. Resuming a stored session is phase 6.
 use super::{
+    acp_forward::ForwardingView,
     acp_session::{AcpSession, AgentSnapshot, TurnRecorder},
     process::SupervisedProcess,
     RuntimeError,
@@ -22,6 +23,8 @@ pub struct LiveAgent {
     pub session: AcpSession,
     pub session_id: Mutex<Option<String>>,
     pub recorder: Arc<Mutex<TurnRecorder>>,
+    /// The MCP servers the agent was given, and those it was not.
+    pub forwarding: ForwardingView,
     closed: CancellationToken,
 }
 
@@ -33,6 +36,7 @@ pub struct AgentStatus {
     pub snapshot: AgentSnapshot,
     /// `false` until the agent has created a session (it may need a sign-in).
     pub ready: bool,
+    pub forwarding: ForwardingView,
 }
 
 impl LiveAgent {
@@ -43,6 +47,7 @@ impl LiveAgent {
         session: AcpSession,
         session_id: Option<String>,
         recorder: Arc<Mutex<TurnRecorder>>,
+        forwarding: ForwardingView,
     ) -> Arc<Self> {
         Arc::new(Self {
             id: Uuid::new_v4(),
@@ -52,6 +57,7 @@ impl LiveAgent {
             session,
             session_id: Mutex::new(session_id),
             recorder,
+            forwarding,
             closed: CancellationToken::new(),
         })
     }
@@ -67,6 +73,7 @@ impl LiveAgent {
                 .lock()
                 .map(|id| id.is_some())
                 .unwrap_or(false),
+            forwarding: self.forwarding.clone(),
         }
     }
 
@@ -205,6 +212,7 @@ mod tests {
             session,
             Some("s1".into()),
             Arc::default(),
+            ForwardingView::default(),
         )
     }
 

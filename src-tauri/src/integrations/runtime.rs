@@ -1,6 +1,7 @@
 //! Request-scoped, one-use launch approvals. Saving/enabling a definition never
 //! grants trust. Probe and live-connection tickets have distinct purposes.
 use super::{
+    acp_forward::{self, Forwarding, ForwardingView},
     config::ConnectionConfig,
     config::IntegrationDefinition,
     connections::{self, ConnectionRegistry, ConnectionStatus},
@@ -35,6 +36,9 @@ pub struct LaunchReview {
     pub ticket_id: Uuid,
     #[serde(flatten)]
     pub target: ReviewTarget,
+    /// For an agent: the MCP servers it is given, and those it is not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forwarding: Option<ForwardingView>,
 }
 
 /// What the user approves. Header values and environment values are never shown.
@@ -266,6 +270,36 @@ impl IntegrationRuntime {
         ))
     }
 
+    /// The MCP servers the agent is given, from the configuration at
+    /// `revision` and this workspace's overrides.
+    fn forwarding(
+        &self,
+        integration: Uuid,
+        revision: &str,
+        documents: &DocumentService,
+    ) -> Result<Forwarding, RuntimeError> {
+        let snapshot = IntegrationStore::new(self.directory.clone())
+            .load()
+            .map_err(|_| RuntimeError::ConfigChanged)?;
+        if snapshot.revision != revision {
+            return Err(RuntimeError::ConfigChanged);
+        }
+        let agent = snapshot
+            .config
+            .entries
+            .iter()
+            .find(|entry| entry.id == integration)
+            .ok_or(RuntimeError::ConfigChanged)?;
+        let workspace = connections::read_workspace_settings(documents)?;
+        Ok(acp_forward::plan(
+            &snapshot.config,
+            agent,
+            &workspace,
+            documents.workspace_root(),
+            &self.secrets,
+        ))
+    }
+
     pub fn prepare(
         &self,
         integration: Uuid,
@@ -303,13 +337,14 @@ impl IntegrationRuntime {
         let preparation = tokio::task::spawn_blocking(move || {
             let definition = agent_policy(&runtime.directory, &resolve_documents, integration)?;
             let (prepared, _) = runtime.resolve(integration, &revision, &resolve_documents)?;
-            Ok::<_, RuntimeError>((prepared, definition))
+            let forwarding = runtime.forwarding(integration, &revision, &resolve_documents)?;
+            Ok::<_, RuntimeError>((prepared, definition, forwarding))
         });
         let work = async {
-            let (prepared, definition) = preparation
+            let (prepared, definition, forwarding) = preparation
                 .await
                 .map_err(|_| RuntimeError::LaunchFailed)??;
-            if prepared.fingerprint() != ticket.fingerprint {
+            if agent_fingerprint(&prepared, &forwarding) != ticket.fingerprint {
                 return Err(RuntimeError::ConfigChanged);
             }
             if ticket.expires <= Instant::now() {
@@ -333,6 +368,7 @@ impl IntegrationRuntime {
                 process,
                 read: Box::new(read),
                 write: Box::new(write),
+                forwarding,
             })
         };
         tokio::select! {
@@ -377,9 +413,20 @@ impl IntegrationRuntime {
             Purpose::Probe => {}
         }
         let (prepared, _) = self.resolve(integration, &revision, documents)?;
+        let (fingerprint, forwarding) = match purpose {
+            Purpose::Agent => {
+                let forwarding = self.forwarding(integration, &revision, documents)?;
+                (
+                    agent_fingerprint(&prepared, &forwarding),
+                    Some(forwarding.view),
+                )
+            }
+            _ => (prepared.fingerprint().to_owned(), None),
+        };
         let review = LaunchReview {
             ticket_id: Uuid::new_v4(),
             target: ReviewTarget::from(&prepared),
+            forwarding,
         };
         let mut requests = self.requests.lock().map_err(|_| RuntimeError::Busy)?;
         if self.shutting_down.load(Ordering::Acquire) {
@@ -398,7 +445,7 @@ impl IntegrationRuntime {
                 integration,
                 revision,
                 workspace: documents.identity().clone(),
-                fingerprint: prepared.fingerprint().to_owned(),
+                fingerprint,
                 expires: Instant::now() + APPROVAL_TTL,
                 cancel: CancellationToken::new(),
                 workspace_cancel: documents.cancellation(),
@@ -785,6 +832,14 @@ pub struct LaunchedAgent {
     pub process: SupervisedProcess,
     pub read: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
     pub write: Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
+    pub forwarding: Forwarding,
+}
+
+/// An agent approval covers its own launch and every MCP launch it is given.
+fn agent_fingerprint(prepared: &PreparedTransport, forwarding: &Forwarding) -> String {
+    super::store::fingerprint(
+        format!("{}:{}", prepared.fingerprint(), forwarding.fingerprint).as_bytes(),
+    )
 }
 
 fn agent_policy(

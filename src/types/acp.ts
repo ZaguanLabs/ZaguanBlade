@@ -1,3 +1,4 @@
+import type { AcpForwardingView } from './integrations';
 /** Mirrors `integrations::acp_session` and `agent_sessions` (snake_case on the wire). */
 
 export interface AcpAuthMethod {
@@ -31,6 +32,7 @@ export interface AcpAgentStatus {
     snapshot: AcpAgentSnapshot;
     /** False until the agent has created its session (it may need a sign-in). */
     ready: boolean;
+    forwarding?: AcpForwardingView;
 }
 
 export type AcpContent =

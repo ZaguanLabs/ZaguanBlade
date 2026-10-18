@@ -872,6 +872,28 @@
       "remove": "Remove",
       "removeDefinition": "Remove {{name}}",
       "forwardedServers": "MCP servers to offer to new agent sessions",
+      "forwarding": {
+        "title": "MCP servers shared with the agent",
+        "reviewHelp": "The agent starts and calls these servers itself, with the secrets listed. Blade's tool approvals and YOLO mode do not apply to them.",
+        "httpNote": "HTTP servers are shared only if the agent supports them.",
+        "summary_one": "Shares {{count}} MCP server: {{names}}",
+        "summary_other": "Shares {{count}} MCP servers: {{names}}",
+        "summaryNone": "No MCP servers shared",
+        "secrets": "Secrets it receives: {{names}}",
+        "transport": {
+          "stdio": "local program",
+          "http": "HTTP"
+        },
+        "skippedTitle": "Not shared",
+        "skipped": {
+          "disabled": "switched off",
+          "directory": "runs in its own folder, which the agent cannot set",
+          "oauth": "uses your OAuth sign-in, which Blade does not hand to other programs",
+          "insecure": "uses unencrypted HTTP to another computer",
+          "transport": "the agent does not support HTTP servers",
+          "unavailable": "could not be prepared: {{reason}}"
+        }
+      },
       "oauth": {
         "title": "OAuth sign-in",
         "enable": "Sign in through the server's authorization server",

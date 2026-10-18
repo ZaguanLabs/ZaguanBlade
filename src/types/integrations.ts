@@ -44,8 +44,14 @@ export interface WorkspaceIntegrationSettings {
     disabled_ids: string[];
 }
 
+/** MCP servers an ACP agent is given in its session, and those it is not. */
+export interface AcpForwardingView {
+    shared: Array<{ id: string; name: string; transport: 'stdio' | 'http'; secrets: string[] }>;
+    skipped: Array<{ id: string; name: string; reason: 'disabled' | 'directory' | 'oauth' | 'insecure' | 'transport' | 'unavailable'; error?: string }>;
+}
+
 /** What a one-use approval authorizes. Environment and header values are never included. */
-export type IntegrationLaunchReview = { ticket_id: string } & (
+export type IntegrationLaunchReview = { ticket_id: string; forwarding?: AcpForwardingView } & (
     | { kind: 'process'; executable: string; cwd: string; args: string[] }
     | { kind: 'http'; url: string; header_names: string[]; insecure: boolean; oauth: boolean }
 );

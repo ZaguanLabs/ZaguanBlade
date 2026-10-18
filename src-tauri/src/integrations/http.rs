@@ -161,6 +161,20 @@ impl PreparedHttp {
         })
     }
 
+    /// Header names and values, secrets resolved, for forwarding to an ACP
+    /// agent. Sorted by name so the order is stable.
+    pub(super) fn header_pairs(&self) -> Vec<(String, String)> {
+        let mut pairs: Vec<_> = self
+            .headers
+            .iter()
+            .filter_map(|(name, value)| {
+                Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned()))
+            })
+            .collect();
+        pairs.sort();
+        pairs
+    }
+
     pub(super) fn transport(
         &self,
         signals: Arc<Signals>,

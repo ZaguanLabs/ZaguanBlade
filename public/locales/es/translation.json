@@ -872,6 +872,28 @@
       "remove": "Eliminar",
       "removeDefinition": "Eliminar {{name}}",
       "forwardedServers": "Servidores MCP disponibles para las nuevas sesiones del agente",
+      "forwarding": {
+        "title": "Servidores MCP compartidos con el agente",
+        "reviewHelp": "El agente inicia y llama a estos servidores por su cuenta, con los secretos indicados. Las aprobaciones de herramientas de Blade y el modo YOLO no se aplican a ellos.",
+        "httpNote": "Los servidores HTTP solo se comparten si el agente los admite.",
+        "summary_one": "Comparte {{count}} servidor MCP: {{names}}",
+        "summary_other": "Comparte {{count}} servidores MCP: {{names}}",
+        "summaryNone": "No comparte ningún servidor MCP",
+        "secrets": "Secretos que recibe: {{names}}",
+        "transport": {
+          "stdio": "programa local",
+          "http": "HTTP"
+        },
+        "skippedTitle": "No compartidos",
+        "skipped": {
+          "disabled": "desactivado",
+          "directory": "se ejecuta en su propia carpeta, que el agente no puede indicar",
+          "oauth": "usa tu sesión de OAuth, que Blade no cede a otros programas",
+          "insecure": "usa HTTP sin cifrar hacia otro equipo",
+          "transport": "el agente no admite servidores HTTP",
+          "unavailable": "no se ha podido preparar: {{reason}}"
+        }
+      },
       "oauth": {
         "title": "Inicio de sesión con OAuth",
         "enable": "Iniciar sesión mediante el servidor de autorización del servidor",

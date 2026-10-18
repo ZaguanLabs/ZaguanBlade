@@ -4,6 +4,7 @@ import type { AcpPermission, AcpToolCall, AcpToolContent } from '../types/acp';
 import { runningTurn, type AgentChat, type AgentTurn } from '../utils/acpConversation';
 import { integrationProbeErrorKey } from '../utils/integrationProbe';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { AcpForwarding } from './AcpForwarding';
 
 const buttonClass = 'rounded border border-(--border-default) px-3 py-1.5 text-xs hover:bg-(--bg-surface-hover) disabled:opacity-50';
 
@@ -116,6 +117,7 @@ export function AcpConversationView({ chat, busy, error, send, cancel, answer, a
             {chat.title ? <p className="truncate">{chat.title}</p> : null}
             <p className="text-(--fg-tertiary)">{t('chat.agent.reportsHelp')}</p>
             {chat.usage ? <p className="text-(--fg-tertiary)">{t('chat.agent.usage', { used: chat.usage.used, size: chat.usage.size })}</p> : null}
+            <AcpForwarding forwarding={chat.status.forwarding} />
         </div>
         <div className="min-h-0 flex-1 space-y-4 overflow-auto px-4 py-3">
             {!chat.status.ready && live ? <div className="space-y-2 rounded border border-(--border-default) p-3">

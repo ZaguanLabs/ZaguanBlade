@@ -686,6 +686,15 @@ pub(super) fn read_entry_policy(
         .into_iter()
         .find(|entry| entry.id == integration)
         .ok_or(RuntimeError::ConfigChanged)?;
+    if !read_workspace_settings(documents)?.allows(&entry) {
+        return Err(RuntimeError::IntegrationDisabled);
+    }
+    Ok(entry)
+}
+/// The workspace's integration overrides. A missing settings file has none.
+pub(super) fn read_workspace_settings(
+    documents: &DocumentService,
+) -> Result<crate::integrations::config::WorkspaceIntegrationSettings, RuntimeError> {
     let path = crate::project_settings::get_settings_path(documents.workspace_root());
     let settings = match std::fs::File::open(path) {
         Ok(file) => {
@@ -702,10 +711,7 @@ pub(super) fn read_entry_policy(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Default::default(),
         Err(_) => return Err(RuntimeError::PolicyUnavailable),
     };
-    if !settings.integrations.allows(&entry) {
-        return Err(RuntimeError::IntegrationDisabled);
-    }
-    Ok(entry)
+    Ok(settings.integrations)
 }
 fn check_policy(
     directory: &Path,

@@ -6,7 +6,9 @@ use crate::{
     conversation::ConversationHistory,
     conversation_store::{ConversationDelta, ConversationExecution, StoredConversation},
     integrations::{
-        acp_session::{AcpEvent, AcpSession, FinishedTurn, PromptPart, Sink, TurnRecorder},
+        acp_session::{
+            self, AcpEvent, AcpSession, FinishedTurn, PromptPart, SessionSetup, Sink, TurnRecorder,
+        },
         agent_sessions::{AgentStatus, LiveAgent},
         runtime::LaunchReview,
         RuntimeError,
@@ -177,7 +179,10 @@ pub async fn start_acp_conversation(
         started = AcpSession::start(
             launched.read,
             launched.write,
-            documents.workspace_root().to_path_buf(),
+            SessionSetup {
+                cwd: documents.workspace_root().to_path_buf(),
+                mcp_servers: launched.forwarding.servers.clone(),
+            },
             sink,
         ) => started,
     };
@@ -237,6 +242,9 @@ pub async fn start_acp_conversation(
             messages: Vec::new(),
         });
     let _ = conversation.set(conversation_id.clone());
+    let forwarding = launched
+        .forwarding
+        .view_for(|server| acp_session::supports(&started.session.snapshot, server));
     let live = LiveAgent::new(
         conversation_id,
         launched.integration,
@@ -244,6 +252,7 @@ pub async fn start_acp_conversation(
         started.session,
         started.session_id,
         recorder,
+        forwarding,
     );
     let status = live.status();
     state

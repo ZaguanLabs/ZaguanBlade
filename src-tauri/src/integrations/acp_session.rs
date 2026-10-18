@@ -9,9 +9,9 @@ use agent_client_protocol::{
         v1::{
             AuthMethod, AuthenticateRequest, CancelNotification, ClientCapabilities, ContentBlock,
             EmbeddedResource, EmbeddedResourceResource, ErrorCode, ImageContent, Implementation,
-            InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse,
-            PermissionOptionKind, PlanEntryPriority, PlanEntryStatus, PromptRequest,
-            PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
+            InitializeRequest, InitializeResponse, McpServer, NewSessionRequest,
+            NewSessionResponse, PermissionOptionKind, PlanEntryPriority, PlanEntryStatus,
+            PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
             RequestPermissionResponse, SelectedPermissionOutcome, SessionId, SessionNotification,
             SessionUpdate, StopReason, TextContent, TextResourceContents, ToolCallContent,
             ToolCallStatus, ToolKind,
@@ -616,6 +616,37 @@ enum Finished {
     ),
 }
 
+/// Where the session works and the MCP servers it is given. Servers whose
+/// transport the agent did not advertise are left out before `session/new`.
+#[derive(Clone)]
+pub struct SessionSetup {
+    pub cwd: PathBuf,
+    pub mcp_servers: Vec<McpServer>,
+}
+impl From<PathBuf> for SessionSetup {
+    fn from(cwd: PathBuf) -> Self {
+        Self {
+            cwd,
+            mcp_servers: Vec::new(),
+        }
+    }
+}
+impl SessionSetup {
+    fn supported_by(mut self, snapshot: &AgentSnapshot) -> Self {
+        self.mcp_servers.retain(|server| supports(snapshot, server));
+        self
+    }
+}
+/// Whether the agent advertised the transport of this MCP server.
+pub fn supports(snapshot: &AgentSnapshot, server: &McpServer) -> bool {
+    match server {
+        McpServer::Stdio(_) => true,
+        McpServer::Http(_) => snapshot.mcp_http,
+        McpServer::Sse(_) => snapshot.mcp_sse,
+        _ => false,
+    }
+}
+
 #[derive(Clone)]
 pub struct AcpSession {
     commands: mpsc::Sender<Command>,
@@ -630,14 +661,15 @@ pub struct Started {
 }
 
 impl AcpSession {
-    /// Initializes the agent and asks it for a session in `cwd`. Returns once
-    /// the agent answered, or when it requires authentication first.
+    /// Initializes the agent and asks it for a session in the setup's `cwd`.
+    /// Returns once the agent answered, or when it requires authentication first.
     pub async fn start(
         read: impl AsyncRead + Send + Unpin + 'static,
         write: impl AsyncWrite + Send + Unpin + 'static,
-        cwd: PathBuf,
+        setup: impl Into<SessionSetup>,
         sink: Sink,
     ) -> Result<Started, RuntimeError> {
+        let setup = setup.into();
         let eof = CancellationToken::new();
         let read = FrameGuard::new(read, eof.clone());
         let (incoming_tx, incoming) = mpsc::channel(INCOMING_QUEUE);
@@ -706,7 +738,7 @@ impl AcpSession {
                 .connect_with(
                     ByteStreams::new(write.compat_write(), read.compat()),
                     async move |connection: ConnectionTo<Agent>| {
-                        let exit = actor.run(connection, cwd, started_tx, actor_live).await;
+                        let exit = actor.run(connection, setup, started_tx, actor_live).await;
                         if let Ok(mut ended) = actor_ended.lock() {
                             *ended = Some(exit);
                         }
@@ -831,16 +863,16 @@ impl Actor {
     async fn run(
         mut self,
         connection: ConnectionTo<Agent>,
-        cwd: PathBuf,
+        setup: SessionSetup,
         started: oneshot::Sender<Result<(Arc<AgentSnapshot>, Option<String>), RuntimeError>>,
         live: Arc<AtomicBool>,
     ) -> Exit {
         let opened = tokio::select! {
             biased;
             _ = self.eof.cancelled() => Err(RuntimeError::ProtocolFailed),
-            opened = open(&connection, cwd.clone()) => opened,
+            opened = open(&connection, setup) => opened,
         };
-        let (snapshot, session) = match opened {
+        let (snapshot, session, setup) = match opened {
             Ok(opened) => opened,
             Err(error) => {
                 let _ = started.send(Err(error));
@@ -879,7 +911,7 @@ impl Actor {
                 }
                 command = self.commands.recv() => match command {
                     None | Some(Command::Close) => break None,
-                    Some(command) => if let Some(next) = self.command(&connection, &cwd, command, pending.is_some()) {
+                    Some(command) => if let Some(next) = self.command(&connection, &setup, command, pending.is_some()) {
                         pending = Some(next);
                     },
                 },
@@ -906,7 +938,7 @@ impl Actor {
     fn command(
         &mut self,
         connection: &ConnectionTo<Agent>,
-        cwd: &std::path::Path,
+        setup: &SessionSetup,
         command: Command,
         busy: bool,
     ) -> Option<Pending> {
@@ -977,7 +1009,7 @@ impl Actor {
                     return None;
                 }
                 let connection = connection.clone();
-                let cwd = cwd.to_path_buf();
+                let setup = setup.clone();
                 Some(Box::pin(async move {
                     let result = async {
                         tokio::time::timeout(
@@ -992,7 +1024,7 @@ impl Actor {
                             ErrorCode::AuthRequired => RuntimeError::AuthorizationDenied,
                             _ => RuntimeError::AuthorizationFailed,
                         })?;
-                        new_session(&connection, cwd).await
+                        new_session(&connection, setup).await
                     }
                     .await;
                     Finished::Authenticated(result, reply)
@@ -1286,8 +1318,8 @@ fn merge(
 
 async fn open(
     connection: &ConnectionTo<Agent>,
-    cwd: PathBuf,
-) -> Result<(AgentSnapshot, Option<SessionId>), RuntimeError> {
+    setup: SessionSetup,
+) -> Result<(AgentSnapshot, Option<SessionId>, SessionSetup), RuntimeError> {
     let initialize = InitializeRequest::new(ProtocolVersion::V1)
         .client_capabilities(ClientCapabilities::default())
         .client_info(Implementation::new(
@@ -1305,22 +1337,22 @@ async fn open(
         return Err(RuntimeError::UnsupportedVersion);
     }
     let snapshot = AgentSnapshot::from_response(&response);
-    match new_session(connection, cwd).await {
-        Ok(session) => Ok((snapshot, Some(session.session_id))),
-        Err(RuntimeError::AuthenticationRequired) => Ok((snapshot, None)),
+    let setup = setup.supported_by(&snapshot);
+    match new_session(connection, setup.clone()).await {
+        Ok(session) => Ok((snapshot, Some(session.session_id), setup)),
+        Err(RuntimeError::AuthenticationRequired) => Ok((snapshot, None, setup)),
         Err(error) => Err(error),
     }
 }
 
-/// Phase 5 forwards no MCP servers; that is phase 6.
 async fn new_session(
     connection: &ConnectionTo<Agent>,
-    cwd: PathBuf,
+    setup: SessionSetup,
 ) -> Result<NewSessionResponse, RuntimeError> {
     let response = tokio::time::timeout(
         SESSION_TIMEOUT,
         connection
-            .send_request(NewSessionRequest::new(cwd))
+            .send_request(NewSessionRequest::new(setup.cwd).mcp_servers(setup.mcp_servers))
             .block_task(),
     )
     .await
@@ -1568,6 +1600,52 @@ pub(crate) mod tests {
         let started = started.unwrap();
         assert_eq!(started.session_id.as_deref(), Some("s1"));
         (wire, started.session, fixture)
+    }
+
+    #[tokio::test]
+    async fn session_new_carries_the_servers_the_agent_can_use() {
+        use agent_client_protocol::schema::v1::{
+            EnvVariable, HttpHeader, McpServerHttp, McpServerStdio,
+        };
+        let (client, agent) = tokio::io::duplex(1 << 20);
+        let (read, write) = tokio::io::split(client);
+        let (agent_read, agent_write) = tokio::io::split(agent);
+        let mut wire = Wire {
+            input: BufReader::new(agent_read).lines(),
+            output: agent_write,
+        };
+        let setup = SessionSetup {
+            cwd: PathBuf::from("/workspace"),
+            mcp_servers: vec![
+                McpServer::Stdio(
+                    McpServerStdio::new("Lantern", "/usr/bin/lantern")
+                        .args(vec!["mcp".into()])
+                        .env(vec![EnvVariable::new("KEY", "value")]),
+                ),
+                McpServer::Http(
+                    McpServerHttp::new("Remote", "https://mcp.example.com/mcp")
+                        .headers(vec![HttpHeader::new("x-token", "t")]),
+                ),
+            ],
+        };
+        let start = AcpSession::start(read, write, setup, Arc::new(|_| {}));
+        let agent = async {
+            let initialize = wire.expect("initialize").await;
+            wire.reply(
+                &initialize,
+                json!({"protocolVersion":1,"agentCapabilities":{"mcpCapabilities":{"http":false}}}),
+            )
+            .await;
+            let session = wire.expect("session/new").await;
+            assert_eq!(
+                session["params"]["mcpServers"],
+                json!([{"name":"Lantern","command":"/usr/bin/lantern","args":["mcp"],
+                    "env":[{"name":"KEY","value":"value"}]}])
+            );
+            wire.reply(&session, json!({"sessionId":"s1"})).await;
+        };
+        let (started, ()) = tokio::join!(start, agent);
+        assert_eq!(started.unwrap().session_id.as_deref(), Some("s1"));
     }
 
     #[tokio::test]

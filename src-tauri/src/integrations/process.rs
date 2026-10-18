@@ -52,6 +52,9 @@ pub struct PreparedProcess {
     /// Like `fingerprint`, without inherited desktop variables that can
     /// change between logins. Binds remembered launches.
     pub trust_fingerprint: String,
+    /// The configured variables alone, secrets resolved. Forwarded to an ACP
+    /// agent, which starts the server with its own environment.
+    pub(super) configured_env: Vec<(String, String)>,
 }
 
 impl PreparedProcess {
@@ -83,6 +86,7 @@ impl PreparedProcess {
             return Err(RuntimeError::InvalidDirectory);
         }
         let mut configured = BTreeMap::new();
+        let mut configured_env = Vec::new();
         for (key, value) in &config.env {
             let value = match value {
                 ConfigValue::Text { value } => value.clone(),
@@ -94,6 +98,7 @@ impl PreparedProcess {
                 return Err(RuntimeError::InvalidSecret);
             }
             configured.insert(OsString::from(key), OsString::from(&value));
+            configured_env.push((key.clone(), value.clone()));
             env.insert(key.into(), value.into());
         }
         let executable =
@@ -133,6 +138,7 @@ impl PreparedProcess {
             env,
             fingerprint,
             trust_fingerprint,
+            configured_env,
         })
     }
 }
