@@ -12,8 +12,9 @@ use crate::{
             self, AcpEvent, AcpSession, FinishedTurn, PromptPart, SessionSetup, Sink, TurnRecorder,
         },
         acp_terminals::Terminals,
-        agent_sessions::{AgentStatus, LiveAgent},
-        runtime::LaunchReview,
+        agent_sessions::{AgentLaunch, AgentStatus, LiveAgent},
+        elicitation::ElicitationAnswer,
+        runtime::{LaunchReview, LaunchedAgent},
         RuntimeError,
     },
     protocol::{ChatImage, ChatMessage, ChatRole},
@@ -24,6 +25,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 const MAX_IMAGES: usize = 8;
+/// How long a terminal sign-in may take.
+const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 /// Records an agent's write like a native AI edit: a history snapshot first,
 /// then a change the user can review and reject in the editor, which reloads.
@@ -242,6 +245,28 @@ pub async fn start_acp_conversation(
             return Err(RuntimeError::InvalidArguments);
         }
     }
+    let reconnect = conversation_id.map(|conversation_id| Reconnect {
+        conversation_id,
+        resume: stored.and_then(|stored| stored.external_session_id),
+    });
+    connect(&app, documents, launched, reconnect).await
+}
+
+/// The active stored conversation a started agent continues.
+struct Reconnect {
+    conversation_id: String,
+    resume: Option<String>,
+}
+
+/// Opens the started agent's session and binds it to a new conversation, or
+/// to the one it reconnects to. Any previous agent session ends.
+async fn connect(
+    app: &AppHandle,
+    documents: Arc<crate::document_service::DocumentService>,
+    launched: LaunchedAgent,
+    reconnect: Option<Reconnect>,
+) -> Result<AgentStatus, RuntimeError> {
+    let state = app.state::<AppState>();
     let conversation: Arc<OnceLock<String>> = Arc::default();
     let recorder: Arc<Mutex<TurnRecorder>> = Arc::default();
     let sink: Sink = {
@@ -287,9 +312,10 @@ pub async fn start_acp_conversation(
                     documents.workspace_root().to_path_buf(),
                     launched.environment.clone(),
                 ))),
-                resume: stored
+                resume: reconnect
                     .as_ref()
-                    .and_then(|stored| stored.external_session_id.clone()),
+                    .and_then(|reconnect| reconnect.resume.clone()),
+                terminal_login: true,
             },
             sink,
         ) => started,
@@ -302,8 +328,8 @@ pub async fn start_acp_conversation(
         }
     };
 
-    end_agent_session_unless(&app, None);
-    let saved = match conversation_id {
+    end_agent_session_unless(app, None);
+    let saved = match reconnect.map(|reconnect| reconnect.conversation_id) {
         Some(conversation_id) => {
             let blocking_app = app.clone();
             let id = conversation_id.clone();
@@ -326,7 +352,7 @@ pub async fn start_acp_conversation(
         None => {
             crate::commands::chat::graceful_close_active_chat_session(state.inner()).await;
             create_conversation(
-                &app,
+                app,
                 ConversationExecution {
                     kind: "acp".into(),
                     agent_id: launched.integration.to_string(),
@@ -361,6 +387,11 @@ pub async fn start_acp_conversation(
         started.session_id,
         recorder,
         forwarding,
+        Some(AgentLaunch {
+            command: launched.command,
+            environment: launched.environment,
+            approval: launched.approval,
+        }),
     );
     let status = live.status();
     state
@@ -570,6 +601,153 @@ pub async fn authenticate_acp_agent(
     })
     .await;
     Ok(live.status())
+}
+
+/// The user's answer to the agent's request for input. Accepting a URL
+/// request opens it in the browser first.
+#[tauri::command]
+pub async fn respond_acp_elicitation(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    conversation_id: String,
+    request_id: Uuid,
+    answer: ElicitationAnswer,
+    content: Option<serde_json::Value>,
+) -> Result<(), RuntimeError> {
+    use tauri_plugin_opener::OpenerExt;
+    local_only(&window)?;
+    if state.remote_control.is_configured().await && answer == ElicitationAnswer::Accept {
+        return Err(RuntimeError::PermissionDenied);
+    }
+    let live = active(&state, &conversation_id)?;
+    live.session
+        .answer_elicitation(request_id, answer, content, move |url| {
+            app.opener()
+                .open_url(url, None::<&str>)
+                .map_err(|_| RuntimeError::LaunchFailed)
+        })
+        .await
+}
+
+/// One word of a command line as the terminal shows it: quoted when needed,
+/// with control characters replaced.
+fn shown_word(word: &str) -> String {
+    let word: String = word
+        .chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect();
+    if !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:@,+".contains(c))
+    {
+        word
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
+}
+
+fn stop_terminal(terminals: &crate::terminal::TerminalManager, id: &str) {
+    if let Ok(mut ptys) = terminals.ptys.lock() {
+        if let Some(pty) = ptys.get_mut(id) {
+            let _ = pty.child.kill();
+        }
+    }
+}
+
+/// Signs in through the agent's own program, run in a terminal the agent view
+/// shows as `terminal_id`. When it exits successfully the agent is started
+/// again under the same approval, in the same conversation, and its new
+/// status is returned.
+#[tauri::command]
+pub async fn sign_in_acp_agent_in_terminal(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    terminals: tauri::State<'_, crate::terminal::TerminalManager>,
+    conversation_id: String,
+    method_id: String,
+    terminal_id: String,
+) -> Result<AgentStatus, RuntimeError> {
+    local_only(&window)?;
+    if !terminal_id.starts_with("acp-sign-in-")
+        || terminal_id.len() > 64
+        || !terminal_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(RuntimeError::InvalidArguments);
+    }
+    let live = active(&state, &conversation_id)?;
+    if live.status().ready {
+        return Err(RuntimeError::Busy);
+    }
+    let login = live
+        .session
+        .snapshot
+        .auth_methods
+        .iter()
+        .find(|method| method.id == method_id)
+        .and_then(|method| method.login.clone())
+        .ok_or(RuntimeError::InvalidArguments)?;
+    let launch = live
+        .launch
+        .as_ref()
+        .ok_or(RuntimeError::UnsupportedTransport)?;
+    let _signing_in = live.begin_sign_in().ok_or(RuntimeError::Busy)?;
+    let documents = state
+        .document_service()
+        .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    let mut args = launch.command.args.clone();
+    args.extend(login.args);
+    let mut environment = launch.environment.clone();
+    for (key, value) in login.env {
+        environment.retain(|(name, _)| name.as_os_str() != std::ffi::OsStr::new(&key));
+        environment.push((key.into(), value.into()));
+    }
+    let line = std::iter::once(launch.command.executable.to_string_lossy().into_owned())
+        .chain(args.iter().cloned())
+        .map(|word| shown_word(&word))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let exited = crate::terminal::spawn_login_terminal(
+        &app,
+        &terminals,
+        terminal_id.clone(),
+        &launch.command.executable,
+        &args,
+        &launch.command.cwd,
+        &environment,
+        format!("\x1b[2m$ {line}\x1b[0m\r\n"),
+    )
+    .map_err(|_| RuntimeError::LaunchFailed)?;
+    let signed_in = tokio::select! {
+        exited = exited => exited.unwrap_or(false),
+        _ = live.session.finished() => false,
+        _ = tokio::time::sleep(SIGN_IN_TIMEOUT) => false,
+    };
+    stop_terminal(&terminals, &terminal_id);
+    if !signed_in {
+        return Err(RuntimeError::AuthorizationFailed);
+    }
+    if active(&state, &conversation_id)?.id != live.id {
+        return Err(RuntimeError::ConnectionNotReady);
+    }
+    let launched = state
+        .integrations
+        .relaunch_agent(&launch.approval, documents.clone())
+        .await?;
+    connect(
+        &app,
+        documents,
+        launched,
+        Some(Reconnect {
+            conversation_id,
+            resume: None,
+        }),
+    )
+    .await
 }
 
 #[tauri::command]

@@ -29,7 +29,8 @@ for (const [language, translation] of Object.entries({ en, es })) {
         const i18n = createInstance();
         await i18n.init({ lng: language, resources: { [language]: { translation } }, interpolation: { escapeValue: false } });
         return renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(AcpConversationView, {
-            chat, busy: false, error: null, send: noop, cancel: noop, answer: noop, authenticate: noop, configure: noop, end: noop, onOpenFile: noop,
+            chat, busy: false, error: null, signIn: null, send: noop, cancel: noop, answer: noop, answerElicitation: noop,
+            authenticate: noop, signInInTerminal: noop, closeSignIn: noop, configure: noop, end: noop, onOpenFile: noop,
         })));
     };
     const strings = translation.chat.agent;
@@ -55,17 +56,39 @@ for (const [language, translation] of Object.entries({ en, es })) {
         assert.ok(html.includes(escape(strings.stop)));
     });
 
-    test(`sign-in offers only the agent's own methods and an exited session cannot be messaged in ${language}`, async () => {
+    test(`sign-in offers the agent's own methods and its terminal sign-in, and an exited session cannot be messaged in ${language}`, async () => {
         const signIn = await render(startAgentChat(status(false)));
-        assert.ok(signIn.includes('Log in with Fixture'));
-        assert.ok(signIn.includes(escape(strings.signIn.terminal.replace('{{method}}', 'Terminal login'))));
-        assert.ok(!signIn.includes('>Terminal login</button>'));
+        assert.ok(signIn.includes('>Log in with Fixture</button>'));
+        assert.ok(signIn.includes(`>${escape(strings.signIn.terminalAction.replace('{{method}}', 'Terminal login'))}</button>`));
+        assert.ok(signIn.includes(escape(strings.signIn.terminalHelp.replace('{{name}}', 'Fixture Agent'))));
         let chat = addPrompt(startAgentChat(status(true)), 1, 'Go');
         chat = applyAcpEvent(chat, { type: 'exited', error: 'agent_exited' });
         const exited = await render(chat);
         assert.ok(exited.includes(escape(translation.settings.integrations.test.errors.agent_exited)));
         assert.ok(/<textarea[^>]*disabled/.test(exited));
         assert.ok(!exited.includes(escape(strings.end)));
+    });
+
+    test(`the agent's requests for input show as its own, with the full address of a page in ${language}`, async () => {
+        let chat = addPrompt(startAgentChat(status(true)), 1, 'Deploy');
+        chat = applyAcpEvent(chat, { type: 'elicitation', turn: 1, request: {
+            request_id: 'e1', message: 'Which environment?', tool_call_id: null, mode: 'form',
+            fields: [{ name: 'target', title: 'Environment', description: null, required: true, kind: 'choice',
+                options: [{ value: 'staging', label: 'Staging' }, { value: 'prod', label: 'Production' }],
+                multiple: false, min_items: null, max_items: null, default: [] }],
+        } });
+        chat = applyAcpEvent(chat, { type: 'elicitation', turn: 1, request: {
+            request_id: 'e2', message: 'Approve the deploy', tool_call_id: 'c1', mode: 'url',
+            url: 'https://deploy.example.com/approve?id=7', host: 'deploy.example.com',
+        } });
+        const html = await render(chat);
+        assert.ok(html.includes(escape(strings.elicitation.title.replace('{{name}}', 'Fixture Agent'))));
+        assert.ok(html.includes(escape(strings.elicitation.help.replace('{{name}}', 'Fixture Agent'))));
+        assert.ok(html.includes('Which environment?') && html.includes('Staging') && html.includes('Production'));
+        assert.ok(html.includes(escape(strings.elicitation.urlHelp.replace('{{name}}', 'Fixture Agent').replace('{{host}}', 'deploy.example.com'))));
+        assert.ok(html.includes(escape('https://deploy.example.com/approve?id=7')));
+        const answered = await render(applyAcpEvent(chat, { type: 'elicitation_resolved', request_id: 'e1', answer: 'decline' }));
+        assert.ok(!answered.includes('Which environment?') && answered.includes('Approve the deploy'));
     });
 
     test(`files the agent wrote through Blade are listed and refusals are explained in ${language}`, async () => {

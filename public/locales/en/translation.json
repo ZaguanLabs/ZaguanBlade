@@ -346,8 +346,14 @@
       "signIn": {
         "title": "{{name}} needs you to sign in",
         "help": "Choose a sign-in method. The agent handles the sign-in itself.",
-        "terminal": "{{method}} needs a terminal login, which Blade does not support yet.",
-        "none": "The agent offers no sign-in method Blade can use."
+        "none": "The agent offers no sign-in method Blade can use.",
+        "terminalAction": "{{method}} in a terminal",
+        "terminalHelp": "A terminal sign-in runs {{name}}'s own program in a terminal here. Follow its steps; when it finishes successfully, Blade starts the agent again in this conversation.",
+        "terminalRunning": "Signing in with {{method}}. Follow the steps in the terminal below.",
+        "terminalEnded": "The sign-in with {{method}} ended without success. Its output stays below.",
+        "terminalFailed": "The terminal sign-in did not succeed. Try again or choose another method.",
+        "terminalCancel": "Cancel sign-in",
+        "terminalClose": "Close terminal"
       },
       "placeholder": "Message {{name}}…",
       "send": "Send",
@@ -361,6 +367,11 @@
         "title": "{{name}} asks for permission",
         "help": "The agent waits for your answer and receives exactly the option you choose.",
         "dismiss": "Not now"
+      },
+      "elicitation": {
+        "title": "{{name}} asks for input",
+        "help": "This request comes from {{name}}, not from Blade. Only answer what you are comfortable sharing with it. Declining tells the agent you won't answer; cancelling dismisses the request.",
+        "urlHelp": "{{name}} asks you to continue on a page at {{host}}. Check the full address below before opening it."
       },
       "tool": {
         "status": {

@@ -279,10 +279,14 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                     chat={agent.chat}
                     busy={agent.busy}
                     error={agent.error}
+                    signIn={agent.signIn}
                     send={(text, images) => void agent.send(text, images)}
                     cancel={() => void agent.cancel()}
                     answer={(requestId, optionId) => void agent.answer(requestId, optionId)}
+                    answerElicitation={(requestId, choice, content) => void agent.answerElicitation(requestId, choice, content)}
                     authenticate={methodId => void agent.authenticate(methodId)}
+                    signInInTerminal={(methodId, method) => void agent.signInInTerminal(methodId, method)}
+                    closeSignIn={agent.closeSignIn}
                     configure={change => void agent.configure(change)}
                     end={() => void agent.end()}
                     onOpenFile={onOpenFile}

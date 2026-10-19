@@ -326,34 +326,90 @@ impl IntegrationRuntime {
         documents: Arc<DocumentService>,
     ) -> Result<LaunchedAgent, RuntimeError> {
         let ticket = self.take_ticket(ticket_id, Purpose::Agent, &documents)?;
+        let approval = AgentApproval {
+            integration: ticket.integration,
+            revision: ticket.revision.clone(),
+            workspace: ticket.workspace.clone(),
+            fingerprint: ticket.fingerprint.clone(),
+            workspace_cancel: ticket.workspace_cancel.clone(),
+        };
+        self.start_agent(
+            ticket_id,
+            approval,
+            ticket.cancel,
+            Some(ticket.expires),
+            documents,
+        )
+        .await
+    }
+
+    /// Starts an agent's program again under the approval it was launched
+    /// with, as long as its configuration and workspace are unchanged.
+    pub async fn relaunch_agent(
+        self: &Arc<Self>,
+        approval: &AgentApproval,
+        documents: Arc<DocumentService>,
+    ) -> Result<LaunchedAgent, RuntimeError> {
+        let id = Uuid::new_v4();
+        let cancel = CancellationToken::new();
+        {
+            let mut requests = self.requests.lock().map_err(|_| RuntimeError::Busy)?;
+            if self.shutting_down.load(Ordering::Acquire) {
+                return Err(RuntimeError::Cancelled);
+            }
+            if approval.workspace != *documents.identity()
+                || approval.workspace_cancel.is_cancelled()
+            {
+                return Err(RuntimeError::WorkspaceChanged);
+            }
+            if requests.running.len() >= 4 {
+                return Err(RuntimeError::Busy);
+            }
+            requests
+                .running
+                .insert(id, (approval.integration, cancel.clone()));
+        }
+        self.start_agent(id, approval.clone(), cancel, None, documents)
+            .await
+    }
+
+    async fn start_agent(
+        self: &Arc<Self>,
+        request_id: Uuid,
+        approval: AgentApproval,
+        cancel: CancellationToken,
+        expires: Option<Instant>,
+        documents: Arc<DocumentService>,
+    ) -> Result<LaunchedAgent, RuntimeError> {
         let _running = RunningRequest {
             runtime: self.clone(),
-            id: ticket_id,
+            id: request_id,
         };
         let runtime = self.clone();
         let resolve_documents = documents.clone();
-        let integration = ticket.integration;
-        let revision = ticket.revision.clone();
+        let integration = approval.integration;
+        let revision = approval.revision.clone();
         let preparation = tokio::task::spawn_blocking(move || {
             let definition = agent_policy(&runtime.directory, &resolve_documents, integration)?;
             let (prepared, _) = runtime.resolve(integration, &revision, &resolve_documents)?;
             let forwarding = runtime.forwarding(integration, &revision, &resolve_documents)?;
             Ok::<_, RuntimeError>((prepared, definition, forwarding))
         });
+        let workspace_cancel = approval.workspace_cancel.clone();
         let work = async {
             let (prepared, definition, forwarding) = preparation
                 .await
                 .map_err(|_| RuntimeError::LaunchFailed)??;
-            if agent_fingerprint(&prepared, &forwarding) != ticket.fingerprint {
+            if agent_fingerprint(&prepared, &forwarding) != approval.fingerprint {
                 return Err(RuntimeError::ConfigChanged);
             }
-            if ticket.expires <= Instant::now() {
+            if expires.is_some_and(|expires| expires <= Instant::now()) {
                 return Err(RuntimeError::ApprovalExpired);
             }
-            if ticket.cancel.is_cancelled() {
+            if cancel.is_cancelled() {
                 return Err(RuntimeError::Cancelled);
             }
-            if ticket.workspace_cancel.is_cancelled() {
+            if workspace_cancel.is_cancelled() {
                 return Err(RuntimeError::WorkspaceChanged);
             }
             let PreparedTransport::Process(prepared) = prepared else {
@@ -363,19 +419,25 @@ impl IntegrationRuntime {
             Ok(LaunchedAgent {
                 integration,
                 name: definition.name,
-                workspace: ticket.workspace.clone(),
-                workspace_cancel: ticket.workspace_cancel.clone(),
+                workspace: approval.workspace.clone(),
+                workspace_cancel: workspace_cancel.clone(),
                 process,
                 read: Box::new(read),
                 write: Box::new(write),
                 forwarding,
+                command: AgentCommand {
+                    executable: prepared.executable.clone(),
+                    args: prepared.args.clone(),
+                    cwd: prepared.cwd.clone(),
+                },
                 environment: prepared.environment(),
+                approval: approval.clone(),
             })
         };
         tokio::select! {
             biased;
-            _ = ticket.workspace_cancel.cancelled() => Err(RuntimeError::WorkspaceChanged),
-            _ = ticket.cancel.cancelled() => Err(RuntimeError::Cancelled),
+            _ = workspace_cancel.cancelled() => Err(RuntimeError::WorkspaceChanged),
+            _ = cancel.cancelled() => Err(RuntimeError::Cancelled),
             result = tokio::time::timeout(PROBE_TIMEOUT, work) => result.unwrap_or(Err(RuntimeError::TimedOut)),
         }
     }
@@ -834,8 +896,29 @@ pub struct LaunchedAgent {
     pub read: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
     pub write: Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
     pub forwarding: Forwarding,
+    /// The program as it was started, for a terminal sign-in.
+    pub command: AgentCommand,
     /// The agent's own environment; terminals it runs through Blade start with it.
     pub environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+    pub approval: AgentApproval,
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentCommand {
+    pub executable: std::path::PathBuf,
+    pub args: Vec<String>,
+    pub cwd: std::path::PathBuf,
+}
+
+/// What an agent's launch approval covers. A terminal sign-in starts the same
+/// program again under it while its configuration and workspace are unchanged.
+#[derive(Clone)]
+pub struct AgentApproval {
+    integration: Uuid,
+    revision: String,
+    workspace: WorkspaceIdentity,
+    fingerprint: String,
+    workspace_cancel: CancellationToken,
 }
 
 /// An agent approval covers its own launch and every MCP launch it is given.
@@ -1100,6 +1183,8 @@ mod tests {
         assert_eq!(launched.integration, fixture.id);
         assert_eq!(launched.name, "Fixture");
         assert_eq!(launched.workspace, *fixture.documents.identity());
+        assert_eq!(launched.command.args, ["-c", "sleep 60"]);
+        let approval = launched.approval.clone();
         launched.process.shutdown().await;
         assert_eq!(
             fixture
@@ -1109,6 +1194,27 @@ mod tests {
                 .err(),
             Some(RuntimeError::ApprovalExpired),
             "tickets are single use"
+        );
+        let again = fixture
+            .runtime
+            .relaunch_agent(&approval, fixture.documents.clone())
+            .await
+            .unwrap();
+        assert_eq!(again.integration, fixture.id);
+        again.process.shutdown().await;
+        let mut snapshot = store.load().unwrap();
+        if let ConnectionConfig::Acp { process, .. } = &mut snapshot.config.entries[0].connection {
+            process.args = vec!["-c".into(), "sleep 30".into()];
+        }
+        store.save(&snapshot.revision, snapshot.config).unwrap();
+        assert_eq!(
+            fixture
+                .runtime
+                .relaunch_agent(&approval, fixture.documents.clone())
+                .await
+                .err(),
+            Some(RuntimeError::ConfigChanged),
+            "an approval covers only the program it approved"
         );
         assert!(fixture.runtime.requests.lock().unwrap().running.is_empty());
     }

@@ -1,5 +1,5 @@
 import type { ChatImage } from '../types/chat';
-import type { AcpAgentActivity, AcpAgentStatus, AcpEvent, AcpFileRefusal, AcpPermission, AcpPlanEntry, AcpSessionConfig, AcpStopReason, AcpTerminal, AcpToolCall } from '../types/acp';
+import type { AcpAgentActivity, AcpAgentStatus, AcpElicitation, AcpEvent, AcpFileRefusal, AcpPermission, AcpPlanEntry, AcpSessionConfig, AcpStopReason, AcpTerminal, AcpToolCall } from '../types/acp';
 import type { IntegrationLaunchReview } from '../types/integrations';
 
 /** One prompt and what the agent reported for it. Tool calls are reports of
@@ -55,6 +55,8 @@ export interface AgentChat {
     turns: AgentTurn[];
     /** Requests waiting for the user, in arrival order. */
     permissions: AcpPermission[];
+    /** The agent's requests for input, in arrival order. */
+    elicitations: AcpElicitation[];
     exited: { error: string | null } | null;
     title: string | null;
     usage: { used: number; size: number } | null;
@@ -63,7 +65,7 @@ export interface AgentChat {
 }
 
 export function startAgentChat(status: AcpAgentStatus, history: AgentTurn[] = []): AgentChat {
-    return { status, turns: history, permissions: [], exited: null, title: null, usage: null, terminals: {} };
+    return { status, turns: history, permissions: [], elicitations: [], exited: null, title: null, usage: null, terminals: {} };
 }
 
 /** The saved transcript as finished turns. Their numbers are negative, so
@@ -157,6 +159,12 @@ export function applyAcpEvent(chat: AgentChat, event: AcpEvent): AgentChat {
                 : { ...chat, permissions: [...chat.permissions, event.request] };
         case 'permission_resolved':
             return { ...chat, permissions: chat.permissions.filter(request => request.request_id !== event.request_id) };
+        case 'elicitation':
+            return chat.elicitations.some(request => request.request_id === event.request.request_id)
+                ? chat
+                : { ...chat, elicitations: [...chat.elicitations, event.request] };
+        case 'elicitation_resolved':
+            return { ...chat, elicitations: chat.elicitations.filter(request => request.request_id !== event.request_id) };
         case 'config_changed':
             return withConfig(chat, event.config);
         case 'title_changed':
@@ -172,6 +180,7 @@ export function applyAcpEvent(chat: AgentChat, event: AcpEvent): AgentChat {
                 ...chat,
                 exited: { error: event.error },
                 permissions: [],
+                elicitations: [],
                 turns: chat.turns.map(turn => turn.state === 'running' ? { ...turn, state: 'failed', error: turn.error ?? 'agent_exited' } : turn),
             };
         default:

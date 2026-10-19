@@ -1,11 +1,12 @@
 import type { AcpForwardingView } from './integrations';
+import type { ElicitationRequest } from '../utils/mcpElicitation';
 /** Mirrors `integrations::acp_session` and `agent_sessions` (snake_case on the wire). */
 
 export interface AcpAuthMethod {
     id: string;
     name: string;
     description: string | null;
-    /** Needs an interactive terminal login, which Blade does not offer yet. */
+    /** Signs in through the agent's own program in a terminal Blade runs. */
     terminal: boolean;
 }
 
@@ -110,6 +111,9 @@ export interface AcpPermission {
     options: Array<{ id: string; name: string; kind: AcpPermissionKind }>;
 }
 
+/** The agent's request for input. Agent text is shown as text. */
+export type AcpElicitation = ElicitationRequest & { tool_call_id: string | null };
+
 /** A command the agent runs in a terminal Blade owns. `output` is the latest
  * part only; a released terminal keeps its last output. */
 export interface AcpTerminal {
@@ -148,6 +152,8 @@ export type AcpEvent =
     | { type: 'plan'; turn: number | null; entries: AcpPlanEntry[] }
     | { type: 'permission'; turn: number | null; request: AcpPermission }
     | { type: 'permission_resolved'; request_id: string; option_id: string | null }
+    | { type: 'elicitation'; turn: number | null; request: AcpElicitation }
+    | { type: 'elicitation_resolved'; request_id: string; answer: 'accept' | 'decline' | 'cancel' }
     | { type: 'config_changed'; config: AcpSessionConfig }
     | { type: 'title_changed'; title: string | null }
     | { type: 'file_written'; turn: number | null; path: string }

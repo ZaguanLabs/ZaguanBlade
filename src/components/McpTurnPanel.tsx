@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import { integrationProbeErrorKey } from '../utils/integrationProbe';
 import type { McpElicitation } from '../utils/mcpElicitation';
-import { McpElicitationCard, type ElicitationAnswer } from './McpElicitation';
+import { ElicitationCard, type ElicitationAnswer } from './McpElicitation';
 
 export interface McpTurnState {
     turn_id: string;
@@ -41,7 +41,10 @@ export function McpTurnView({ state, busy, error, respond, answer }: {
                 <button className={buttonClass} disabled={busy} onClick={() => respond(review.request_id, true)}>{t('mcpChat.allow')}</button>
             </div>
         </div>)}
-        {answer ? elicitations.map(request => <McpElicitationCard key={request.request_id} request={request} busy={busy}
+        {answer ? elicitations.map(request => <ElicitationCard key={request.request_id} request={request} busy={busy}
+            title={t('mcpChat.elicitation.title', { server: request.server_name, tool: request.tool_name })}
+            help={t('mcpChat.elicitation.help')}
+            urlHelp={request.mode === 'url' ? t('mcpChat.elicitation.urlHelp', { host: request.host }) : ''}
             respond={(choice, content) => answer(request.request_id, choice, content)} />) : null}
     </section>;
 }

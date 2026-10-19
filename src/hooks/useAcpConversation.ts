@@ -5,6 +5,10 @@ import type { AcpAgentStatus, AcpConfigChange, AcpEventPayload, AcpSessionConfig
 import type { ChatImage } from '../types/chat';
 import { addPrompt, applyAcpEvent, startAgentChat, withConfig, type AgentChat, type AgentTurn } from '../utils/acpConversation';
 import { integrationProbeErrorKey } from '../utils/integrationProbe';
+import type { ElicitationAnswer } from '../components/McpElicitation';
+
+/** How long the sign-in terminal has to appear before the sign-in is given up. */
+const TERMINAL_READY_TIMEOUT_MS = 10_000;
 
 interface ConversationOwner {
     id: string;
@@ -18,6 +22,14 @@ export interface StoredAgentConversation {
     name: string;
 }
 
+/** A terminal sign-in shown in the agent view. `done`: it failed and its
+ * terminal stays open so the user can read what the program printed. */
+export interface TerminalSignIn {
+    terminalId: string;
+    method: string;
+    done: boolean;
+}
+
 /** The active conversation's ACP agent, when it has one. A live session is
  * shown from its events; a stored one only names the agent that ran it. */
 export function useAcpConversation() {
@@ -25,7 +37,10 @@ export function useAcpConversation() {
     const [storedOwner, setStoredOwner] = useState<StoredAgentConversation | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [signIn, setSignIn] = useState<TerminalSignIn | null>(null);
     const conversation = useRef<string | null>(null);
+    /** The sign-in terminal the user closed; its failure is not an error. */
+    const closedSignIn = useRef<string | null>(null);
 
     useEffect(() => {
         const unlisten = listen<AcpEventPayload>('acp-event', ({ payload }) => {
@@ -42,6 +57,7 @@ export function useAcpConversation() {
         setStoredOwner(null);
         setError(null);
         setBusy(false);
+        setSignIn(null);
     }, []);
 
     const detach = useCallback(() => {
@@ -50,6 +66,7 @@ export function useAcpConversation() {
         setStoredOwner(null);
         setError(null);
         setBusy(false);
+        setSignIn(null);
     }, []);
 
     /** Re-reads which agent, if any, owns the active conversation. */
@@ -96,6 +113,52 @@ export function useAcpConversation() {
         if (conversation.current === conversationId) setChat(current => current && { ...current, status });
     }), [run]);
 
+    const answerElicitation = useCallback((requestId: string, answer: ElicitationAnswer, content?: Record<string, unknown>) => run(async conversationId => {
+        await invoke('respond_acp_elicitation', { conversationId, requestId, answer, content: content ?? null });
+    }), [run]);
+
+    /** Runs the agent's own program in a terminal shown in the view, once that
+     * terminal is ready. When it signs in, the agent is started again in the
+     * same conversation and its new status replaces the old one. */
+    const signInInTerminal = useCallback(async (methodId: string, method: string) => {
+        const conversationId = conversation.current;
+        if (!conversationId) return;
+        const terminalId = `acp-sign-in-${crypto.randomUUID()}`;
+        let ready!: () => void;
+        const shown = new Promise<void>(resolve => { ready = resolve; });
+        const stop = await listen<{ id: string }>('terminal-ready', ({ payload }) => { if (payload.id === terminalId) ready(); });
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        setBusy(true); setError(null);
+        setSignIn({ terminalId, method, done: false });
+        try {
+            await Promise.race([shown, new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject('launch_failed'), TERMINAL_READY_TIMEOUT_MS);
+            })]);
+            const status = await invoke<AcpAgentStatus>('sign_in_acp_agent_in_terminal', { conversationId, methodId, terminalId });
+            if (conversation.current === conversationId) {
+                setChat(current => current && { ...current, status });
+                setSignIn(null);
+            }
+        } catch (failure) {
+            if (conversation.current === conversationId && closedSignIn.current !== terminalId) {
+                setError(failure === 'authorization_failed' ? 'chat.agent.signIn.terminalFailed' : integrationProbeErrorKey(failure));
+                setSignIn(current => current?.terminalId === terminalId ? { ...current, done: true } : current);
+            }
+        } finally {
+            clearTimeout(timer);
+            stop();
+            if (conversation.current === conversationId) setBusy(false);
+        }
+    }, []);
+
+    /** Closes the sign-in terminal, which stops its program if it still runs. */
+    const closeSignIn = useCallback(() => {
+        setSignIn(current => {
+            if (current) closedSignIn.current = current.terminalId;
+            return null;
+        });
+    }, []);
+
     /** Applies one of the agent's own settings; the agent returns the full new state. */
     const configure = useCallback((change: AcpConfigChange) => run(async conversationId => {
         const config = await invoke<AcpSessionConfig>('set_acp_config', { conversationId, change });
@@ -113,5 +176,8 @@ export function useAcpConversation() {
         }
     }), [run]);
 
-    return { chat, storedOwner, busy, error, attach, detach, sync, send, cancel, answer, authenticate, configure, end };
+    return {
+        chat, storedOwner, busy, error, signIn, attach, detach, sync, send, cancel, answer, answerElicitation,
+        authenticate, signInInTerminal, closeSignIn, configure, end,
+    };
 }

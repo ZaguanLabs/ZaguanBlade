@@ -6,11 +6,16 @@ use super::{
     acp_forward::ForwardingView,
     acp_session::{AcpSession, AgentSnapshot, Reopened, TurnRecorder},
     process::SupervisedProcess,
+    runtime::{AgentApproval, AgentCommand},
     RuntimeError,
 };
 use serde::Serialize;
 use std::{
-    sync::{Arc, Mutex},
+    ffi::OsString,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 use tokio_util::sync::CancellationToken;
@@ -26,7 +31,25 @@ pub struct LiveAgent {
     pub recorder: Arc<Mutex<TurnRecorder>>,
     /// The MCP servers the agent was given, and those it was not.
     pub forwarding: ForwardingView,
+    /// How the program was started, to run it for a terminal sign-in and
+    /// start it again afterwards. `None` when it cannot be (tests).
+    pub launch: Option<AgentLaunch>,
+    signing_in: AtomicBool,
     closed: CancellationToken,
+}
+
+pub struct AgentLaunch {
+    pub command: AgentCommand,
+    pub environment: Vec<(OsString, OsString)>,
+    pub approval: AgentApproval,
+}
+
+/// Held while a terminal sign-in runs; one at a time.
+pub struct SigningIn<'a>(&'a AtomicBool);
+impl Drop for SigningIn<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -53,6 +76,7 @@ impl LiveAgent {
         session_id: Option<String>,
         recorder: Arc<Mutex<TurnRecorder>>,
         forwarding: ForwardingView,
+        launch: Option<AgentLaunch>,
     ) -> Arc<Self> {
         Arc::new(Self {
             id: Uuid::new_v4(),
@@ -63,8 +87,18 @@ impl LiveAgent {
             session_id: Mutex::new(session_id),
             recorder,
             forwarding,
+            launch,
+            signing_in: AtomicBool::new(false),
             closed: CancellationToken::new(),
         })
+    }
+
+    /// `None` while another sign-in runs.
+    pub fn begin_sign_in(&self) -> Option<SigningIn<'_>> {
+        self.signing_in
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| SigningIn(&self.signing_in))
     }
 
     pub fn status(&self) -> AgentStatus {
@@ -220,6 +254,7 @@ mod tests {
             Some("s1".into()),
             Arc::default(),
             ForwardingView::default(),
+            None,
         )
     }
 

@@ -344,6 +344,32 @@ fn openable(url: &str) -> Option<String> {
     .flatten()
 }
 
+/// A form request as Blade will show it.
+fn form_request(message: &str, schema: &ElicitationSchema) -> Option<(String, Request)> {
+    Some((
+        clip(message, MAX_MESSAGE_CHARS),
+        Request::Form {
+            fields: form(schema).ok()?,
+        },
+    ))
+}
+
+/// A URL request as Blade will show it.
+pub fn url_request(message: &str, url: &str) -> Option<(String, Request)> {
+    Some((
+        clip(message, MAX_MESSAGE_CHARS),
+        Request::Url {
+            host: openable(url)?,
+            url: url.to_owned(),
+        },
+    ))
+}
+
+/// A form request whose schema has MCP's shape, as an ACP agent's does.
+pub fn schema_request(message: &str, schema: Value) -> Option<(String, Request)> {
+    form_request(message, &serde_json::from_value(schema).ok()?)
+}
+
 /// The request as Blade will show it, or None when it cannot be shown
 /// faithfully (the server is then told the user declined).
 pub fn project(params: &ElicitRequestParams) -> Option<(String, Request)> {
@@ -352,19 +378,8 @@ pub fn project(params: &ElicitRequestParams) -> Option<(String, Request)> {
             message,
             requested_schema,
             ..
-        } => Some((
-            clip(message, MAX_MESSAGE_CHARS),
-            Request::Form {
-                fields: form(requested_schema).ok()?,
-            },
-        )),
-        ElicitRequestParams::UrlElicitationParams { message, url, .. } => Some((
-            clip(message, MAX_MESSAGE_CHARS),
-            Request::Url {
-                host: openable(url)?,
-                url: url.clone(),
-            },
-        )),
+        } => form_request(message, requested_schema),
+        ElicitRequestParams::UrlElicitationParams { message, url, .. } => url_request(message, url),
         #[allow(unreachable_patterns)]
         _ => None,
     }
@@ -458,6 +473,15 @@ pub fn validate(fields: &[Field], content: &Value) -> Result<Value, RuntimeError
         accepted.insert(field.name.clone(), value.clone());
     }
     Ok(Value::Object(accepted))
+}
+
+/// The user's answer to a request for input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ElicitationAnswer {
+    Accept,
+    Decline,
+    Cancel,
 }
 
 /// A request waiting for the user, with the channel its answer goes back on.

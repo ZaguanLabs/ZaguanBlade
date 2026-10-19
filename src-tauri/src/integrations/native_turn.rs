@@ -51,14 +51,7 @@ struct PendingElicitation {
     respond: oneshot::Sender<ElicitResult>,
 }
 
-/// The user's answer to a server's request for input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ElicitationAnswer {
-    Accept,
-    Decline,
-    Cancel,
-}
+pub use super::elicitation::ElicitationAnswer;
 
 #[derive(Serialize)]
 pub struct TurnState {

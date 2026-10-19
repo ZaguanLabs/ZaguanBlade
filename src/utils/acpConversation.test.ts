@@ -50,7 +50,7 @@ test('events outside a turn attach to the latest one and are dropped before any 
     assert.deepEqual(chat.turns[0].tools.map(tool => tool.id), ['late']);
 });
 
-test('permission requests queue until resolved and an exit fails the running turn', () => {
+test('permission requests and requests for input queue until resolved and an exit fails the running turn', () => {
     let chat = addPrompt(startAgentChat(status), 1, 'Work');
     const request = { request_id: 'r1', tool_call: call('a', 'pending'), options: [{ id: 'allow', name: 'Allow', kind: 'allow_once' as const }] };
     chat = applyAcpEvent(chat, { type: 'permission', turn: 1, request });
@@ -58,10 +58,18 @@ test('permission requests queue until resolved and an exit fails the running tur
     assert.equal(chat.permissions.length, 1, 'a repeated event does not duplicate the request');
     chat = applyAcpEvent(chat, { type: 'permission_resolved', request_id: 'r1', option_id: 'allow' });
     assert.equal(chat.permissions.length, 0);
+    const input = { request_id: 'e1', message: 'Name?', tool_call_id: null, mode: 'url' as const, url: 'https://example.com/x', host: 'example.com' };
+    chat = applyAcpEvent(chat, { type: 'elicitation', turn: 1, request: input });
+    chat = applyAcpEvent(chat, { type: 'elicitation', turn: 1, request: input });
+    chat = applyAcpEvent(chat, { type: 'elicitation', turn: 1, request: { ...input, request_id: 'e2' } });
+    assert.deepEqual(chat.elicitations.map(item => item.request_id), ['e1', 'e2']);
+    chat = applyAcpEvent(chat, { type: 'elicitation_resolved', request_id: 'e1', answer: 'accept' });
+    assert.deepEqual(chat.elicitations.map(item => item.request_id), ['e2']);
     chat = applyAcpEvent(chat, { type: 'permission', turn: 1, request: { ...request, request_id: 'r2' } });
     chat = applyAcpEvent(chat, { type: 'exited', error: null });
     assert.deepEqual(chat.exited, { error: null });
     assert.equal(chat.permissions.length, 0);
+    assert.equal(chat.elicitations.length, 0);
     assert.equal(chat.turns[0].state, 'failed');
     assert.equal(chat.turns[0].error, 'agent_exited');
 });

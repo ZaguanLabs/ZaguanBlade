@@ -1,19 +1,25 @@
 //! One conversation with a local ACP (Agent Client Protocol v1) agent. The
 //! agent runs its own loop: Blade shows what it reports, answers its permission
 //! requests with the exact option the user picked, and never executes a tool
-//! the agent reports. Incoming handlers only queue work, so a pending UI
-//! decision never holds the protocol reader.
+//! the agent reports. Requests for input are shown as forms Blade renders and
+//! answered only by the user. Incoming handlers only queue work, so a pending
+//! UI decision never holds the protocol reader.
 use super::{
     acp_config::{ConfigChange, SessionConfig},
     acp_files::{FileError, WorkspaceFiles},
     acp_terminals::{TerminalView, Terminals},
+    elicitation::{self, ElicitationAnswer},
     RuntimeError,
 };
 use agent_client_protocol::{
     schema::{
         v1::{
-            AuthMethod, AuthenticateRequest, CancelNotification, ClientCapabilities, ContentBlock,
-            CreateTerminalRequest, CreateTerminalResponse, EmbeddedResource,
+            AuthCapabilities, AuthMethod, AuthMethodTerminal, AuthenticateRequest,
+            CancelNotification, ClientCapabilities, ContentBlock, CreateElicitationRequest,
+            CreateElicitationResponse, CreateTerminalRequest, CreateTerminalResponse,
+            ElicitationAcceptAction, ElicitationAction, ElicitationCapabilities,
+            ElicitationContentValue, ElicitationFormCapabilities, ElicitationMode,
+            ElicitationScope, ElicitationUrlCapabilities, EmbeddedResource,
             EmbeddedResourceResource, ErrorCode, FileSystemCapabilities, ImageContent,
             Implementation, InitializeRequest, InitializeResponse, KillTerminalRequest,
             KillTerminalResponse, LoadSessionRequest, McpServer, NewSessionRequest,
@@ -34,7 +40,7 @@ use agent_client_protocol::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     future::Future,
     path::PathBuf,
     pin::Pin,
@@ -61,6 +67,10 @@ const INCOMING_QUEUE: usize = 1024;
 const COMMAND_QUEUE: usize = 16;
 const MAX_PENDING_PERMISSIONS: usize = 8;
 const MAX_PERMISSION_OPTIONS: usize = 16;
+const MAX_PENDING_ELICITATIONS: usize = 4;
+/// Arguments or variables a terminal sign-in may add, and their size.
+const MAX_LOGIN_ITEMS: usize = 32;
+const MAX_LOGIN_TEXT: usize = 8 * 1024;
 const MAX_TOOL_CALLS: usize = 512;
 const MAX_TOOL_ITEMS: usize = 32;
 const MAX_TOOL_TEXT: usize = 32 * 1024;
@@ -93,8 +103,45 @@ pub struct AuthMethodInfo {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
-    /// Needs an interactive terminal login, which Blade does not offer yet.
+    /// Signs in through the agent's own program in a terminal Blade runs.
     pub terminal: bool,
+    /// What that program is given for the sign-in. Kept in Blade.
+    #[serde(skip)]
+    pub login: Option<TerminalLogin>,
+}
+
+/// Arguments and variables a terminal sign-in adds to the agent's program.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TerminalLogin {
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
+impl TerminalLogin {
+    /// None when the method asks for more than Blade passes on.
+    fn from_method(method: &AuthMethodTerminal) -> Option<Self> {
+        let text = |value: &str| value.len() <= MAX_LOGIN_TEXT && !value.contains('\0');
+        let valid = method.args.len() <= MAX_LOGIN_ITEMS
+            && method.args.iter().all(|arg| text(arg))
+            && method.env.len() <= MAX_LOGIN_ITEMS
+            && method.env.iter().all(|(key, value)| {
+                !key.is_empty()
+                    && key.len() <= MAX_LABEL
+                    && !key.contains('=')
+                    && text(key)
+                    && text(value)
+            });
+        let mut env: Vec<_> = method
+            .env
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        env.sort();
+        valid.then(|| Self {
+            args: method.args.clone(),
+            env,
+        })
+    }
 }
 
 /// What the agent declared in `initialize`, kept with the conversation.
@@ -130,6 +177,7 @@ impl AgentSnapshot {
                         .as_deref()
                         .map(|text| clip(text, MAX_DESCRIPTION)),
                     terminal: false,
+                    login: None,
                 }),
                 AuthMethod::Terminal(method) => Some(AuthMethodInfo {
                     id: method.id.to_string(),
@@ -139,6 +187,7 @@ impl AgentSnapshot {
                         .as_deref()
                         .map(|text| clip(text, MAX_DESCRIPTION)),
                     terminal: true,
+                    login: Some(TerminalLogin::from_method(method)?),
                 }),
                 _ => None,
             })
@@ -408,7 +457,18 @@ pub struct PermissionView {
     pub options: Vec<PermissionOptionView>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+/// The agent's request for input, as Blade shows it. Agent text is shown as text.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct AgentElicitationView {
+    pub request_id: Uuid,
+    pub message: String,
+    /// The tool call the request belongs to, when the agent named one.
+    pub tool_call_id: Option<String>,
+    #[serde(flatten)]
+    pub request: elicitation::Request,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AcpEvent {
     MessageChunk {
@@ -440,6 +500,15 @@ pub enum AcpEvent {
     PermissionResolved {
         request_id: Uuid,
         option_id: Option<String>,
+    },
+    /// The agent asks the user for input; nothing is sent until they answer.
+    Elicitation {
+        turn: Option<u64>,
+        request: AgentElicitationView,
+    },
+    ElicitationResolved {
+        request_id: Uuid,
+        answer: ElicitationAnswer,
     },
     /// The agent's session settings changed; carries the full new state.
     ConfigChanged {
@@ -616,6 +685,10 @@ enum Incoming {
         RequestPermissionRequest,
         Responder<RequestPermissionResponse>,
     ),
+    Elicitation(
+        CreateElicitationRequest,
+        Responder<CreateElicitationResponse>,
+    ),
     Read(ReadTextFileRequest, Responder<ReadTextFileResponse>),
     Write(WriteTextFileRequest, Responder<WriteTextFileResponse>),
     Terminal(TerminalCall),
@@ -722,8 +795,18 @@ enum Command {
         change: ConfigChange,
         reply: oneshot::Sender<Result<SessionConfig, RuntimeError>>,
     },
+    Elicitation {
+        request_id: Uuid,
+        answer: ElicitationAnswer,
+        content: Option<serde_json::Value>,
+        open: Opener,
+        reply: oneshot::Sender<Result<(), RuntimeError>>,
+    },
     Close,
 }
+
+/// Opens an accepted URL request's address for the user.
+pub type Opener = Box<dyn FnOnce(&str) -> Result<(), RuntimeError> + Send>;
 
 type Pending = Pin<Box<dyn Future<Output = Finished> + Send>>;
 
@@ -758,6 +841,9 @@ pub struct SessionSetup {
     pub terminals: Option<Arc<Terminals>>,
     /// The agent's earlier session for this conversation, to continue.
     pub resume: Option<String>,
+    /// Blade can run the agent's program in an interactive terminal, so the
+    /// agent may offer a terminal sign-in.
+    pub terminal_login: bool,
 }
 
 /// How the agent's session for this conversation began.
@@ -788,6 +874,7 @@ impl From<PathBuf> for SessionSetup {
             files: None,
             terminals: None,
             resume: None,
+            terminal_login: false,
         }
     }
 }
@@ -859,6 +946,7 @@ impl AcpSession {
             prompting: None,
             cancel_deadline: None,
             permissions: HashMap::new(),
+            elicitations: HashMap::new(),
             tools: HashMap::new(),
             tool_order: VecDeque::new(),
             turn_text: 0,
@@ -879,6 +967,8 @@ impl AcpSession {
         let write_tx = incoming_tx.clone();
         let write_overflow = overflow.clone();
         let permission_overflow = overflow.clone();
+        let elicit_tx = incoming_tx.clone();
+        let elicit_overflow = overflow.clone();
         // Queues a `terminal/*` request for the actor; a full queue ends the session.
         macro_rules! terminal_request {
             ($builder:expr, $request:ty, $variant:ident) => {{
@@ -933,6 +1023,30 @@ impl AcpSession {
                                             RequestPermissionOutcome::Cancelled,
                                         ))
                                     }
+                                    _ => Ok(()),
+                                }
+                            }
+                        }
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: CreateElicitationRequest, responder, _connection| {
+                        // A request tied to a protocol request rather than the
+                        // session has nowhere to be shown.
+                        if !matches!(request.scope(), ElicitationScope::Session(_)) {
+                            return responder.respond(CreateElicitationResponse::new(
+                                ElicitationAction::Decline,
+                            ));
+                        }
+                        match elicit_tx.try_send(Incoming::Elicitation(request, responder)) {
+                            Ok(()) => Ok(()),
+                            Err(error) => {
+                                elicit_overflow.store(true, Ordering::Release);
+                                match error.into_inner() {
+                                    Incoming::Elicitation(_, responder) => responder.respond(
+                                        CreateElicitationResponse::new(ElicitationAction::Cancel),
+                                    ),
                                     _ => Ok(()),
                                 }
                             }
@@ -1058,6 +1172,25 @@ impl AcpSession {
         .await?
     }
 
+    /// Answers the agent's request for input. Accepted content must fit the
+    /// form; an accepted URL request is opened with `open` first.
+    pub async fn answer_elicitation(
+        &self,
+        request_id: Uuid,
+        answer: ElicitationAnswer,
+        content: Option<serde_json::Value>,
+        open: impl FnOnce(&str) -> Result<(), RuntimeError> + Send + 'static,
+    ) -> Result<(), RuntimeError> {
+        self.request(|reply| Command::Elicitation {
+            request_id,
+            answer,
+            content,
+            open: Box::new(open),
+            reply,
+        })
+        .await?
+    }
+
     /// Applies one of the session settings the agent offered and returns the
     /// agent's full new state. Refused while a turn runs.
     pub async fn configure(&self, change: ConfigChange) -> Result<SessionConfig, RuntimeError> {
@@ -1099,6 +1232,11 @@ struct Parked {
     options: Vec<String>,
 }
 
+struct Asked {
+    responder: Responder<CreateElicitationResponse>,
+    request: elicitation::Request,
+}
+
 struct Actor {
     sink: Sink,
     config: Arc<std::sync::Mutex<SessionConfig>>,
@@ -1117,6 +1255,7 @@ struct Actor {
     prompting: Option<u64>,
     cancel_deadline: Option<tokio::time::Instant>,
     permissions: HashMap<Uuid, Parked>,
+    elicitations: HashMap<Uuid, Asked>,
     tools: HashMap<String, ToolCallView>,
     tool_order: VecDeque<String>,
     turn_text: usize,
@@ -1186,6 +1325,7 @@ impl Actor {
             }
         };
         self.cancel_permissions();
+        self.cancel_elicitations();
         if let Some(terminals) = &self.terminals {
             terminals.close_all();
         }
@@ -1257,6 +1397,7 @@ impl Actor {
                     }
                 }
                 self.cancel_permissions();
+                self.cancel_elicitations();
                 let _ = reply.send(());
                 None
             }
@@ -1333,6 +1474,58 @@ impl Actor {
                     request_id,
                     option_id,
                 });
+                let _ = reply.send(sent);
+                None
+            }
+            Command::Elicitation {
+                request_id,
+                answer,
+                content,
+                open,
+                reply,
+            } => {
+                let Some(asked) = self.elicitations.remove(&request_id) else {
+                    let _ = reply.send(Err(RuntimeError::ApprovalExpired));
+                    return None;
+                };
+                let action = match (answer, &asked.request) {
+                    (ElicitationAnswer::Accept, elicitation::Request::Form { fields }) => {
+                        let accepted = content
+                            .ok_or(RuntimeError::InvalidArguments)
+                            .and_then(|content| elicitation::validate(fields, &content))
+                            .and_then(|content| {
+                                serde_json::from_value::<BTreeMap<String, ElicitationContentValue>>(
+                                    content,
+                                )
+                                .map_err(|_| RuntimeError::InvalidArguments)
+                            });
+                        match accepted {
+                            Ok(content) => ElicitationAction::Accept(
+                                ElicitationAcceptAction::new().content(content),
+                            ),
+                            Err(error) => {
+                                self.elicitations.insert(request_id, asked);
+                                let _ = reply.send(Err(error));
+                                return None;
+                            }
+                        }
+                    }
+                    (ElicitationAnswer::Accept, elicitation::Request::Url { url, .. }) => {
+                        if let Err(error) = open(url) {
+                            self.elicitations.insert(request_id, asked);
+                            let _ = reply.send(Err(error));
+                            return None;
+                        }
+                        ElicitationAction::Accept(ElicitationAcceptAction::new())
+                    }
+                    (ElicitationAnswer::Decline, _) => ElicitationAction::Decline,
+                    (ElicitationAnswer::Cancel, _) => ElicitationAction::Cancel,
+                };
+                let sent = asked
+                    .responder
+                    .respond(CreateElicitationResponse::new(action))
+                    .map_err(|_| RuntimeError::ConnectionNotReady);
+                (self.sink)(AcpEvent::ElicitationResolved { request_id, answer });
                 let _ = reply.send(sent);
                 None
             }
@@ -1452,6 +1645,7 @@ impl Actor {
                 }
             }
             Incoming::Permission(request, responder) => self.park(request, responder),
+            Incoming::Elicitation(request, responder) => self.ask(request, responder),
             Incoming::Read(request, responder) => {
                 let files = match self.files_for(&request.session_id) {
                     Ok(files) => files,
@@ -1605,6 +1799,72 @@ impl Actor {
                 options,
             },
         });
+    }
+
+    /// Shows the agent's request for input. One Blade cannot show faithfully
+    /// is declined; with too many waiting, or while a turn is being cancelled,
+    /// it is cancelled.
+    fn ask(
+        &mut self,
+        request: CreateElicitationRequest,
+        responder: Responder<CreateElicitationResponse>,
+    ) {
+        let ElicitationScope::Session(scope) = request.scope() else {
+            let _ = responder.respond(CreateElicitationResponse::new(ElicitationAction::Decline));
+            return;
+        };
+        if self.session.as_ref() != Some(&scope.session_id) {
+            let _ = responder.respond_with_error(agent_client_protocol::Error::invalid_params());
+            return;
+        }
+        if self.elicitations.len() >= MAX_PENDING_ELICITATIONS || self.cancel_deadline.is_some() {
+            let _ = responder.respond(CreateElicitationResponse::new(ElicitationAction::Cancel));
+            return;
+        }
+        let tool_call_id = scope
+            .tool_call_id
+            .as_ref()
+            .map(|id| clip(&id.to_string(), MAX_LABEL));
+        let shown = match &request.mode {
+            ElicitationMode::Form(form) => serde_json::to_value(&form.requested_schema)
+                .ok()
+                .and_then(|schema| elicitation::schema_request(&request.message, schema)),
+            ElicitationMode::Url(url) => elicitation::url_request(&request.message, &url.url),
+            _ => None,
+        };
+        let Some((message, shown)) = shown else {
+            let _ = responder.respond(CreateElicitationResponse::new(ElicitationAction::Decline));
+            return;
+        };
+        let request_id = Uuid::new_v4();
+        self.elicitations.insert(
+            request_id,
+            Asked {
+                responder,
+                request: shown.clone(),
+            },
+        );
+        (self.sink)(AcpEvent::Elicitation {
+            turn: self.prompting,
+            request: AgentElicitationView {
+                request_id,
+                message,
+                tool_call_id,
+                request: shown,
+            },
+        });
+    }
+
+    fn cancel_elicitations(&mut self) {
+        for (request_id, asked) in self.elicitations.drain() {
+            let _ = asked
+                .responder
+                .respond(CreateElicitationResponse::new(ElicitationAction::Cancel));
+            (self.sink)(AcpEvent::ElicitationResolved {
+                request_id,
+                answer: ElicitationAnswer::Cancel,
+            });
+        }
     }
 
     fn cancel_permissions(&mut self) {
@@ -1770,7 +2030,13 @@ async fn open(
                 .fs(FileSystemCapabilities::new()
                     .read_text_file(setup.files.is_some())
                     .write_text_file(setup.files.is_some()))
-                .terminal(setup.terminals.is_some()),
+                .terminal(setup.terminals.is_some())
+                .auth(AuthCapabilities::new().terminal(setup.terminal_login))
+                .elicitation(
+                    ElicitationCapabilities::new()
+                        .form(ElicitationFormCapabilities::new())
+                        .url(ElicitationUrlCapabilities::new()),
+                ),
         )
         .client_info(Implementation::new(
             "zaguan-blade",
@@ -2118,6 +2384,8 @@ pub(crate) mod tests {
             assert_eq!(capabilities["fs"]["readTextFile"], false);
             assert_eq!(capabilities["fs"]["writeTextFile"], false);
             assert_eq!(capabilities["terminal"], false);
+            assert_ne!(capabilities["auth"]["terminal"], true);
+            assert_eq!(capabilities["elicitation"], json!({"form":{},"url":{}}));
             assert_eq!(initialize["params"]["clientInfo"]["name"], "zaguan-blade");
             self.reply(
                 &initialize,
@@ -2389,6 +2657,7 @@ pub(crate) mod tests {
             ))),
             terminals: None,
             resume: None,
+            terminal_login: false,
         };
         let start = AcpSession::start(
             read,
@@ -2512,6 +2781,7 @@ pub(crate) mod tests {
                 vec![("PATH".into(), path)],
             ))),
             resume: None,
+            terminal_login: false,
         };
         let start = AcpSession::start(
             read,
@@ -2645,6 +2915,7 @@ pub(crate) mod tests {
             files: None,
             terminals: None,
             resume: None,
+            terminal_login: false,
         };
         let start = AcpSession::start(read, write, setup, Arc::new(|_| {}));
         let agent = async {
@@ -3069,6 +3340,195 @@ pub(crate) mod tests {
             prompt["params"]["prompt"],
             json!([{"type":"text","text":"What is this?"},
                 {"type":"image","mimeType":"image/png","data":"AAAA"}])
+        );
+    }
+
+    #[tokio::test]
+    async fn the_agent_gets_only_the_input_the_user_accepted() {
+        let (mut wire, session, events) = ready().await;
+        let never = |_: &str| -> Result<(), RuntimeError> { panic!("not a page") };
+        wire.send(json!({"jsonrpc":"2.0","id":40,"method":"elicitation/create","params":{
+            "mode":"form","requestId":7,"message":"Before the session","requestedSchema":{"type":"object","properties":{}}}}))
+            .await;
+        let declined = wire.read().await;
+        assert_eq!(declined["id"], 40);
+        assert_eq!(
+            declined["result"],
+            json!({"action":"decline"}),
+            "only session requests are shown"
+        );
+
+        wire.send(
+            json!({"jsonrpc":"2.0","id":41,"method":"elicitation/create","params":{
+            "mode":"form","sessionId":"s1","toolCallId":"call-1","message":"Which environment?",
+            "requestedSchema":{"type":"object","required":["target"],"properties":{
+                "target":{"type":"string","title":"Environment","oneOf":[
+                    {"const":"staging","title":"Staging"},{"const":"prod","title":"Production"}]},
+                "replicas":{"type":"integer","minimum":1,"maximum":5}}}}}),
+        )
+        .await;
+        let AcpEvent::Elicitation { request, .. } = events
+            .wait_for(|event| matches!(event, AcpEvent::Elicitation { .. }))
+            .await
+        else {
+            unreachable!()
+        };
+        assert_eq!(request.message, "Which environment?");
+        assert_eq!(request.tool_call_id.as_deref(), Some("call-1"));
+        let elicitation::Request::Form { fields } = &request.request else {
+            panic!("a form: {request:?}")
+        };
+        let mut names: Vec<_> = fields.iter().map(|field| field.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, ["replicas", "target"]);
+        assert_eq!(
+            session
+                .answer_elicitation(
+                    request.request_id,
+                    ElicitationAnswer::Accept,
+                    Some(json!({"target":"dev"})),
+                    never
+                )
+                .await,
+            Err(RuntimeError::InvalidArguments),
+            "content outside the form is refused"
+        );
+        session
+            .answer_elicitation(
+                request.request_id,
+                ElicitationAnswer::Accept,
+                Some(json!({"target":"prod","replicas":3})),
+                never,
+            )
+            .await
+            .unwrap();
+        let accepted = wire.read().await;
+        assert_eq!(accepted["id"], 41);
+        assert_eq!(
+            accepted["result"],
+            json!({"action":"accept","content":{"target":"prod","replicas":3}})
+        );
+        events
+            .wait_for(|event| {
+                matches!(
+                    event,
+                    AcpEvent::ElicitationResolved {
+                        answer: ElicitationAnswer::Accept,
+                        ..
+                    }
+                )
+            })
+            .await;
+        assert_eq!(
+            session
+                .answer_elicitation(request.request_id, ElicitationAnswer::Decline, None, never)
+                .await,
+            Err(RuntimeError::ApprovalExpired)
+        );
+
+        wire.send(json!({"jsonrpc":"2.0","id":42,"method":"elicitation/create","params":{
+            "mode":"url","sessionId":"s1","elicitationId":"el-1","url":"https://example.com/approve","message":"Approve"}}))
+            .await;
+        let AcpEvent::Elicitation { request: page, .. } = events
+            .wait_for(|event| matches!(event, AcpEvent::Elicitation { request, .. } if request.message == "Approve"))
+            .await
+        else {
+            unreachable!()
+        };
+        let opened: Arc<Mutex<Vec<String>>> = Arc::default();
+        let record = opened.clone();
+        session
+            .answer_elicitation(
+                page.request_id,
+                ElicitationAnswer::Accept,
+                None,
+                move |url| {
+                    record.lock().unwrap().push(url.into());
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(*opened.lock().unwrap(), ["https://example.com/approve"]);
+        let accepted = wire.read().await;
+        assert_eq!(accepted["id"], 42);
+        assert_eq!(accepted["result"], json!({"action":"accept"}));
+
+        wire.send(json!({"jsonrpc":"2.0","id":43,"method":"elicitation/create","params":{
+            "mode":"url","sessionId":"s1","elicitationId":"el-2","url":"http://example.com/plain","message":"Plain"}}))
+            .await;
+        let declined = wire.read().await;
+        assert_eq!(declined["id"], 43);
+        assert_eq!(
+            declined["result"],
+            json!({"action":"decline"}),
+            "Blade opens no plain HTTP page on another host"
+        );
+
+        wire.send(
+            json!({"jsonrpc":"2.0","id":44,"method":"elicitation/create","params":{
+            "mode":"form","sessionId":"s1","message":"Name?",
+            "requestedSchema":{"type":"object","properties":{"name":{"type":"string"}}}}}),
+        )
+        .await;
+        events
+            .wait_for(|event| matches!(event, AcpEvent::Elicitation { request, .. } if request.message == "Name?"))
+            .await;
+        session.cancel().await.unwrap();
+        let cancelled = wire.read().await;
+        assert_eq!(cancelled["id"], 44);
+        assert_eq!(cancelled["result"], json!({"action":"cancel"}));
+    }
+
+    #[tokio::test]
+    async fn a_terminal_sign_in_is_offered_only_when_blade_can_run_one() {
+        let setup = SessionSetup {
+            terminal_login: true,
+            ..PathBuf::from("/workspace").into()
+        };
+        let (mut wire, start, _events) = connect_with(setup);
+        let agent = async {
+            let initialize = wire.expect("initialize").await;
+            assert_eq!(
+                initialize["params"]["clientCapabilities"]["auth"]["terminal"],
+                true
+            );
+            wire.reply(
+                &initialize,
+                json!({"protocolVersion":1,"agentCapabilities":{},"authMethods":[
+                    {"type":"terminal","id":"tty","name":"Terminal login","args":["--login"],"env":{"LOGIN_MODE":"tty"}},
+                    {"type":"terminal","id":"odd","name":"Odd","args":["a\u{0}b"]}]}),
+            )
+            .await;
+            let new = wire.expect("session/new").await;
+            wire.fail(&new, -32000).await;
+        };
+        let (started, ()) = tokio::join!(start, agent);
+        let started = started.unwrap();
+        assert!(started.session_id.is_none());
+        let methods = &started.session.snapshot.auth_methods;
+        assert_eq!(
+            methods.len(),
+            1,
+            "a method Blade cannot pass on is left out"
+        );
+        assert!(methods[0].terminal);
+        assert_eq!(
+            methods[0].login,
+            Some(TerminalLogin {
+                args: vec!["--login".into()],
+                env: vec![("LOGIN_MODE".into(), "tty".into())],
+            })
+        );
+        let stored = serde_json::to_value(&*started.session.snapshot).unwrap();
+        assert!(
+            stored["auth_methods"][0].get("login").is_none(),
+            "kept in Blade"
+        );
+        assert_eq!(
+            started.session.authenticate("tty".into()).await,
+            Err(RuntimeError::InvalidArguments),
+            "never passed to authenticate"
         );
     }
 

@@ -1,6 +1,6 @@
 import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { elicitationContent, initialValues, type FieldValue, type McpElicitation, type McpElicitationField } from '../utils/mcpElicitation';
+import { elicitationContent, initialValues, type ElicitationRequest, type FieldValue, type McpElicitationField } from '../utils/mcpElicitation';
 
 export type ElicitationAnswer = 'accept' | 'decline' | 'cancel';
 const buttonClass = 'rounded border border-(--border-default) px-3 py-1.5 hover:bg-(--bg-surface-hover) disabled:opacity-50';
@@ -47,10 +47,14 @@ function FieldInput({ field, value, onChange, invalid }: { field: McpElicitation
     </label>;
 }
 
-/** A server's request for input during one of its tool calls. Server text is
- * shown as text; nothing is sent until the user chooses an answer. */
-export function McpElicitationCard({ request, busy, respond }: {
-    request: McpElicitation;
+/** A request for input from an MCP server or an ACP agent. Their text is
+ * shown as text; nothing is sent until the user chooses an answer. `title`,
+ * `help` and `urlHelp` say who asks. */
+export function ElicitationCard({ request, title, help, urlHelp, busy, respond }: {
+    request: ElicitationRequest;
+    title: string;
+    help: string;
+    urlHelp: string;
     busy: boolean;
     respond: (answer: ElicitationAnswer, content?: Record<string, unknown>) => void;
 }) {
@@ -64,16 +68,16 @@ export function McpElicitationCard({ request, busy, respond }: {
         if (!result.invalid.length) respond('accept', result.content);
     };
     return <div className="mt-3 space-y-2 rounded border border-(--border-default) p-3">
-        <p className="font-medium text-(--fg-primary)">{t('mcpChat.elicitation.title', { server: request.server_name, tool: request.tool_name })}</p>
+        <p className="font-medium text-(--fg-primary)">{title}</p>
         <p className="whitespace-pre-wrap break-words">{request.message}</p>
         {request.mode === 'url' ? <>
-            <p>{t('mcpChat.elicitation.urlHelp', { host: request.host })}</p>
+            <p>{urlHelp}</p>
             <p className="break-all rounded bg-(--bg-app) p-2 font-mono">{request.url}</p>
         </> : <form className="space-y-2" onSubmit={event => { event.preventDefault(); submit(); }}>
             {request.fields.map(field => <FieldInput key={field.name} field={field} value={values[field.name] ?? ''} invalid={invalid.includes(field.name)}
                 onChange={value => setValues(current => ({ ...current, [field.name]: value }))} />)}
         </form>}
-        <p className="text-(--fg-tertiary)">{t('mcpChat.elicitation.help')}</p>
+        <p className="text-(--fg-tertiary)">{help}</p>
         <div className="flex flex-wrap gap-2">
             <button type="button" className={buttonClass} disabled={busy} onClick={() => respond('cancel')}>{t('mcpChat.elicitation.cancel')}</button>
             <button type="button" className={buttonClass} disabled={busy} onClick={() => respond('decline')}>{t('mcpChat.elicitation.decline')}</button>

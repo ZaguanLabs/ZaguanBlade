@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ClipboardEvent } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ClipboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AcpConfigChange, AcpPermission, AcpTerminal, AcpToolCall, AcpToolContent } from '../types/acp';
 import { runningTurn, type AgentChat, type AgentTurn } from '../utils/acpConversation';
@@ -10,6 +10,11 @@ import { stripAllAnsi } from './CommandOutputDisplay';
 import { ImageAttachmentBar } from './ImageAttachmentBar';
 import { useComposerAttachments } from '../chat/composer/useComposerAttachments';
 import type { ChatImage } from '../types/chat';
+import type { TerminalSignIn } from '../hooks/useAcpConversation';
+import { ElicitationCard, type ElicitationAnswer } from './McpElicitation';
+
+/** Loaded only when a terminal sign-in is shown. */
+const SignInTerminal = lazy(() => import('./Terminal').then(module => ({ default: module.Terminal })));
 
 /** Images per prompt and bytes per prompt; the backend refuses more. */
 export const MAX_AGENT_IMAGES = 8;
@@ -133,14 +138,18 @@ function PermissionCard({ name, request, terminals, busy, answer }: { name: stri
 /** A conversation run by an ACP agent. What it reports is shown; Blade runs
  * none of its tools. Files it writes through Blade are listed per turn and
  * reviewed in the editor. */
-export function AcpConversationView({ chat, busy, error, send, cancel, answer, authenticate, configure, end, onOpenFile }: {
+export function AcpConversationView({ chat, busy, error, signIn, send, cancel, answer, answerElicitation, authenticate, signInInTerminal, closeSignIn, configure, end, onOpenFile }: {
     chat: AgentChat;
     busy: boolean;
     error: string | null;
+    signIn: TerminalSignIn | null;
     send: (text: string, images: ChatImage[]) => void;
     cancel: () => void;
     answer: (requestId: string, optionId: string | null) => void;
+    answerElicitation: (requestId: string, answer: ElicitationAnswer, content?: Record<string, unknown>) => void;
     authenticate: (methodId: string) => void;
+    signInInTerminal: (methodId: string, method: string) => void;
+    closeSignIn: () => void;
     configure: (change: AcpConfigChange) => void;
     end: () => void;
     onOpenFile: (path: string) => void;
@@ -162,7 +171,7 @@ export function AcpConversationView({ chat, busy, error, send, cancel, answer, a
     const tooLarge = promptBytes > MAX_PROMPT_BYTES;
     const canSend = live && chat.status.ready && !running && !busy && draft.trim().length > 0 && !tooManyImages && !tooLarge;
     useEffect(() => { if (!running) setStopping(false); }, [running]);
-    useEffect(() => { bottom.current?.scrollIntoView?.({ block: 'end' }); }, [chat.turns, chat.permissions]);
+    useEffect(() => { bottom.current?.scrollIntoView?.({ block: 'end' }); }, [chat.turns, chat.permissions, chat.elicitations]);
     const submit = () => {
         if (!canSend) return;
         send(draft.trim(), images.attachments.map(({ data, mime_type, name, size }) => ({ data, mime_type, name, size })));
@@ -190,12 +199,25 @@ export function AcpConversationView({ chat, busy, error, send, cancel, answer, a
         <div className="min-h-0 flex-1 space-y-4 overflow-auto px-4 py-3">
             {!chat.status.ready && live ? <div className="space-y-2 rounded border border-(--border-default) p-3">
                 <p className="font-medium text-(--fg-primary)">{t('chat.agent.signIn.title', { name })}</p>
-                <p>{agentMethods.length ? t('chat.agent.signIn.help') : t('chat.agent.signIn.none')}</p>
+                <p>{agentMethods.length || terminalMethods.length ? t('chat.agent.signIn.help') : t('chat.agent.signIn.none')}</p>
                 <div className="flex flex-wrap gap-2">
-                    {agentMethods.map(method => <button key={method.id} type="button" className={buttonClass} disabled={busy}
+                    {agentMethods.map(method => <button key={method.id} type="button" className={buttonClass} disabled={busy || !!signIn}
                         title={method.description ?? undefined} onClick={() => authenticate(method.id)}>{method.name}</button>)}
+                    {terminalMethods.map(method => <button key={method.id} type="button" className={buttonClass} disabled={busy || !!signIn}
+                        title={method.description ?? undefined} onClick={() => signInInTerminal(method.id, method.name)}>
+                        {t('chat.agent.signIn.terminalAction', { method: method.name })}
+                    </button>)}
                 </div>
-                {terminalMethods.map(method => <p key={method.id} className="text-(--fg-tertiary)">{t('chat.agent.signIn.terminal', { method: method.name })}</p>)}
+                {terminalMethods.length ? <p className="text-(--fg-tertiary)">{t('chat.agent.signIn.terminalHelp', { name })}</p> : null}
+                {signIn ? <div className="space-y-2">
+                    <p role="status">{signIn.done ? t('chat.agent.signIn.terminalEnded', { method: signIn.method }) : t('chat.agent.signIn.terminalRunning', { method: signIn.method })}</p>
+                    <div className="h-64 overflow-hidden rounded border border-(--border-default)">
+                        <Suspense fallback={null}><SignInTerminal id={signIn.terminalId} externalProcess /></Suspense>
+                    </div>
+                    <button type="button" className={buttonClass} onClick={closeSignIn}>
+                        {signIn.done ? t('chat.agent.signIn.terminalClose') : t('chat.agent.signIn.terminalCancel')}
+                    </button>
+                </div> : null}
             </div> : null}
             {chat.turns.filter(turn => turn.stored).map(turn => <Turn key={turn.turn} turn={turn} terminals={chat.terminals} onOpenFile={onOpenFile} />)}
             {reopened ? <p role="status" className={reopened === 'replaced' ? 'text-(--state-warning)' : 'text-(--fg-tertiary)'}>
@@ -204,6 +226,10 @@ export function AcpConversationView({ chat, busy, error, send, cancel, answer, a
             {chat.turns.filter(turn => !turn.stored).map(turn => <Turn key={turn.turn} turn={turn} terminals={chat.terminals} onOpenFile={onOpenFile} />)}
             {chat.permissions.map(request => <PermissionCard key={request.request_id} name={name} request={request} terminals={chat.terminals} busy={busy}
                 answer={optionId => answer(request.request_id, optionId)} />)}
+            {chat.elicitations.map(request => <ElicitationCard key={request.request_id} request={request} busy={busy}
+                title={t('chat.agent.elicitation.title', { name })} help={t('chat.agent.elicitation.help', { name })}
+                urlHelp={request.mode === 'url' ? t('chat.agent.elicitation.urlHelp', { name, host: request.host }) : ''}
+                respond={(choice, content) => answerElicitation(request.request_id, choice, content)} />)}
             {chat.exited ? <p role="status" className="text-(--fg-tertiary)">
                 {chat.exited.error ? t('chat.agent.exitedError', { reason: t(integrationProbeErrorKey(chat.exited.error)) }) : t('chat.agent.exited')}
             </p> : null}

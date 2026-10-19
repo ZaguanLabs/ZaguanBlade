@@ -1416,6 +1416,86 @@ pub fn kill_terminal(id: String, state: tauri::State<'_, TerminalManager>) -> Re
     pty.child.kill().map_err(|e| e.to_string())
 }
 
+/// Runs an ACP agent's terminal sign-in in a PTY the terminal view shows as
+/// `id`: the agent's own program with exactly the environment given, after a
+/// line naming the command. Resolves with whether it exited successfully once
+/// it ends, killed or not.
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_login_terminal<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    manager: &TerminalManager,
+    id: String,
+    executable: &std::path::Path,
+    args: &[String],
+    cwd: &std::path::Path,
+    env: &[(std::ffi::OsString, std::ffi::OsString)],
+    display: String,
+) -> Result<tokio::sync::oneshot::Receiver<bool>, String> {
+    let pair = NativePtySystem::default()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())?;
+    let mut cmd = CommandBuilder::new(executable);
+    cmd.args(args);
+    cmd.cwd(cwd);
+    cmd.env_clear();
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    if !env.iter().any(|(key, _)| key == "TERM") {
+        cmd.env("TERM", "xterm-256color");
+    }
+    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let previous = manager.ptys.lock().map_err(|e| e.to_string())?.insert(
+        id.clone(),
+        PtyState {
+            writer,
+            master: pair.master,
+            child,
+            seq: Arc::new(Mutex::new(0)),
+            owner: crate::blade_protocol::TerminalOwner::User,
+            hidden_input_echoes: Arc::default(),
+        },
+    );
+    if let Some(previous) = previous {
+        terminate_pty_state(previous);
+    }
+    emit_terminal_output(app, &id, display);
+    let (done, exited) = tokio::sync::oneshot::channel();
+    let app = app.clone();
+    let ptys = manager.ptys.clone();
+    thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        while let Ok(read @ 1..) = reader.read(&mut buffer) {
+            emit_terminal_output(
+                &app,
+                &id,
+                String::from_utf8_lossy(&buffer[..read]).into_owned(),
+            );
+        }
+        let code = take_terminal_state(&id, &ptys)
+            .and_then(|mut pty| pty.child.wait().ok())
+            .map(|status| {
+                if status.success() {
+                    0
+                } else {
+                    status.exit_code().max(1) as i32
+                }
+            })
+            .unwrap_or(1);
+        emit_terminal_exit(&app, id, code);
+        let _ = done.send(code == 0);
+    });
+    Ok(exited)
+}
+
 #[tauri::command]
 pub async fn execute_native_command(
     call_id: String,

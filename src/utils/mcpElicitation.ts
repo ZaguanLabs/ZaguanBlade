@@ -7,10 +7,13 @@ export type McpElicitationField = { name: string; title: string | null; descript
     | { kind: 'choice'; options: McpElicitationChoice[]; multiple: boolean; min_items: number | null; max_items: number | null; default: string[] }
 );
 
-export type McpElicitation = { request_id: string; server_name: string; tool_name: string; message: string } & (
+/** A request for input as Blade shows it, from an MCP server or an ACP agent. */
+export type ElicitationRequest = { request_id: string; message: string } & (
     | { mode: 'form'; fields: McpElicitationField[] }
     | { mode: 'url'; url: string; host: string }
 );
+
+export type McpElicitation = ElicitationRequest & { server_name: string; tool_name: string };
 
 /** What each input holds while the user edits it. */
 export type FieldValue = string | boolean | string[];

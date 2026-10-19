@@ -346,8 +346,14 @@
       "signIn": {
         "title": "{{name}} necesita que inicies sesión",
         "help": "Elige un método de inicio de sesión. El propio agente se encarga del proceso.",
-        "terminal": "{{method}} requiere iniciar sesión desde un terminal, algo que Blade aún no admite.",
-        "none": "El agente no ofrece ningún método de inicio de sesión que Blade pueda usar."
+        "none": "El agente no ofrece ningún método de inicio de sesión que Blade pueda usar.",
+        "terminalAction": "{{method}} en un terminal",
+        "terminalHelp": "El inicio de sesión desde terminal ejecuta el propio programa de {{name}} en un terminal aquí. Sigue sus pasos; cuando termine correctamente, Blade volverá a iniciar el agente en esta conversación.",
+        "terminalRunning": "Iniciando sesión con {{method}}. Sigue los pasos en el terminal de abajo.",
+        "terminalEnded": "El inicio de sesión con {{method}} terminó sin éxito. Su salida se mantiene abajo.",
+        "terminalFailed": "El inicio de sesión desde terminal no se completó. Vuelve a intentarlo o elige otro método.",
+        "terminalCancel": "Cancelar inicio de sesión",
+        "terminalClose": "Cerrar terminal"
       },
       "placeholder": "Escribe a {{name}}…",
       "send": "Enviar",
@@ -361,6 +367,11 @@
         "title": "{{name}} solicita permiso",
         "help": "El agente espera tu respuesta y recibe exactamente la opción que elijas.",
         "dismiss": "Ahora no"
+      },
+      "elicitation": {
+        "title": "{{name}} solicita información",
+        "help": "Esta solicitud procede de {{name}}, no de Blade. Responde solo lo que estés dispuesto a compartir con él. Si la rechazas, el agente sabrá que no quieres responder; si la cancelas, la solicitud se descarta.",
+        "urlHelp": "{{name}} te pide continuar en una página de {{host}}. Comprueba la dirección completa antes de abrirla."
       },
       "tool": {
         "status": {

@@ -288,6 +288,8 @@ pub fn run() {
             commands::acp::respond_acp_permission,
             commands::acp::set_acp_config,
             commands::acp::authenticate_acp_agent,
+            commands::acp::respond_acp_elicitation,
+            commands::acp::sign_in_acp_agent_in_terminal,
             commands::acp::close_acp_conversation,
             commands::settings_remote::get_remote_ai_settings,
             commands::settings_remote::save_remote_ai_settings,
