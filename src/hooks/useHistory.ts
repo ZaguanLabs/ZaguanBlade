@@ -37,6 +37,7 @@ function mapHistoryMessage(msg: HistoryMessage | any): ChatMessage {
         progress: msg.progress,
         content_before_tools: msg.content_before_tools,
         content_after_tools: msg.content_after_tools,
+        agent_activity: msg.agent_activity,
         commandExecutions,
     };
 }

@@ -113,3 +113,21 @@ test('reconnecting starts the agent for the stored conversation', async () => {
     assert.equal(await request.start('c1'), status);
     assert.deepEqual(calls[1], ['start_acp_conversation', { ticketId: 't1', conversationId: 'c1' }]);
 });
+
+test('stored turns keep the reports the agent made in them', () => {
+    const [turn, failed] = storedTurns([
+        { role: 'User', content: 'Fix it', images: [{ data: 'AAAA', mime_type: 'image/png' }] },
+        { role: 'Assistant', content: 'Fixed.', agent_activity: {
+            agent_name: 'Agent', tool_calls: [call('main.rs', 'completed')], omitted_tool_calls: 3,
+            plan: [{ content: 'Fix', priority: 'high', status: 'completed' }], stop_reason: 'max_tokens', text_truncated: true,
+        } },
+        { role: 'User', content: 'Again' },
+        { role: 'Assistant', content: '', agent_activity: { agent_name: 'Agent', error: 'agent_exited' } },
+    ]);
+    assert.deepEqual(turn.images, [{ data: 'AAAA', mime_type: 'image/png' }]);
+    assert.deepEqual(turn.tools.map(tool => tool.id), ['main.rs']);
+    assert.equal(turn.omittedTools, 3);
+    assert.equal(turn.plan.length, 1);
+    assert.deepEqual([turn.state, turn.stopReason, turn.truncated], ['ended', 'max_tokens', true]);
+    assert.deepEqual([failed.state, failed.error], ['failed', 'agent_exited']);
+});

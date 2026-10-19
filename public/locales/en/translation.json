@@ -373,7 +373,8 @@
         "terminal": "Terminal {{id}}",
         "resource": "Resource {{uri}}",
         "other": "Content Blade cannot show",
-        "truncated": "Shortened for display."
+        "truncated": "Shortened for display.",
+        "omitted": "{{count}} more tool reports from this turn weren't kept."
       },
       "files": {
         "written": "Changed through Blade (open a file to accept or reject the change):",
@@ -417,6 +418,12 @@
         "resumed": "{{name}} picked up its earlier session for this conversation.",
         "loaded": "{{name}} reloaded its earlier session for this conversation.",
         "replaced": "{{name}} couldn't continue its earlier session and started a new one. It doesn't remember the turns above."
+      },
+      "images": {
+        "attach": "Attach image",
+        "unsupported": "{{name}} doesn't accept images.",
+        "tooMany": "Send at most {{count}} images at a time.",
+        "tooLarge": "Images and text together can't exceed {{limitMb}} MB per message. Remove an image or use a smaller one."
       }
     }
   },

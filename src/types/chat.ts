@@ -1,4 +1,5 @@
 import { TodoItem } from './events';
+import type { AcpAgentActivity } from './acp';
 
 export type ChatMode = 'code' | 'planning';
 
@@ -58,6 +59,8 @@ export interface ChatMessage {
     progress?: ProgressInfo;
     content_before_tools?: string;
     content_after_tools?: string;
+    /** What an ACP agent reported during this turn. Display only. */
+    agent_activity?: AcpAgentActivity;
     commandExecutions?: CommandExecution[];
     todos?: TodoItem[];  // Legacy: kept for backward compat with saved conversations
     blocks?: MessageBlock[];

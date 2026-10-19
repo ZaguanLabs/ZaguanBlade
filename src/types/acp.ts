@@ -127,6 +127,19 @@ export type AcpFileRefusal = 'unsaved_changes' | 'protected' | 'outside_workspac
 
 export type AcpStopReason = 'end_turn' | 'max_tokens' | 'max_turn_requests' | 'refusal' | 'cancelled';
 
+/** What an agent reported during a turn, kept with the transcript. */
+export interface AcpAgentActivity {
+    agent_name: string;
+    tool_calls?: AcpToolCall[];
+    /** Reports beyond the stored limit. */
+    omitted_tool_calls?: number;
+    plan?: AcpPlanEntry[];
+    stop_reason?: AcpStopReason | null;
+    /** A runtime error code when the turn did not end normally. */
+    error?: string | null;
+    text_truncated?: boolean;
+}
+
 export type AcpEvent =
     | { type: 'message_chunk'; turn: number | null; content: AcpContent }
     | { type: 'thought_chunk'; turn: number | null; content: AcpContent }

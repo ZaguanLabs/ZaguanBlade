@@ -373,7 +373,8 @@
         "terminal": "Terminal {{id}}",
         "resource": "Recurso {{uri}}",
         "other": "Contenido que Blade no puede mostrar",
-        "truncated": "Recortado para mostrarlo."
+        "truncated": "Recortado para mostrarlo.",
+        "omitted": "No se guardaron {{count}} informes de herramientas más de este turno."
       },
       "files": {
         "written": "Cambiado a través de Blade (abre el archivo para aceptar o rechazar el cambio):",
@@ -417,6 +418,12 @@
         "resumed": "{{name}} ha retomado su sesión anterior de esta conversación.",
         "loaded": "{{name}} ha recargado su sesión anterior de esta conversación.",
         "replaced": "{{name}} no ha podido retomar su sesión anterior y ha empezado una nueva. No recuerda los turnos de arriba."
+      },
+      "images": {
+        "attach": "Adjuntar imagen",
+        "unsupported": "{{name}} no admite imágenes.",
+        "tooMany": "Puedes enviar como máximo {{count}} imágenes a la vez.",
+        "tooLarge": "Las imágenes y el texto no pueden superar {{limitMb}} MB por mensaje. Quita una imagen o usa una más pequeña."
       }
     }
   },

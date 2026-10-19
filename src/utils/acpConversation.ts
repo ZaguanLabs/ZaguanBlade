@@ -1,4 +1,5 @@
-import type { AcpAgentStatus, AcpEvent, AcpFileRefusal, AcpPermission, AcpPlanEntry, AcpSessionConfig, AcpStopReason, AcpTerminal, AcpToolCall } from '../types/acp';
+import type { ChatImage } from '../types/chat';
+import type { AcpAgentActivity, AcpAgentStatus, AcpEvent, AcpFileRefusal, AcpPermission, AcpPlanEntry, AcpSessionConfig, AcpStopReason, AcpTerminal, AcpToolCall } from '../types/acp';
 import type { IntegrationLaunchReview } from '../types/integrations';
 
 /** One prompt and what the agent reported for it. Tool calls are reports of
@@ -7,6 +8,8 @@ import type { IntegrationLaunchReview } from '../types/integrations';
 export interface AgentTurn {
     turn: number;
     prompt: string;
+    /** Images sent with the prompt. */
+    images?: ChatImage[];
     text: string;
     thoughts: string;
     tools: AcpToolCall[];
@@ -20,6 +23,31 @@ export interface AgentTurn {
     truncated: boolean;
     /** From the saved transcript, before this session; live events never change it. */
     stored?: boolean;
+    /** Tool reports the transcript did not keep. */
+    omittedTools?: number;
+}
+
+interface StoredMessage {
+    role: string;
+    content: string;
+    reasoning?: string;
+    images?: ChatImage[];
+    agent_activity?: AcpAgentActivity;
+}
+
+function storedReply(message: StoredMessage): Partial<AgentTurn> {
+    const activity = message.agent_activity;
+    return {
+        text: message.content,
+        thoughts: message.reasoning ?? '',
+        tools: activity?.tool_calls ?? [],
+        omittedTools: activity?.omitted_tool_calls ?? 0,
+        plan: activity?.plan ?? [],
+        state: activity?.error ? 'failed' : 'ended',
+        stopReason: activity?.stop_reason ?? null,
+        error: activity?.error ?? null,
+        truncated: activity?.text_truncated ?? false,
+    };
 }
 
 export interface AgentChat {
@@ -40,16 +68,18 @@ export function startAgentChat(status: AcpAgentStatus, history: AgentTurn[] = []
 
 /** The saved transcript as finished turns. Their numbers are negative, so
  * they never meet the session's own turns, which count from 1. */
-export function storedTurns(messages: ReadonlyArray<{ role: string; content: string; reasoning?: string }>): AgentTurn[] {
+export function storedTurns(messages: ReadonlyArray<StoredMessage>): AgentTurn[] {
     const turns: AgentTurn[] = [];
+    // A prompt still waiting for its reply.
+    let open: AgentTurn | null = null;
     for (const message of messages) {
-        const last = turns[turns.length - 1];
         if (message.role === 'User') {
-            turns.push({ ...emptyTurn(0, message.content), state: 'ended', stored: true });
+            open = { ...emptyTurn(0, message.content), images: message.images, state: 'ended', stored: true };
+            turns.push(open);
         } else if (message.role === 'Assistant') {
-            const reply = { text: message.content, thoughts: message.reasoning ?? '' };
-            if (last && !last.text && !last.thoughts) Object.assign(last, reply);
-            else turns.push({ ...emptyTurn(0), ...reply, state: 'ended', stored: true });
+            if (open) Object.assign(open, storedReply(message));
+            else turns.push({ ...emptyTurn(0), ...storedReply(message), stored: true });
+            open = null;
         }
     }
     return turns.map((turn, index) => ({ ...turn, turn: index - turns.length }));
@@ -72,8 +102,8 @@ function withTurn(chat: AgentChat, turn: number | null, change: (current: AgentT
     return { ...chat, turns: [...chat.turns, change(emptyTurn(turn))] };
 }
 
-export function addPrompt(chat: AgentChat, turn: number, prompt: string): AgentChat {
-    return withTurn(chat, turn, current => ({ ...current, prompt }));
+export function addPrompt(chat: AgentChat, turn: number, prompt: string, images?: ChatImage[]): AgentChat {
+    return withTurn(chat, turn, current => ({ ...current, prompt, images: images?.length ? images : undefined }));
 }
 
 /** Takes the agent's full settings state. */

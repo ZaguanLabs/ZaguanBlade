@@ -2,6 +2,7 @@ import { McpTurnPanel } from '../../components/McpTurnPanel';
 import { McpChatNotice } from '../../components/McpChatNotice';
 import { AcpAgentMenu } from '../../components/AcpAgentMenu';
 import { AcpStoredNotice } from '../../components/AcpStoredNotice';
+import { AcpStoredTranscript } from '../../components/AcpConversation';
 import { storedTurns } from '../../utils/acpConversation';
 import { AcpConversationView } from '../../components/AcpConversation';
 import { useAcpConversation } from '../../hooks/useAcpConversation';
@@ -193,6 +194,13 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
     const cloudErrorRecovery = useMemo(() => classifyCloudError(error), [error]);
     const agent = useAcpConversation();
     const { detach: detachAgent, attach: attachAgent, sync: syncAgent } = agent;
+    const storedAgentTurns = useMemo(() => agent.storedOwner ? storedTurns(messages) : [], [agent.storedOwner, messages]);
+    const loadOlder = useCallback(async () => {
+        const olderMessages = await loadOlderMessages();
+        if (olderMessages.length > 0) {
+            onPrependConversation(olderMessages);
+        }
+    }, [loadOlderMessages, onPrependConversation]);
 
     const handleNewConversation = useCallback(() => {
         // A new conversation is always Blade's; the backend ends any agent session.
@@ -271,12 +279,20 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                     chat={agent.chat}
                     busy={agent.busy}
                     error={agent.error}
-                    send={text => void agent.send(text)}
+                    send={(text, images) => void agent.send(text, images)}
                     cancel={() => void agent.cancel()}
                     answer={(requestId, optionId) => void agent.answer(requestId, optionId)}
                     authenticate={methodId => void agent.authenticate(methodId)}
                     configure={change => void agent.configure(change)}
                     end={() => void agent.end()}
+                    onOpenFile={onOpenFile}
+                />
+            ) : activeTab === 'chat' && agent.storedOwner ? (
+                <AcpStoredTranscript
+                    turns={storedAgentTurns}
+                    hasOlder={hasOlderMessages}
+                    loadingOlder={loadingOlderMessages}
+                    onLoadOlder={() => void loadOlder()}
                     onOpenFile={onOpenFile}
                 />
             ) : activeTab === 'chat' ? (
@@ -301,12 +317,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                     onEditLastUserMessage={handleEditLastUserMessage}
                     hasOlderMessages={hasOlderMessages}
                     loadingOlderMessages={loadingOlderMessages}
-                    onLoadOlderMessages={async () => {
-                        const olderMessages = await loadOlderMessages();
-                        if (olderMessages.length > 0) {
-                            onPrependConversation(olderMessages);
-                        }
-                    }}
+                    onLoadOlderMessages={loadOlder}
                 />
             ) : (
                 <HistoryTab
@@ -384,7 +395,8 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                     </div>
                 </div>
             )}
-            <Composer
+            {/* A stored agent conversation continues only by reconnecting the agent. */}
+            {!agent.storedOwner && <Composer
                 onSend={sendMessage}
                 onStop={stopGeneration}
                 loading={loading}
@@ -393,10 +405,10 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 setSelectedModelId={setSelectedModelId}
                 chatMode={chatMode}
                 setChatMode={setChatMode}
-                disabled={!canUseAi || !!agent.storedOwner}
+                disabled={!canUseAi}
                 prefillRequest={composerPrefill}
                 onPrefillConsumed={() => setComposerPrefill(null)}
-            />
+            />}
             </>}
         </div>
     );

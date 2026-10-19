@@ -8,7 +8,7 @@ import en from '../../public/locales/en/translation.json';
 import es from '../../public/locales/es/translation.json';
 import type { AcpAgentStatus } from '../types/acp';
 import { addPrompt, applyAcpEvent, startAgentChat, storedTurns, type AgentChat } from '../utils/acpConversation';
-import { AcpConversationView } from './AcpConversation';
+import { AcpConversationView, AcpStoredTranscript } from './AcpConversation';
 import { enabledAgents } from './AcpAgentMenu';
 
 const status = (ready: boolean): AcpAgentStatus => ({
@@ -124,6 +124,29 @@ for (const [language, translation] of Object.entries({ en, es })) {
             modes: { current_mode_id: 'ask', modes: [{ value: 'ask', name: 'Ask', description: null }, { value: 'code', name: 'Code', description: null }] } } }));
         assert.ok(legacy.includes(`<span>${escape(strings.config.mode)}</span>`));
         assert.ok(legacy.includes('<option value="code">Code</option>'));
+    });
+
+    test(`a stored transcript shows the agent's reports read-only, and images are offered only when the agent takes them in ${language}`, async () => {
+        const i18n = createInstance();
+        await i18n.init({ lng: language, resources: { [language]: { translation } }, interpolation: { escapeValue: false } });
+        const turns = storedTurns([
+            { role: 'User', content: 'Look at this', images: [{ data: 'AAAA', mime_type: 'image/png', name: 'shot.png' }] },
+            { role: 'Assistant', content: 'Done', agent_activity: { agent_name: 'Fixture Agent', omitted_tool_calls: 2, tool_calls: [{
+                id: 'c', title: 'Read main.rs', kind: 'read', status: 'completed', truncated: false, locations: [], content: [] }] } },
+        ]);
+        const stored = renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(AcpStoredTranscript, {
+            turns, hasOlder: true, loadingOlder: false, onLoadOlder: noop, onOpenFile: noop,
+        })));
+        assert.ok(stored.includes('Read main.rs') && stored.includes('Done'));
+        assert.ok(stored.includes('src="data:image/png;base64,AAAA" alt="shot.png"'));
+        assert.ok(stored.includes(escape(strings.tool.omitted.replace('{{count}}', '2'))));
+        assert.ok(stored.includes(escape(translation.chat.loadOlderMessages)));
+        assert.ok(!stored.includes('<textarea'), 'nothing to send from a stored transcript');
+
+        const attach = escape(strings.images.attach);
+        assert.ok(!(await render(startAgentChat(status(true)))).includes(attach));
+        const withImages = { ...status(true), snapshot: { ...status(true).snapshot, prompt_image: true } };
+        assert.ok((await render(startAgentChat(withImages))).includes(attach));
     });
 
     test(`a reconnected session says whether the agent remembers the stored turns in ${language}`, async () => {

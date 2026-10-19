@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { AcpAgentStatus, AcpConfigChange, AcpEventPayload, AcpSessionConfig } from '../types/acp';
+import type { ChatImage } from '../types/chat';
 import { addPrompt, applyAcpEvent, startAgentChat, withConfig, type AgentChat, type AgentTurn } from '../utils/acpConversation';
 import { integrationProbeErrorKey } from '../utils/integrationProbe';
 
@@ -77,9 +78,9 @@ export function useAcpConversation() {
         finally { if (conversation.current === id) setBusy(false); }
     }, []);
 
-    const send = useCallback((text: string) => run(async conversationId => {
-        const turn = await invoke<number>('send_acp_prompt', { conversationId, text, images: null });
-        if (conversation.current === conversationId) setChat(current => current && addPrompt(current, turn, text));
+    const send = useCallback((text: string, images: ChatImage[] = []) => run(async conversationId => {
+        const turn = await invoke<number>('send_acp_prompt', { conversationId, text, images: images.length ? images : null });
+        if (conversation.current === conversationId) setChat(current => current && addPrompt(current, turn, text, images));
     }), [run]);
 
     const cancel = useCallback(() => run(async conversationId => {

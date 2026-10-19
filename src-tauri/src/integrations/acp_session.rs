@@ -3054,6 +3054,25 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn an_image_goes_to_an_agent_that_takes_images() {
+        let (mut wire, session, _fixture) = ready().await;
+        let parts = vec![
+            PromptPart::Text("What is this?".into()),
+            PromptPart::Image {
+                mime_type: "image/png".into(),
+                data: "AAAA".into(),
+            },
+        ];
+        let (turn, prompt) = tokio::join!(session.prompt(parts), wire.expect("session/prompt"));
+        assert_eq!(turn, Ok(1));
+        assert_eq!(
+            prompt["params"]["prompt"],
+            json!([{"type":"text","text":"What is this?"},
+                {"type":"image","mimeType":"image/png","data":"AAAA"}])
+        );
+    }
+
+    #[tokio::test]
     async fn agent_sign_in_creates_the_session() {
         let (mut wire, start, _fixture) = connect();
         let (started, ()) = tokio::join!(start, wire.handshake(true));
