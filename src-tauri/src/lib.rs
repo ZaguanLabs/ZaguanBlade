@@ -286,6 +286,7 @@ pub fn run() {
             commands::acp::send_acp_prompt,
             commands::acp::cancel_acp_turn,
             commands::acp::respond_acp_permission,
+            commands::acp::set_acp_config,
             commands::acp::authenticate_acp_agent,
             commands::acp::close_acp_conversation,
             commands::settings_remote::get_remote_ai_settings,

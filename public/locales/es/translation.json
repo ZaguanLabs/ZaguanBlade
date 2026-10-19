@@ -386,6 +386,11 @@
       "exited": "La sesión del agente ha finalizado.",
       "exitedError": "La sesión del agente ha finalizado: {{reason}}",
       "usage": "Contexto: {{used}} de {{size}} tokens",
+      "config": {
+        "label": "Ajustes de {{name}}",
+        "mode": "Modo",
+        "duringTurn": "Podrás cambiarlos cuando el agente termine de trabajar."
+      },
       "ended": {
         "title": "Esta conversación la gestionó {{name}}",
         "help": "Su sesión ha finalizado. La transcripción se conserva aquí; inicia una nueva conversación con el agente para continuar."

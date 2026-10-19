@@ -6,6 +6,7 @@ use crate::{
     conversation::ConversationHistory,
     conversation_store::{ConversationDelta, ConversationExecution, StoredConversation},
     integrations::{
+        acp_config::{ConfigChange, SessionConfig},
         acp_session::{
             self, AcpEvent, AcpSession, FinishedTurn, PromptPart, SessionSetup, Sink, TurnRecorder,
         },
@@ -385,6 +386,20 @@ pub async fn respond_acp_permission(
     }
     let live = active(&state, &conversation_id)?;
     live.session.answer_permission(request_id, option_id).await
+}
+
+/// Changes one of the session settings the agent offered (model, effort,
+/// mode…) and returns the agent's full new state.
+#[tauri::command]
+pub async fn set_acp_config(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    conversation_id: String,
+    change: ConfigChange,
+) -> Result<SessionConfig, RuntimeError> {
+    local_only(&window)?;
+    let live = active(&state, &conversation_id)?;
+    live.session.configure(change).await
 }
 
 /// Runs one of the agent's own sign-in methods, then creates its session.

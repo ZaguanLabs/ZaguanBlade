@@ -386,6 +386,11 @@
       "exited": "The agent session has ended.",
       "exitedError": "The agent session ended: {{reason}}",
       "usage": "Context: {{used}} of {{size}} tokens",
+      "config": {
+        "label": "{{name}} settings",
+        "mode": "Mode",
+        "duringTurn": "You can change these once the agent has finished working."
+      },
       "ended": {
         "title": "This conversation was run by {{name}}",
         "help": "Its session has ended. The transcript stays here; start a new agent conversation to continue."

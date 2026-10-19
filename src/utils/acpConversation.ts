@@ -1,4 +1,4 @@
-import type { AcpAgentStatus, AcpEvent, AcpPermission, AcpPlanEntry, AcpStopReason, AcpToolCall } from '../types/acp';
+import type { AcpAgentStatus, AcpEvent, AcpPermission, AcpPlanEntry, AcpSessionConfig, AcpStopReason, AcpToolCall } from '../types/acp';
 import type { IntegrationLaunchReview } from '../types/integrations';
 
 /** One prompt and what the agent reported for it. Tool calls are reports of
@@ -51,6 +51,11 @@ export function addPrompt(chat: AgentChat, turn: number, prompt: string): AgentC
     return withTurn(chat, turn, current => ({ ...current, prompt }));
 }
 
+/** Takes the agent's full settings state. */
+export function withConfig(chat: AgentChat, config: AcpSessionConfig): AgentChat {
+    return { ...chat, status: { ...chat.status, config } };
+}
+
 export function runningTurn(chat: AgentChat): AgentTurn | undefined {
     return chat.turns.find(turn => turn.state === 'running');
 }
@@ -82,6 +87,8 @@ export function applyAcpEvent(chat: AgentChat, event: AcpEvent): AgentChat {
                 : { ...chat, permissions: [...chat.permissions, event.request] };
         case 'permission_resolved':
             return { ...chat, permissions: chat.permissions.filter(request => request.request_id !== event.request_id) };
+        case 'config_changed':
+            return withConfig(chat, event.config);
         case 'title_changed':
             return { ...chat, title: event.title };
         case 'usage':

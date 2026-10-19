@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { AcpPermission, AcpToolCall, AcpToolContent } from '../types/acp';
+import type { AcpConfigChange, AcpPermission, AcpToolCall, AcpToolContent } from '../types/acp';
 import { runningTurn, type AgentChat, type AgentTurn } from '../utils/acpConversation';
 import { integrationProbeErrorKey } from '../utils/integrationProbe';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { AcpForwarding } from './AcpForwarding';
+import { AcpConfigControls } from './AcpConfigControls';
 
 const buttonClass = 'rounded border border-(--border-default) px-3 py-1.5 text-xs hover:bg-(--bg-surface-hover) disabled:opacity-50';
 
@@ -82,7 +83,7 @@ function PermissionCard({ name, request, busy, answer }: { name: string; request
 
 /** A conversation run by an ACP agent. What it reports is shown; Blade runs
  * none of its tools and applies none of its changes. */
-export function AcpConversationView({ chat, busy, error, send, cancel, answer, authenticate, end, onOpenFile }: {
+export function AcpConversationView({ chat, busy, error, send, cancel, answer, authenticate, configure, end, onOpenFile }: {
     chat: AgentChat;
     busy: boolean;
     error: string | null;
@@ -90,6 +91,7 @@ export function AcpConversationView({ chat, busy, error, send, cancel, answer, a
     cancel: () => void;
     answer: (requestId: string, optionId: string | null) => void;
     authenticate: (methodId: string) => void;
+    configure: (change: AcpConfigChange) => void;
     end: () => void;
     onOpenFile: (path: string) => void;
 }) {
@@ -115,6 +117,8 @@ export function AcpConversationView({ chat, busy, error, send, cancel, answer, a
         <div className="shrink-0 border-b border-(--border-subtle) px-4 py-2">
             <p className="font-medium text-(--fg-primary)">{t('chat.agent.runBy', { name })}{agent ? ` · ${agent.title || agent.name} ${agent.version}` : ''}</p>
             {chat.title ? <p className="truncate">{chat.title}</p> : null}
+            <AcpConfigControls name={name} config={chat.status.config} disabled={!live || !chat.status.ready || busy}
+                running={Boolean(running)} configure={configure} />
             <p className="text-(--fg-tertiary)">{t('chat.agent.reportsHelp')}</p>
             {chat.usage ? <p className="text-(--fg-tertiary)">{t('chat.agent.usage', { used: chat.usage.used, size: chat.usage.size })}</p> : null}
             <AcpForwarding forwarding={chat.status.forwarding} />

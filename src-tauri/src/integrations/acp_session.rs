@@ -3,7 +3,10 @@
 //! requests with the exact option the user picked, and never executes a tool
 //! the agent reports. Incoming handlers only queue work, so a pending UI
 //! decision never holds the protocol reader.
-use super::RuntimeError;
+use super::{
+    acp_config::{ConfigChange, SessionConfig},
+    RuntimeError,
+};
 use agent_client_protocol::{
     schema::{
         v1::{
@@ -12,9 +15,10 @@ use agent_client_protocol::{
             InitializeRequest, InitializeResponse, McpServer, NewSessionRequest,
             NewSessionResponse, PermissionOptionKind, PlanEntryPriority, PlanEntryStatus,
             PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
-            RequestPermissionResponse, SelectedPermissionOutcome, SessionId, SessionNotification,
-            SessionUpdate, StopReason, TextContent, TextResourceContents, ToolCallContent,
-            ToolCallStatus, ToolKind,
+            RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigOption,
+            SessionConfigOptionValue, SessionId, SessionNotification, SessionUpdate,
+            SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason, TextContent,
+            TextResourceContents, ToolCallContent, ToolCallStatus, ToolKind,
         },
         ProtocolVersion,
     },
@@ -54,8 +58,8 @@ const MAX_TOOL_ITEMS: usize = 32;
 const MAX_TOOL_TEXT: usize = 32 * 1024;
 const MAX_TURN_TEXT: usize = 2 * 1024 * 1024;
 const MAX_PLAN_ENTRIES: usize = 128;
-const MAX_LABEL: usize = 512;
-const MAX_DESCRIPTION: usize = 2048;
+pub(super) const MAX_LABEL: usize = 512;
+pub(super) const MAX_DESCRIPTION: usize = 2048;
 const MAX_PROMPT_BYTES: usize = 8 * 1024 * 1024;
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(30);
 const SESSION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -427,8 +431,9 @@ pub enum AcpEvent {
         request_id: Uuid,
         option_id: Option<String>,
     },
-    ModeChanged {
-        mode_id: String,
+    /// The agent's session settings changed; carries the full new state.
+    ConfigChanged {
+        config: SessionConfig,
     },
     TitleChanged {
         title: Option<String>,
@@ -603,6 +608,10 @@ enum Command {
         option_id: Option<String>,
         reply: oneshot::Sender<Result<(), RuntimeError>>,
     },
+    Configure {
+        change: ConfigChange,
+        reply: oneshot::Sender<Result<SessionConfig, RuntimeError>>,
+    },
     Close,
 }
 
@@ -614,6 +623,17 @@ enum Finished {
         Result<NewSessionResponse, RuntimeError>,
         oneshot::Sender<Result<String, RuntimeError>>,
     ),
+    Configured(
+        Result<Applied, RuntimeError>,
+        oneshot::Sender<Result<SessionConfig, RuntimeError>>,
+    ),
+}
+
+/// What the agent accepted.
+enum Applied {
+    /// The full option state `session/set_config_option` returned.
+    Options(Vec<SessionConfigOption>),
+    Mode(String),
 }
 
 /// Where the session works and the MCP servers it is given. Servers whose
@@ -652,6 +672,7 @@ pub struct AcpSession {
     commands: mpsc::Sender<Command>,
     finished: CancellationToken,
     pub snapshot: Arc<AgentSnapshot>,
+    config: Arc<std::sync::Mutex<SessionConfig>>,
 }
 
 pub struct Started {
@@ -677,8 +698,10 @@ impl AcpSession {
         let (started_tx, started_rx) = oneshot::channel();
         let overflow = Arc::new(AtomicBool::new(false));
         let finished = CancellationToken::new();
+        let config: Arc<std::sync::Mutex<SessionConfig>> = Arc::default();
         let actor = Actor {
             sink: sink.clone(),
+            config: config.clone(),
             incoming,
             commands: command_rx,
             overflow: overflow.clone(),
@@ -765,6 +788,7 @@ impl AcpSession {
                     commands,
                     finished,
                     snapshot,
+                    config,
                 },
                 session_id,
             }),
@@ -817,6 +841,21 @@ impl AcpSession {
         .await?
     }
 
+    /// Applies one of the session settings the agent offered and returns the
+    /// agent's full new state. Refused while a turn runs.
+    pub async fn configure(&self, change: ConfigChange) -> Result<SessionConfig, RuntimeError> {
+        self.request(|reply| Command::Configure { change, reply })
+            .await?
+    }
+
+    /// The agent's current session settings.
+    pub fn config(&self) -> SessionConfig {
+        self.config
+            .lock()
+            .map(|config| config.clone())
+            .unwrap_or_default()
+    }
+
     /// Ends the session. Pending permission requests are answered as
     /// cancelled and a running turn is asked to stop.
     pub fn close(&self) {
@@ -840,6 +879,7 @@ struct Parked {
 
 struct Actor {
     sink: Sink,
+    config: Arc<std::sync::Mutex<SessionConfig>>,
     incoming: mpsc::Receiver<Incoming>,
     commands: mpsc::Receiver<Command>,
     overflow: Arc<AtomicBool>,
@@ -882,6 +922,7 @@ impl Actor {
         let snapshot = Arc::new(snapshot);
         live.store(true, Ordering::Release);
         self.snapshot = Some(snapshot.clone());
+        let session = session.map(|response| self.adopt(response));
         self.session = session.clone();
         if started
             .send(Ok((snapshot, session.map(|id| id.to_string()))))
@@ -1063,8 +1104,68 @@ impl Actor {
                 let _ = reply.send(sent);
                 None
             }
+            Command::Configure { change, reply } => {
+                let Some(session) = self.session.clone() else {
+                    let _ = reply.send(Err(RuntimeError::AuthenticationRequired));
+                    return None;
+                };
+                if busy {
+                    let _ = reply.send(Err(RuntimeError::Busy));
+                    return None;
+                }
+                let config = self.current_config();
+                match config.check(&change) {
+                    Ok(false) => {}
+                    Ok(true) => {
+                        let _ = reply.send(Ok(config));
+                        return None;
+                    }
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                        return None;
+                    }
+                }
+                let connection = connection.clone();
+                Some(Box::pin(async move {
+                    let result = configure(&connection, session, change).await;
+                    Finished::Configured(result, reply)
+                }))
+            }
             Command::Close => None,
         }
+    }
+
+    fn current_config(&self) -> SessionConfig {
+        self.config
+            .lock()
+            .map(|config| config.clone())
+            .unwrap_or_default()
+    }
+
+    /// Changes the settings and reports the new state when `change` altered it.
+    fn change_config(&self, change: impl FnOnce(&mut SessionConfig)) -> SessionConfig {
+        let Ok(mut config) = self.config.lock() else {
+            return SessionConfig::default();
+        };
+        let before = config.clone();
+        change(&mut config);
+        let after = config.clone();
+        drop(config);
+        if after != before {
+            (self.sink)(AcpEvent::ConfigChanged {
+                config: after.clone(),
+            });
+        }
+        after
+    }
+
+    /// Takes the settings a new session declared and returns its id.
+    fn adopt(&self, response: NewSessionResponse) -> SessionId {
+        self.change_config(|config| {
+            *config =
+                SessionConfig::new(response.config_options.as_deref(), response.modes.as_ref())
+        });
+        response.session_id
     }
 
     fn finish(&mut self, finished: Finished) {
@@ -1091,8 +1192,20 @@ impl Actor {
             }
             Finished::Authenticated(result, reply) => {
                 let result = result.map(|response| {
-                    self.session = Some(response.session_id.clone());
-                    response.session_id.to_string()
+                    let session = self.adopt(response);
+                    self.session = Some(session.clone());
+                    session.to_string()
+                });
+                let _ = reply.send(result);
+            }
+            Finished::Configured(result, reply) => {
+                let result = result.map(|applied| {
+                    self.change_config(|config| match applied {
+                        Applied::Options(options) => config.replace_options(&options),
+                        Applied::Mode(mode_id) => {
+                            config.set_mode(&mode_id);
+                        }
+                    })
                 });
                 let _ = reply.send(result);
             }
@@ -1271,9 +1384,14 @@ impl Actor {
                     })
                     .collect(),
             }),
-            SessionUpdate::CurrentModeUpdate(update) => (self.sink)(AcpEvent::ModeChanged {
-                mode_id: clip(&update.current_mode_id.to_string(), MAX_LABEL),
-            }),
+            SessionUpdate::CurrentModeUpdate(update) => {
+                self.change_config(|config| {
+                    config.set_mode(&update.current_mode_id.to_string());
+                });
+            }
+            SessionUpdate::ConfigOptionUpdate(update) => {
+                self.change_config(|config| config.replace_options(&update.config_options));
+            }
             SessionUpdate::SessionInfoUpdate(update) => {
                 use agent_client_protocol::schema::MaybeUndefined;
                 match update.title {
@@ -1288,8 +1406,8 @@ impl Actor {
                 used: usage.used,
                 size: usage.size,
             }),
-            // Echoes and replays of the user's own text, command lists, config
-            // options and capabilities Blade did not advertise: not shown yet.
+            // Echoes and replays of the user's own text, command lists and
+            // capabilities Blade did not advertise: not shown yet.
             _ => {}
         }
     }
@@ -1319,7 +1437,7 @@ fn merge(
 async fn open(
     connection: &ConnectionTo<Agent>,
     setup: SessionSetup,
-) -> Result<(AgentSnapshot, Option<SessionId>, SessionSetup), RuntimeError> {
+) -> Result<(AgentSnapshot, Option<NewSessionResponse>, SessionSetup), RuntimeError> {
     let initialize = InitializeRequest::new(ProtocolVersion::V1)
         .client_capabilities(ClientCapabilities::default())
         .client_info(Implementation::new(
@@ -1339,7 +1457,7 @@ async fn open(
     let snapshot = AgentSnapshot::from_response(&response);
     let setup = setup.supported_by(&snapshot);
     match new_session(connection, setup.clone()).await {
-        Ok(session) => Ok((snapshot, Some(session.session_id), setup)),
+        Ok(session) => Ok((snapshot, Some(session), setup)),
         Err(RuntimeError::AuthenticationRequired) => Ok((snapshot, None, setup)),
         Err(error) => Err(error),
     }
@@ -1368,6 +1486,50 @@ async fn new_session(
     Ok(response)
 }
 
+async fn configure(
+    connection: &ConnectionTo<Agent>,
+    session: SessionId,
+    change: ConfigChange,
+) -> Result<Applied, RuntimeError> {
+    let refused = |error: agent_client_protocol::Error| match error.code {
+        ErrorCode::InvalidParams => RuntimeError::InvalidArguments,
+        ErrorCode::AuthRequired => RuntimeError::AuthenticationRequired,
+        _ => RuntimeError::ProtocolFailed,
+    };
+    let (config_id, value) = match change {
+        ConfigChange::Mode { mode_id } => {
+            tokio::time::timeout(
+                SESSION_TIMEOUT,
+                connection
+                    .send_request(SetSessionModeRequest::new(session, mode_id.clone()))
+                    .block_task(),
+            )
+            .await
+            .map_err(|_| RuntimeError::TimedOut)?
+            .map_err(refused)?;
+            return Ok(Applied::Mode(mode_id));
+        }
+        ConfigChange::Select { config_id, value } => {
+            (config_id, SessionConfigOptionValue::value_id(value))
+        }
+        ConfigChange::Boolean { config_id, value } => {
+            (config_id, SessionConfigOptionValue::boolean(value))
+        }
+    };
+    let response = tokio::time::timeout(
+        SESSION_TIMEOUT,
+        connection
+            .send_request(SetSessionConfigOptionRequest::new(
+                session, config_id, value,
+            ))
+            .block_task(),
+    )
+    .await
+    .map_err(|_| RuntimeError::TimedOut)?
+    .map_err(refused)?;
+    Ok(Applied::Options(response.config_options))
+}
+
 async fn sleep_until(deadline: Option<tokio::time::Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -1382,7 +1544,7 @@ async fn poll_pending(pending: &mut Option<Pending>) -> Finished {
     }
 }
 
-fn clip(text: &str, max: usize) -> String {
+pub(super) fn clip(text: &str, max: usize) -> String {
     if text.len() <= max {
         return text.to_owned();
     }
@@ -1514,6 +1676,11 @@ pub(crate) mod tests {
 
         /// Answers `initialize` and the first `session/new`.
         async fn handshake(&mut self, auth_required: bool) {
+            self.handshake_with(auth_required, json!({"sessionId":"s1"}))
+                .await;
+        }
+
+        async fn handshake_with(&mut self, auth_required: bool, session_result: Value) {
             let initialize = self.expect("initialize").await;
             assert_eq!(initialize["params"]["protocolVersion"], 1);
             let capabilities = &initialize["params"]["clientCapabilities"];
@@ -1537,7 +1704,7 @@ pub(crate) mod tests {
             if auth_required {
                 self.fail(&session, -32000).await;
             } else {
-                self.reply(&session, json!({"sessionId":"s1"})).await;
+                self.reply(&session, session_result).await;
             }
         }
     }
@@ -1600,6 +1767,157 @@ pub(crate) mod tests {
         let started = started.unwrap();
         assert_eq!(started.session_id.as_deref(), Some("s1"));
         (wire, started.session, fixture)
+    }
+
+    /// A ready session whose `session/new` answer was `session_result`.
+    async fn ready_with(session_result: Value) -> (Wire, AcpSession, Fixture) {
+        let (mut wire, start, fixture) = connect();
+        let (started, ()) = tokio::join!(start, wire.handshake_with(false, session_result));
+        (wire, started.unwrap().session, fixture)
+    }
+
+    fn select_option(id: &str, current: &str, values: &[&str]) -> Value {
+        json!({"id":id,"name":id,"type":"select","currentValue":current,
+            "options":values.iter().map(|value| json!({"value":value,"name":value})).collect::<Vec<_>>()})
+    }
+
+    fn current(config: &SessionConfig, id: &str) -> Option<String> {
+        use super::super::acp_config::ConfigKindView;
+        config
+            .options
+            .iter()
+            .find(|option| option.id == id)
+            .map(|option| match &option.kind {
+                ConfigKindView::Select { current_value, .. } => current_value.clone(),
+                ConfigKindView::Boolean { current_value } => current_value.to_string(),
+            })
+    }
+
+    #[tokio::test]
+    async fn config_options_are_set_through_the_agent_and_its_full_state_is_kept() {
+        let (mut wire, session, fixture) = ready_with(json!({"sessionId":"s1",
+            "configOptions":[select_option("model","a",&["a","b"]),
+                {"id":"fast","name":"Fast","type":"boolean","currentValue":false}],
+            "modes":{"currentModeId":"build","availableModes":[{"id":"build","name":"Build"}]}}))
+        .await;
+        let config = session.config();
+        assert_eq!(current(&config, "model").as_deref(), Some("a"));
+        assert_eq!(config.modes, None);
+
+        let select = |value: &str| ConfigChange::Select {
+            config_id: "model".into(),
+            value: value.into(),
+        };
+        // Values the agent did not offer, the current value and legacy modes
+        // never reach the agent.
+        assert_eq!(
+            session.configure(select("c")).await,
+            Err(RuntimeError::InvalidArguments)
+        );
+        assert_eq!(session.configure(select("a")).await, Ok(config));
+        assert_eq!(
+            session
+                .configure(ConfigChange::Mode {
+                    mode_id: "build".into()
+                })
+                .await,
+            Err(RuntimeError::InvalidArguments)
+        );
+
+        let agent = async {
+            let request = wire.expect("session/set_config_option").await;
+            assert_eq!(
+                request["params"],
+                json!({"sessionId":"s1","configId":"model","value":"b"})
+            );
+            // The agent's answer is the whole state, which may change others.
+            wire.reply(
+                &request,
+                json!({"configOptions":[select_option("model","b",&["a","b"]),
+                    select_option("effort","low",&["low","high"])]}),
+            )
+            .await;
+        };
+        let (applied, ()) = tokio::join!(session.configure(select("b")), agent);
+        let applied = applied.unwrap();
+        assert_eq!(current(&applied, "model").as_deref(), Some("b"));
+        assert_eq!(current(&applied, "effort").as_deref(), Some("low"));
+        assert_eq!(current(&applied, "fast"), None);
+        assert_eq!(session.config(), applied);
+        fixture
+            .wait_for(
+                |event| matches!(event, AcpEvent::ConfigChanged { config } if *config == applied),
+            )
+            .await;
+
+        // A boolean for a select option is refused locally; an agent's
+        // refusal leaves the state as it was.
+        assert_eq!(
+            session
+                .configure(ConfigChange::Boolean {
+                    config_id: "model".into(),
+                    value: true
+                })
+                .await,
+            Err(RuntimeError::InvalidArguments)
+        );
+        let agent = async {
+            let request = wire.expect("session/set_config_option").await;
+            assert_eq!(
+                request["params"],
+                json!({"sessionId":"s1","configId":"effort","value":"high"})
+            );
+            wire.fail(&request, -32602).await;
+        };
+        let (refused, ()) = tokio::join!(
+            session.configure(ConfigChange::Select {
+                config_id: "effort".into(),
+                value: "high".into()
+            }),
+            agent
+        );
+        assert_eq!(refused, Err(RuntimeError::InvalidArguments));
+        assert_eq!(session.config(), applied);
+
+        // The agent changes its own settings.
+        wire.update(json!({"sessionUpdate":"config_option_update",
+            "configOptions":[select_option("model","a",&["a"])]}))
+            .await;
+        fixture
+            .wait_for(|event| {
+                matches!(event, AcpEvent::ConfigChanged { config }
+                if current(config, "model").as_deref() == Some("a") && config.options.len() == 1)
+            })
+            .await;
+        assert_eq!(current(&session.config(), "model").as_deref(), Some("a"));
+    }
+
+    #[tokio::test]
+    async fn legacy_modes_are_set_with_set_mode() {
+        let (mut wire, session, fixture) = ready_with(json!({"sessionId":"s1",
+            "modes":{"currentModeId":"ask","availableModes":[{"id":"ask","name":"Ask"},
+                {"id":"code","name":"Code"}]}}))
+        .await;
+        let agent = async {
+            let request = wire.expect("session/set_mode").await;
+            assert_eq!(request["params"], json!({"sessionId":"s1","modeId":"code"}));
+            wire.reply(&request, json!({})).await;
+        };
+        let (applied, ()) = tokio::join!(
+            session.configure(ConfigChange::Mode {
+                mode_id: "code".into()
+            }),
+            agent
+        );
+        assert_eq!(applied.unwrap().modes.unwrap().current_mode_id, "code");
+        wire.update(json!({"sessionUpdate":"current_mode_update","currentModeId":"ask"}))
+            .await;
+        fixture
+            .wait_for(|event| {
+                matches!(event, AcpEvent::ConfigChanged { config }
+                if config.modes.as_ref().is_some_and(|modes| modes.current_mode_id == "ask"))
+            })
+            .await;
     }
 
     #[tokio::test]

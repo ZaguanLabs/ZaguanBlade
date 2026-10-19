@@ -25,6 +25,35 @@ export interface AcpAgentSnapshot {
     auth_methods: AcpAuthMethod[];
 }
 
+export interface AcpConfigChoice {
+    value: string;
+    name: string;
+    description: string | null;
+}
+
+/** One of the agent's session settings, in the agent's order. */
+export type AcpConfigOption = {
+    id: string;
+    name: string;
+    description: string | null;
+    /** `mode`, `model`, `model_config`, `thought_level` or the agent's own. */
+    category: string | null;
+} & (
+    | { type: 'select'; current_value: string; groups: Array<{ name: string | null; choices: AcpConfigChoice[] }> }
+    | { type: 'boolean'; current_value: boolean }
+);
+
+export interface AcpSessionConfig {
+    options: AcpConfigOption[];
+    /** Legacy session modes, only when the agent offers no options. */
+    modes: { current_mode_id: string; modes: AcpConfigChoice[] } | null;
+}
+
+export type AcpConfigChange =
+    | { type: 'select'; config_id: string; value: string }
+    | { type: 'boolean'; config_id: string; value: boolean }
+    | { type: 'mode'; mode_id: string };
+
 export interface AcpAgentStatus {
     conversation_id: string;
     integration_id: string;
@@ -33,6 +62,7 @@ export interface AcpAgentStatus {
     /** False until the agent has created its session (it may need a sign-in). */
     ready: boolean;
     forwarding?: AcpForwardingView;
+    config?: AcpSessionConfig;
 }
 
 export type AcpContent =
@@ -84,7 +114,7 @@ export type AcpEvent =
     | { type: 'plan'; turn: number | null; entries: AcpPlanEntry[] }
     | { type: 'permission'; turn: number | null; request: AcpPermission }
     | { type: 'permission_resolved'; request_id: string; option_id: string | null }
-    | { type: 'mode_changed'; mode_id: string }
+    | { type: 'config_changed'; config: AcpSessionConfig }
     | { type: 'title_changed'; title: string | null }
     | { type: 'usage'; used: number; size: number }
     | { type: 'turn_ended'; turn: number; stop_reason: AcpStopReason }

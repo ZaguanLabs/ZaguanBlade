@@ -267,6 +267,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                     cancel={() => void agent.cancel()}
                     answer={(requestId, optionId) => void agent.answer(requestId, optionId)}
                     authenticate={methodId => void agent.authenticate(methodId)}
+                    configure={change => void agent.configure(change)}
                     end={() => void agent.end()}
                     onOpenFile={onOpenFile}
                 />

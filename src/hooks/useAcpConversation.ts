@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { AcpAgentStatus, AcpEventPayload } from '../types/acp';
-import { addPrompt, applyAcpEvent, startAgentChat, type AgentChat } from '../utils/acpConversation';
+import type { AcpAgentStatus, AcpConfigChange, AcpEventPayload, AcpSessionConfig } from '../types/acp';
+import { addPrompt, applyAcpEvent, startAgentChat, withConfig, type AgentChat } from '../utils/acpConversation';
 import { integrationProbeErrorKey } from '../utils/integrationProbe';
 
 interface ConversationOwner {
@@ -87,6 +87,12 @@ export function useAcpConversation() {
         if (conversation.current === conversationId) setChat(current => current && { ...current, status });
     }), [run]);
 
+    /** Applies one of the agent's own settings; the agent returns the full new state. */
+    const configure = useCallback((change: AcpConfigChange) => run(async conversationId => {
+        const config = await invoke<AcpSessionConfig>('set_acp_config', { conversationId, change });
+        if (conversation.current === conversationId) setChat(current => current && withConfig(current, config));
+    }), [run]);
+
     /** Ends the session; the transcript stays on screen. */
     const end = useCallback(() => run(async conversationId => {
         await invoke('close_acp_conversation', { conversationId });
@@ -98,5 +104,5 @@ export function useAcpConversation() {
         }
     }), [run]);
 
-    return { chat, storedOwner, busy, error, attach, detach, sync, send, cancel, answer, authenticate, end };
+    return { chat, storedOwner, busy, error, attach, detach, sync, send, cancel, answer, authenticate, configure, end };
 }

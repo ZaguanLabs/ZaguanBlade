@@ -29,7 +29,7 @@ for (const [language, translation] of Object.entries({ en, es })) {
         const i18n = createInstance();
         await i18n.init({ lng: language, resources: { [language]: { translation } }, interpolation: { escapeValue: false } });
         return renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(AcpConversationView, {
-            chat, busy: false, error: null, send: noop, cancel: noop, answer: noop, authenticate: noop, end: noop, onOpenFile: noop,
+            chat, busy: false, error: null, send: noop, cancel: noop, answer: noop, authenticate: noop, configure: noop, end: noop, onOpenFile: noop,
         })));
     };
     const strings = translation.chat.agent;
@@ -66,6 +66,30 @@ for (const [language, translation] of Object.entries({ en, es })) {
         assert.ok(exited.includes(escape(translation.settings.integrations.test.errors.agent_exited)));
         assert.ok(/<textarea[^>]*disabled/.test(exited));
         assert.ok(!exited.includes(escape(strings.end)));
+    });
+
+    test(`the agent's settings show as its own controls and lock during a turn in ${language}`, async () => {
+        let chat = applyAcpEvent(startAgentChat(status(true)), { type: 'config_changed', config: { modes: null, options: [
+            { id: 'model', name: 'Model', description: null, category: 'model', type: 'select', current_value: 'a/1', groups: [
+                { name: 'Provider A', choices: [{ value: 'a/1', name: 'Model One', description: null }] },
+                { name: 'Provider B', choices: [{ value: 'b/2', name: 'Model Two', description: 'Fast' }] }] },
+            { id: 'fast', name: 'Fast mode', description: null, category: null, type: 'boolean', current_value: true },
+        ] } });
+        const idle = await render(chat);
+        assert.ok(idle.includes(escape(strings.config.label.replace('{{name}}', 'Fixture Agent'))));
+        assert.ok(idle.includes('<optgroup label="Provider B"><option value="b/2" title="Fast">Model Two</option></optgroup>'));
+        assert.ok(/<option value="a\/1" selected="">Model One<\/option>/.test(idle));
+        assert.ok(/<input type="checkbox" checked=""\/><span>Fast mode<\/span>/.test(idle));
+        assert.ok(!idle.includes(`<span>${escape(strings.config.mode)}</span>`));
+        chat = addPrompt(chat, 1, 'Go');
+        const running = await render(chat);
+        assert.ok(running.includes(escape(strings.config.duringTurn)));
+        assert.ok(/<select[^>]*disabled=""/.test(running) && /<input type="checkbox" disabled="" checked=""/.test(running));
+
+        const legacy = await render(applyAcpEvent(startAgentChat(status(true)), { type: 'config_changed', config: { options: [],
+            modes: { current_mode_id: 'ask', modes: [{ value: 'ask', name: 'Ask', description: null }, { value: 'code', name: 'Code', description: null }] } } }));
+        assert.ok(legacy.includes(`<span>${escape(strings.config.mode)}</span>`));
+        assert.ok(legacy.includes('<option value="code">Code</option>'));
     });
 }
 

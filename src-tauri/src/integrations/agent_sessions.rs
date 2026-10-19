@@ -2,6 +2,7 @@
 //! conversation: switching conversations, changing workspace or shutting down
 //! ends it. Resuming a stored session is phase 6.
 use super::{
+    acp_config::SessionConfig,
     acp_forward::ForwardingView,
     acp_session::{AcpSession, AgentSnapshot, TurnRecorder},
     process::SupervisedProcess,
@@ -37,6 +38,8 @@ pub struct AgentStatus {
     /// `false` until the agent has created a session (it may need a sign-in).
     pub ready: bool,
     pub forwarding: ForwardingView,
+    /// The agent's session settings (model, effort, mode…).
+    pub config: SessionConfig,
 }
 
 impl LiveAgent {
@@ -74,6 +77,7 @@ impl LiveAgent {
                 .map(|id| id.is_some())
                 .unwrap_or(false),
             forwarding: self.forwarding.clone(),
+            config: self.session.config(),
         }
     }
 
