@@ -1,4 +1,4 @@
-import type { AcpAgentStatus, AcpEvent, AcpFileRefusal, AcpPermission, AcpPlanEntry, AcpSessionConfig, AcpStopReason, AcpToolCall } from '../types/acp';
+import type { AcpAgentStatus, AcpEvent, AcpFileRefusal, AcpPermission, AcpPlanEntry, AcpSessionConfig, AcpStopReason, AcpTerminal, AcpToolCall } from '../types/acp';
 import type { IntegrationLaunchReview } from '../types/integrations';
 
 /** One prompt and what the agent reported for it. Tool calls are reports of
@@ -12,6 +12,8 @@ export interface AgentTurn {
     tools: AcpToolCall[];
     plan: AcpPlanEntry[];
     files: Array<{ path: string; refused: AcpFileRefusal | null }>;
+    /** Terminals the agent started during this turn. */
+    terminals: string[];
     state: 'running' | 'ended' | 'failed';
     stopReason: AcpStopReason | null;
     error: string | null;
@@ -26,14 +28,16 @@ export interface AgentChat {
     exited: { error: string | null } | null;
     title: string | null;
     usage: { used: number; size: number } | null;
+    /** Every terminal the agent ran through Blade, by id. */
+    terminals: Record<string, AcpTerminal>;
 }
 
 export function startAgentChat(status: AcpAgentStatus): AgentChat {
-    return { status, turns: [], permissions: [], exited: null, title: null, usage: null };
+    return { status, turns: [], permissions: [], exited: null, title: null, usage: null, terminals: {} };
 }
 
 function emptyTurn(turn: number, prompt = ''): AgentTurn {
-    return { turn, prompt, text: '', thoughts: '', tools: [], plan: [], files: [], state: 'running', stopReason: null, error: null, truncated: false };
+    return { turn, prompt, text: '', thoughts: '', tools: [], plan: [], files: [], terminals: [], state: 'running', stopReason: null, error: null, truncated: false };
 }
 
 /** Updates turn `turn` (or the latest one when `turn` is null), creating it
@@ -83,6 +87,13 @@ export function applyAcpEvent(chat: AgentChat, event: AcpEvent): AgentChat {
             });
         case 'plan':
             return withTurn(chat, event.turn, current => ({ ...current, plan: event.entries }));
+        case 'terminal': {
+            const { id } = event.terminal;
+            const known = { ...chat, terminals: { ...chat.terminals, [id]: event.terminal } };
+            return withTurn(known, event.turn, current => current.terminals.includes(id)
+                ? current
+                : { ...current, terminals: [...current.terminals, id] });
+        }
         case 'file_written':
         case 'file_refused': {
             const file = { path: event.path, refused: event.type === 'file_refused' ? event.reason : null };

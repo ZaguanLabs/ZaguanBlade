@@ -383,6 +383,12 @@
           "outside_workspace": "Blade didn't let the agent write {{path}} because it's outside the workspace."
         }
       },
+      "terminal": {
+        "running": "Running…",
+        "exited": "Exited with code {{code}}",
+        "signal": "Stopped by {{signal}}",
+        "truncated": "Showing only the latest output."
+      },
       "stopReason": {
         "max_tokens": "The agent stopped because it reached its token limit.",
         "max_turn_requests": "The agent stopped because it reached its step limit for one turn.",

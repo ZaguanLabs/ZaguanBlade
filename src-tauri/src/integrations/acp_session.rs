@@ -6,22 +6,26 @@
 use super::{
     acp_config::{ConfigChange, SessionConfig},
     acp_files::{FileError, WorkspaceFiles},
+    acp_terminals::{TerminalView, Terminals},
     RuntimeError,
 };
 use agent_client_protocol::{
     schema::{
         v1::{
             AuthMethod, AuthenticateRequest, CancelNotification, ClientCapabilities, ContentBlock,
-            EmbeddedResource, EmbeddedResourceResource, ErrorCode, FileSystemCapabilities,
-            ImageContent, Implementation, InitializeRequest, InitializeResponse, McpServer,
-            NewSessionRequest, NewSessionResponse, PermissionOptionKind, PlanEntryPriority,
-            PlanEntryStatus, PromptRequest, PromptResponse, ReadTextFileRequest,
-            ReadTextFileResponse, RequestPermissionOutcome, RequestPermissionRequest,
+            CreateTerminalRequest, CreateTerminalResponse, EmbeddedResource,
+            EmbeddedResourceResource, ErrorCode, FileSystemCapabilities, ImageContent,
+            Implementation, InitializeRequest, InitializeResponse, KillTerminalRequest,
+            KillTerminalResponse, McpServer, NewSessionRequest, NewSessionResponse,
+            PermissionOptionKind, PlanEntryPriority, PlanEntryStatus, PromptRequest,
+            PromptResponse, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
+            ReleaseTerminalResponse, RequestPermissionOutcome, RequestPermissionRequest,
             RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigOption,
             SessionConfigOptionValue, SessionId, SessionNotification, SessionUpdate,
-            SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason, TextContent,
-            TextResourceContents, ToolCallContent, ToolCallStatus, ToolKind, WriteTextFileRequest,
-            WriteTextFileResponse,
+            SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason,
+            TerminalOutputRequest, TerminalOutputResponse, TextContent, TextResourceContents,
+            ToolCallContent, ToolCallStatus, ToolKind, WaitForTerminalExitRequest,
+            WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
         },
         ProtocolVersion,
     },
@@ -447,6 +451,11 @@ pub enum AcpEvent {
         turn: Option<u64>,
         path: String,
     },
+    /// A terminal the agent runs through Blade started, printed or ended.
+    Terminal {
+        turn: Option<u64>,
+        terminal: TerminalView,
+    },
     /// Blade refused to let the agent write a file.
     FileRefused {
         turn: Option<u64>,
@@ -606,6 +615,87 @@ enum Incoming {
     ),
     Read(ReadTextFileRequest, Responder<ReadTextFileResponse>),
     Write(WriteTextFileRequest, Responder<WriteTextFileResponse>),
+    Terminal(TerminalCall),
+}
+
+/// One `terminal/*` request and where its answer goes.
+enum TerminalCall {
+    Create(CreateTerminalRequest, Responder<CreateTerminalResponse>),
+    Output(TerminalOutputRequest, Responder<TerminalOutputResponse>),
+    Wait(
+        WaitForTerminalExitRequest,
+        Responder<WaitForTerminalExitResponse>,
+    ),
+    Kill(KillTerminalRequest, Responder<KillTerminalResponse>),
+    Release(ReleaseTerminalRequest, Responder<ReleaseTerminalResponse>),
+}
+
+impl TerminalCall {
+    fn session(&self) -> &SessionId {
+        match self {
+            Self::Create(request, _) => &request.session_id,
+            Self::Output(request, _) => &request.session_id,
+            Self::Wait(request, _) => &request.session_id,
+            Self::Kill(request, _) => &request.session_id,
+            Self::Release(request, _) => &request.session_id,
+        }
+    }
+
+    fn refuse(self, error: agent_client_protocol::Error) {
+        let _ = match self {
+            Self::Create(_, responder) => responder.respond_with_error(error),
+            Self::Output(_, responder) => responder.respond_with_error(error),
+            Self::Wait(_, responder) => responder.respond_with_error(error),
+            Self::Kill(_, responder) => responder.respond_with_error(error),
+            Self::Release(_, responder) => responder.respond_with_error(error),
+        };
+    }
+
+    async fn run(self, terminals: Arc<Terminals>, sink: Sink, turn: Option<u64>) {
+        fn answer<T: agent_client_protocol::JsonRpcResponse>(
+            responder: Responder<T>,
+            result: Result<T, agent_client_protocol::Error>,
+        ) {
+            let _ = match result {
+                Ok(response) => responder.respond(response),
+                Err(error) => responder.respond_with_error(error),
+            };
+        }
+        match self {
+            Self::Create(request, responder) => {
+                let on_change: super::acp_terminals::OnChange =
+                    Arc::new(move |terminal| sink(AcpEvent::Terminal { turn, terminal }));
+                answer(
+                    responder,
+                    terminals
+                        .create(request, on_change)
+                        .map(CreateTerminalResponse::new),
+                );
+            }
+            Self::Output(request, responder) => {
+                answer(responder, terminals.output(&request.terminal_id.0))
+            }
+            Self::Wait(request, responder) => answer(
+                responder,
+                terminals
+                    .wait_for_exit(&request.terminal_id.0)
+                    .await
+                    .map(WaitForTerminalExitResponse::new),
+            ),
+            Self::Kill(request, responder) => answer(
+                responder,
+                terminals
+                    .kill(&request.terminal_id.0)
+                    .map(|()| KillTerminalResponse::new()),
+            ),
+            Self::Release(request, responder) => answer(
+                responder,
+                terminals
+                    .release(&request.terminal_id.0)
+                    .map(|()| ReleaseTerminalResponse::new()),
+            ),
+        }
+    }
 }
 
 enum Command {
@@ -661,6 +751,8 @@ pub struct SessionSetup {
     pub cwd: PathBuf,
     pub mcp_servers: Vec<McpServer>,
     pub files: Option<Arc<WorkspaceFiles>>,
+    /// When set, the agent may run commands in terminals Blade owns.
+    pub terminals: Option<Arc<Terminals>>,
 }
 impl From<PathBuf> for SessionSetup {
     fn from(cwd: PathBuf) -> Self {
@@ -668,6 +760,7 @@ impl From<PathBuf> for SessionSetup {
             cwd,
             mcp_servers: Vec::new(),
             files: None,
+            terminals: None,
         }
     }
 }
@@ -723,6 +816,7 @@ impl AcpSession {
             sink: sink.clone(),
             config: config.clone(),
             files: setup.files.clone(),
+            terminals: setup.terminals.clone(),
             incoming,
             commands: command_rx,
             overflow: overflow.clone(),
@@ -751,10 +845,35 @@ impl AcpSession {
         let read_overflow = overflow.clone();
         let write_tx = incoming_tx.clone();
         let write_overflow = overflow.clone();
-        let permission_overflow = overflow;
+        let permission_overflow = overflow.clone();
+        // Queues a `terminal/*` request for the actor; a full queue ends the session.
+        macro_rules! terminal_request {
+            ($builder:expr, $request:ty, $variant:ident) => {{
+                let queue = incoming_tx.clone();
+                let overflow = overflow.clone();
+                $builder.on_receive_request(
+                    async move |request: $request, responder, _connection| {
+                        let call = Incoming::Terminal(TerminalCall::$variant(request, responder));
+                        if let Err(error) = queue.try_send(call) {
+                            overflow.store(true, Ordering::Release);
+                            if let Incoming::Terminal(call) = error.into_inner() {
+                                call.refuse(agent_client_protocol::Error::internal_error());
+                            }
+                        }
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+            }};
+        }
+        let builder = Client.builder();
+        let builder = terminal_request!(builder, CreateTerminalRequest, Create);
+        let builder = terminal_request!(builder, TerminalOutputRequest, Output);
+        let builder = terminal_request!(builder, WaitForTerminalExitRequest, Wait);
+        let builder = terminal_request!(builder, KillTerminalRequest, Kill);
+        let builder = terminal_request!(builder, ReleaseTerminalRequest, Release);
         tokio::spawn(async move {
-            let result = Client
-                .builder()
+            let result = builder
                 .on_receive_notification(
                     async move |notification: SessionNotification, _connection| {
                         if update_tx.try_send(Incoming::Update(notification)).is_err() {
@@ -940,6 +1059,7 @@ struct Actor {
     sink: Sink,
     config: Arc<std::sync::Mutex<SessionConfig>>,
     files: Option<Arc<WorkspaceFiles>>,
+    terminals: Option<Arc<Terminals>>,
     incoming: mpsc::Receiver<Incoming>,
     commands: mpsc::Receiver<Command>,
     overflow: Arc<AtomicBool>,
@@ -1019,6 +1139,9 @@ impl Actor {
             }
         };
         self.cancel_permissions();
+        if let Some(terminals) = &self.terminals {
+            terminals.close_all();
+        }
         if let Some(turn) = self.prompting.take() {
             match exit {
                 None => {
@@ -1297,6 +1420,13 @@ impl Actor {
                     };
                 });
             }
+            Incoming::Terminal(call) => {
+                let terminals = match self.terminals_for(call.session()) {
+                    Ok(terminals) => terminals,
+                    Err(error) => return call.refuse(error),
+                };
+                tokio::spawn(call.run(terminals, self.sink.clone(), self.prompting));
+            }
             Incoming::Write(request, responder) => {
                 let files = match self.files_for(&request.session_id) {
                     Ok(files) => files,
@@ -1337,6 +1467,21 @@ impl Actor {
                 });
             }
         }
+    }
+
+    /// The terminals, for a request that belongs to this session.
+    fn terminals_for(
+        &self,
+        session: &SessionId,
+    ) -> Result<Arc<Terminals>, agent_client_protocol::Error> {
+        let terminals = self
+            .terminals
+            .clone()
+            .ok_or_else(agent_client_protocol::Error::method_not_found)?;
+        if self.session.as_ref() != Some(session) {
+            return Err(agent_client_protocol::Error::invalid_params());
+        }
+        Ok(terminals)
     }
 
     /// The workspace files, for a request that belongs to this session.
@@ -1571,9 +1716,11 @@ async fn open(
 ) -> Result<(AgentSnapshot, Option<NewSessionResponse>, SessionSetup), RuntimeError> {
     let initialize = InitializeRequest::new(ProtocolVersion::V1)
         .client_capabilities(
-            ClientCapabilities::new().fs(FileSystemCapabilities::new()
-                .read_text_file(setup.files.is_some())
-                .write_text_file(setup.files.is_some())),
+            ClientCapabilities::new()
+                .fs(FileSystemCapabilities::new()
+                    .read_text_file(setup.files.is_some())
+                    .write_text_file(setup.files.is_some()))
+                .terminal(setup.terminals.is_some()),
         )
         .client_info(Implementation::new(
             "zaguan-blade",
@@ -2081,6 +2228,7 @@ pub(crate) mod tests {
                 documents.clone(),
                 Arc::new(NoJournal),
             ))),
+            terminals: None,
         };
         let start = AcpSession::start(
             read,
@@ -2180,6 +2328,134 @@ pub(crate) mod tests {
         }));
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_agent_runs_commands_in_terminals_blade_owns() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let (client, agent) = tokio::io::duplex(1 << 20);
+        let (read, write) = tokio::io::split(client);
+        let (agent_read, agent_write) = tokio::io::split(agent);
+        let mut wire = Wire {
+            input: BufReader::new(agent_read).lines(),
+            output: agent_write,
+        };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink_events = events.clone();
+        let setup = SessionSetup {
+            cwd: root.clone(),
+            mcp_servers: Vec::new(),
+            files: None,
+            terminals: Some(Arc::new(Terminals::new(
+                root.clone(),
+                vec![("PATH".into(), path)],
+            ))),
+        };
+        let start = AcpSession::start(
+            read,
+            write,
+            setup,
+            Arc::new(move |event| sink_events.lock().unwrap().push(event)),
+        );
+        let agent = async {
+            let initialize = wire.expect("initialize").await;
+            let capabilities = &initialize["params"]["clientCapabilities"];
+            assert_eq!(capabilities["terminal"], true);
+            assert_eq!(capabilities["fs"]["readTextFile"], false);
+            wire.reply(&initialize, json!({"protocolVersion":1})).await;
+            let session = wire.expect("session/new").await;
+            wire.reply(&session, json!({"sessionId":"s1"})).await;
+        };
+        let (started, ()) = tokio::join!(start, agent);
+        let session = started.unwrap().session;
+
+        let mut call = async |id: u64, method: &str, params: Value| {
+            wire.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))
+                .await;
+            let answer = wire.read().await;
+            assert_eq!(answer["id"], id, "unexpected message: {answer}");
+            answer
+        };
+        let created = call(
+            1,
+            "terminal/create",
+            json!({"sessionId":"s1","command":"echo built; exit 2"}),
+        )
+        .await;
+        let id = created["result"]["terminalId"].as_str().unwrap().to_owned();
+        let exit = call(
+            2,
+            "terminal/wait_for_exit",
+            json!({"sessionId":"s1","terminalId":id}),
+        )
+        .await;
+        assert_eq!(exit["result"]["exitCode"], 2);
+        let output = call(
+            3,
+            "terminal/output",
+            json!({"sessionId":"s1","terminalId":id}),
+        )
+        .await;
+        assert_eq!(output["result"]["output"], "built\n");
+        assert_eq!(output["result"]["truncated"], false);
+        assert_eq!(output["result"]["exitStatus"]["exitCode"], 2);
+        let other = call(
+            4,
+            "terminal/output",
+            json!({"sessionId":"other","terminalId":id}),
+        )
+        .await;
+        assert_eq!(other["error"]["code"], -32602);
+        let released = call(
+            5,
+            "terminal/release",
+            json!({"sessionId":"s1","terminalId":id}),
+        )
+        .await;
+        assert_eq!(released["result"], json!({}));
+        let gone = call(
+            6,
+            "terminal/output",
+            json!({"sessionId":"s1","terminalId":id}),
+        )
+        .await;
+        assert_eq!(gone["error"]["code"], -32002);
+
+        // A running terminal is stopped when the session ends.
+        let running = call(
+            7,
+            "terminal/create",
+            json!({"sessionId":"s1","command":"sleep","args":["30"]}),
+        )
+        .await;
+        assert!(running["result"]["terminalId"].is_string());
+        session.close();
+        session.finished().await;
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let events = events.lock().unwrap().clone();
+        let views: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                AcpEvent::Terminal { terminal, .. } => Some(terminal.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(views.iter().any(|view| view.id == id
+            && view.released
+            && view.output == "built\n"
+            && view
+                .exit
+                .as_ref()
+                .is_some_and(|exit| exit.exit_code == Some(2))));
+        assert!(views.iter().any(|view| view.command == "sleep 30"
+            && view.released
+            && view
+                .exit
+                .as_ref()
+                .is_some_and(|exit| exit.signal.as_deref() == Some("SIGKILL"))));
+    }
+
     #[tokio::test]
     async fn session_new_carries_the_servers_the_agent_can_use() {
         use agent_client_protocol::schema::v1::{
@@ -2206,6 +2482,7 @@ pub(crate) mod tests {
                 ),
             ],
             files: None,
+            terminals: None,
         };
         let start = AcpSession::start(read, write, setup, Arc::new(|_| {}));
         let agent = async {

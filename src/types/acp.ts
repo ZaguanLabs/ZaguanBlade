@@ -104,6 +104,18 @@ export interface AcpPermission {
     options: Array<{ id: string; name: string; kind: AcpPermissionKind }>;
 }
 
+/** A command the agent runs in a terminal Blade owns. `output` is the latest
+ * part only; a released terminal keeps its last output. */
+export interface AcpTerminal {
+    id: string;
+    command: string;
+    cwd: string;
+    output: string;
+    truncated: boolean;
+    exit: { exit_code: number | null; signal: string | null } | null;
+    released: boolean;
+}
+
 /** Why Blade did not let the agent write a file (others reach only the agent). */
 export type AcpFileRefusal = 'unsaved_changes' | 'protected' | 'outside_workspace';
 
@@ -120,6 +132,7 @@ export type AcpEvent =
     | { type: 'config_changed'; config: AcpSessionConfig }
     | { type: 'title_changed'; title: string | null }
     | { type: 'file_written'; turn: number | null; path: string }
+    | { type: 'terminal'; turn: number | null; terminal: AcpTerminal }
     | { type: 'file_refused'; turn: number | null; path: string; reason: AcpFileRefusal }
     | { type: 'usage'; used: number; size: number }
     | { type: 'turn_ended'; turn: number; stop_reason: AcpStopReason }

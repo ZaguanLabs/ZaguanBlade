@@ -82,6 +82,26 @@ for (const [language, translation] of Object.entries({ en, es })) {
         assert.ok(html.includes(escape(strings.files.refused.protected.replace('{{path}}', '/w/.git/config'))));
     });
 
+    test(`terminals show once, inside the tool call that runs them, with their status in ${language}`, async () => {
+        let chat = addPrompt(startAgentChat(status(true)), 1, 'Build');
+        const terminal = (id: string, command: string, exit: { exit_code: number | null; signal: string | null } | null) =>
+            ({ id, command, cwd: '/w', output: '\u001b[32mok\u001b[0m\n', truncated: exit === null, exit, released: false });
+        chat = applyAcpEvent(chat, { type: 'terminal', turn: 1, terminal: terminal('t1', 'cargo build', null) });
+        chat = applyAcpEvent(chat, { type: 'tool_call', turn: 1, call: {
+            id: 'c', title: 'Build', kind: 'execute', status: 'in_progress', truncated: false, locations: [],
+            content: [{ type: 'terminal', terminal_id: 't1' }],
+        } });
+        chat = applyAcpEvent(chat, { type: 'terminal', turn: 1, terminal: terminal('t2', 'npm test', { exit_code: 1, signal: null }) });
+        chat = applyAcpEvent(chat, { type: 'terminal', turn: 1, terminal: terminal('t3', 'sleep 30', { exit_code: null, signal: 'SIGKILL' }) });
+        assert.deepEqual(chat.turns[0].terminals, ['t1', 't2', 't3']);
+        const html = await render(chat);
+        assert.equal(html.split('$ cargo build').length, 2, 'shown once');
+        assert.ok(html.includes(escape(strings.terminal.running)) && html.includes(escape(strings.terminal.truncated)));
+        assert.ok(html.includes(escape(strings.terminal.exited.replace('{{code}}', '1'))));
+        assert.ok(html.includes(escape(strings.terminal.signal.replace('{{signal}}', 'SIGKILL'))));
+        assert.ok(html.includes('>ok</pre>') && !html.includes('[32m'));
+    });
+
     test(`the agent's settings show as its own controls and lock during a turn in ${language}`, async () => {
         let chat = applyAcpEvent(startAgentChat(status(true)), { type: 'config_changed', config: { modes: null, options: [
             { id: 'model', name: 'Model', description: null, category: 'model', type: 'select', current_value: 'a/1', groups: [

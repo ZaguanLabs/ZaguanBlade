@@ -3,6 +3,7 @@
 
 pub mod acp_config;
 pub mod acp_files;
+pub mod acp_terminals;
 pub mod acp_forward;
 pub mod acp_session;
 pub mod agent_sessions;

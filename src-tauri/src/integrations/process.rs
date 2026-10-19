@@ -58,6 +58,14 @@ pub struct PreparedProcess {
 }
 
 impl PreparedProcess {
+    /// The environment the program starts with.
+    pub(super) fn environment(&self) -> Vec<(OsString, OsString)> {
+        self.env
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    }
+
     pub fn resolve(
         config: &ProcessConfig,
         integration: Uuid,

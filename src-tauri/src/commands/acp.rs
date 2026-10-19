@@ -11,6 +11,7 @@ use crate::{
         acp_session::{
             self, AcpEvent, AcpSession, FinishedTurn, PromptPart, SessionSetup, Sink, TurnRecorder,
         },
+        acp_terminals::Terminals,
         agent_sessions::{AgentStatus, LiveAgent},
         runtime::LaunchReview,
         RuntimeError,
@@ -216,6 +217,10 @@ pub async fn start_acp_conversation(
                 files: Some(Arc::new(WorkspaceFiles::new(
                     documents.clone(),
                     Arc::new(AgentWriteJournal(app.clone())),
+                ))),
+                terminals: Some(Arc::new(Terminals::new(
+                    documents.workspace_root().to_path_buf(),
+                    launched.environment.clone(),
                 ))),
             },
             sink,

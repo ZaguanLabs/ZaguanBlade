@@ -369,6 +369,7 @@ impl IntegrationRuntime {
                 read: Box::new(read),
                 write: Box::new(write),
                 forwarding,
+                environment: prepared.environment(),
             })
         };
         tokio::select! {
@@ -833,6 +834,8 @@ pub struct LaunchedAgent {
     pub read: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
     pub write: Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
     pub forwarding: Forwarding,
+    /// The agent's own environment; terminals it runs through Blade start with it.
+    pub environment: Vec<(std::ffi::OsString, std::ffi::OsString)>,
 }
 
 /// An agent approval covers its own launch and every MCP launch it is given.

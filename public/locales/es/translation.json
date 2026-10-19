@@ -383,6 +383,12 @@
           "outside_workspace": "Blade no ha dejado que el agente escriba en {{path}} porque está fuera del espacio de trabajo."
         }
       },
+      "terminal": {
+        "running": "En ejecución…",
+        "exited": "Terminó con el código {{code}}",
+        "signal": "Detenido por {{signal}}",
+        "truncated": "Solo se muestra la salida más reciente."
+      },
       "stopReason": {
         "max_tokens": "El agente se ha detenido porque ha alcanzado su límite de tokens.",
         "max_turn_requests": "El agente se ha detenido porque ha alcanzado su límite de pasos por turno.",
