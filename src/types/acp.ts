@@ -104,6 +104,9 @@ export interface AcpPermission {
     options: Array<{ id: string; name: string; kind: AcpPermissionKind }>;
 }
 
+/** Why Blade did not let the agent write a file (others reach only the agent). */
+export type AcpFileRefusal = 'unsaved_changes' | 'protected' | 'outside_workspace';
+
 export type AcpStopReason = 'end_turn' | 'max_tokens' | 'max_turn_requests' | 'refusal' | 'cancelled';
 
 export type AcpEvent =
@@ -116,6 +119,8 @@ export type AcpEvent =
     | { type: 'permission_resolved'; request_id: string; option_id: string | null }
     | { type: 'config_changed'; config: AcpSessionConfig }
     | { type: 'title_changed'; title: string | null }
+    | { type: 'file_written'; turn: number | null; path: string }
+    | { type: 'file_refused'; turn: number | null; path: string; reason: AcpFileRefusal }
     | { type: 'usage'; used: number; size: number }
     | { type: 'turn_ended'; turn: number; stop_reason: AcpStopReason }
     | { type: 'turn_failed'; turn: number; error: string }

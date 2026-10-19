@@ -1,8 +1,9 @@
-import type { AcpAgentStatus, AcpEvent, AcpPermission, AcpPlanEntry, AcpSessionConfig, AcpStopReason, AcpToolCall } from '../types/acp';
+import type { AcpAgentStatus, AcpEvent, AcpFileRefusal, AcpPermission, AcpPlanEntry, AcpSessionConfig, AcpStopReason, AcpToolCall } from '../types/acp';
 import type { IntegrationLaunchReview } from '../types/integrations';
 
 /** One prompt and what the agent reported for it. Tool calls are reports of
- * the agent's own activity; Blade never runs them. */
+ * the agent's own activity; Blade never runs them. `files` are the writes the
+ * agent made through Blade, which the user reviews in the editor. */
 export interface AgentTurn {
     turn: number;
     prompt: string;
@@ -10,6 +11,7 @@ export interface AgentTurn {
     thoughts: string;
     tools: AcpToolCall[];
     plan: AcpPlanEntry[];
+    files: Array<{ path: string; refused: AcpFileRefusal | null }>;
     state: 'running' | 'ended' | 'failed';
     stopReason: AcpStopReason | null;
     error: string | null;
@@ -31,7 +33,7 @@ export function startAgentChat(status: AcpAgentStatus): AgentChat {
 }
 
 function emptyTurn(turn: number, prompt = ''): AgentTurn {
-    return { turn, prompt, text: '', thoughts: '', tools: [], plan: [], state: 'running', stopReason: null, error: null, truncated: false };
+    return { turn, prompt, text: '', thoughts: '', tools: [], plan: [], files: [], state: 'running', stopReason: null, error: null, truncated: false };
 }
 
 /** Updates turn `turn` (or the latest one when `turn` is null), creating it
@@ -81,6 +83,14 @@ export function applyAcpEvent(chat: AgentChat, event: AcpEvent): AgentChat {
             });
         case 'plan':
             return withTurn(chat, event.turn, current => ({ ...current, plan: event.entries }));
+        case 'file_written':
+        case 'file_refused': {
+            const file = { path: event.path, refused: event.type === 'file_refused' ? event.reason : null };
+            return withTurn(chat, event.turn, current => ({
+                ...current,
+                files: [...current.files.filter(known => known.path !== file.path), file],
+            }));
+        }
         case 'permission':
             return chat.permissions.some(request => request.request_id === event.request.request_id)
                 ? chat

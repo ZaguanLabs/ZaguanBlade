@@ -54,6 +54,14 @@ function Turn({ turn, onOpenFile }: { turn: AgentTurn; onOpenFile: (path: string
             </ol>
         </div> : null}
         {turn.tools.length ? <div className="space-y-1">{turn.tools.map(call => <ToolCallCard key={call.id} call={call} onOpenFile={onOpenFile} />)}</div> : null}
+        {turn.files.some(file => !file.refused) ? <div>
+            <p>{t('chat.agent.files.written')}</p>
+            {turn.files.filter(file => !file.refused).map(file => <button key={file.path} type="button"
+                className="block max-w-full truncate text-left text-(--accent-mention) hover:underline" onClick={() => onOpenFile(file.path)}>{file.path}</button>)}
+        </div> : null}
+        {turn.files.map(file => file.refused ? <p key={file.path} role="status" className="break-words text-(--state-danger)">
+            {t(`chat.agent.files.refused.${file.refused}`, { path: file.path })}
+        </p> : null)}
         {turn.text ? <MarkdownRenderer content={turn.text} /> : null}
         {turn.truncated ? <p className="text-(--fg-tertiary)">{t('chat.agent.truncated')}</p> : null}
         {turn.state === 'running' ? <p role="status" className="text-(--fg-tertiary)">{t('chat.agent.working')}</p> : null}
@@ -82,7 +90,8 @@ function PermissionCard({ name, request, busy, answer }: { name: string; request
 }
 
 /** A conversation run by an ACP agent. What it reports is shown; Blade runs
- * none of its tools and applies none of its changes. */
+ * none of its tools. Files it writes through Blade are listed per turn and
+ * reviewed in the editor. */
 export function AcpConversationView({ chat, busy, error, send, cancel, answer, authenticate, configure, end, onOpenFile }: {
     chat: AgentChat;
     busy: boolean;

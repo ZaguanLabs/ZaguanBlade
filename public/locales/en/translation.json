@@ -342,7 +342,7 @@
       "allow": "Start agent",
       "starting": "Starting {{name}}…",
       "runBy": "Run by {{name}}",
-      "reportsHelp": "Tool calls and changes shown here are reported by the agent. Blade does not run or apply them.",
+      "reportsHelp": "Tool calls shown here are reported by the agent; Blade doesn't run them. When the agent changes a file through Blade, the turn lists it and you can accept or reject it in the editor.",
       "signIn": {
         "title": "{{name}} needs you to sign in",
         "help": "Choose a sign-in method. The agent handles the sign-in itself.",
@@ -374,6 +374,14 @@
         "resource": "Resource {{uri}}",
         "other": "Content Blade cannot show",
         "truncated": "Shortened for display."
+      },
+      "files": {
+        "written": "Changed through Blade (open a file to accept or reject the change):",
+        "refused": {
+          "unsaved_changes": "Blade didn't let the agent write {{path}} because it has unsaved changes in the editor. Save or discard them, then ask again.",
+          "protected": "Blade didn't let the agent write {{path}}: Git data and Blade's own settings are off limits.",
+          "outside_workspace": "Blade didn't let the agent write {{path}} because it's outside the workspace."
+        }
       },
       "stopReason": {
         "max_tokens": "The agent stopped because it reached its token limit.",

@@ -7,6 +7,7 @@ use crate::{
     conversation_store::{ConversationDelta, ConversationExecution, StoredConversation},
     integrations::{
         acp_config::{ConfigChange, SessionConfig},
+        acp_files::{WorkspaceFiles, WriteJournal},
         acp_session::{
             self, AcpEvent, AcpSession, FinishedTurn, PromptPart, SessionSetup, Sink, TurnRecorder,
         },
@@ -22,6 +23,35 @@ use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 const MAX_IMAGES: usize = 8;
+
+/// Records an agent's write like a native AI edit: a history snapshot first,
+/// then a change the user can review and reject in the editor, which reloads.
+struct AgentWriteJournal(AppHandle);
+
+impl WriteJournal for AgentWriteJournal {
+    fn record(
+        &self,
+        path: &std::path::Path,
+        before: Option<&str>,
+        write: &mut dyn FnMut() -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        let app = Some(&self.0);
+        let tracking = crate::tools::prepare_tool_write_tracking(
+            app,
+            &Uuid::new_v4().to_string(),
+            path,
+            before.unwrap_or_default(),
+        );
+        let change_id = tracking
+            .as_ref()
+            .map(|tracking| tracking.change_id.clone())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        write()?;
+        crate::tools::track_tool_write(app, path, tracking);
+        crate::tools::sync_after_tool_write(app, &change_id, path, &path.to_string_lossy());
+        Ok(())
+    }
+}
 
 fn local_only(window: &tauri::WebviewWindow) -> Result<(), RuntimeError> {
     if window.label() != "main" {
@@ -183,6 +213,10 @@ pub async fn start_acp_conversation(
             SessionSetup {
                 cwd: documents.workspace_root().to_path_buf(),
                 mcp_servers: launched.forwarding.servers.clone(),
+                files: Some(Arc::new(WorkspaceFiles::new(
+                    documents.clone(),
+                    Arc::new(AgentWriteJournal(app.clone())),
+                ))),
             },
             sink,
         ) => started,

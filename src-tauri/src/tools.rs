@@ -9151,7 +9151,7 @@ fn emit_change_applied_for_paths<R: tauri::Runtime>(
     );
 }
 
-fn sync_after_tool_write<R: tauri::Runtime>(
+pub(crate) fn sync_after_tool_write<R: tauri::Runtime>(
     app_handle: Option<&tauri::AppHandle<R>>,
     change_id: &str,
     abs_path: &Path,
@@ -9164,13 +9164,13 @@ fn sync_after_tool_write<R: tauri::Runtime>(
     }
 }
 
-struct ToolWriteTracking {
-    change_id: String,
+pub(crate) struct ToolWriteTracking {
+    pub(crate) change_id: String,
     snapshot_id: String,
     base_content: String,
 }
 
-fn prepare_tool_write_tracking<R: tauri::Runtime>(
+pub(crate) fn prepare_tool_write_tracking<R: tauri::Runtime>(
     app_handle: Option<&tauri::AppHandle<R>>,
     change_id: &str,
     abs_path: &Path,
@@ -9243,7 +9243,7 @@ fn prepare_tool_write_tracking<R: tauri::Runtime>(
     }
 }
 
-fn track_tool_write<R: tauri::Runtime>(
+pub(crate) fn track_tool_write<R: tauri::Runtime>(
     app_handle: Option<&tauri::AppHandle<R>>,
     abs_path: &Path,
     tracking: Option<ToolWriteTracking>,

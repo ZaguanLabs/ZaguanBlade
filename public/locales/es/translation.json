@@ -342,7 +342,7 @@
       "allow": "Iniciar agente",
       "starting": "Iniciando {{name}}…",
       "runBy": "Gestionada por {{name}}",
-      "reportsHelp": "Las llamadas a herramientas y los cambios que se muestran aquí los notifica el agente. Blade no los ejecuta ni los aplica.",
+      "reportsHelp": "Las llamadas a herramientas que se muestran aquí las notifica el agente; Blade no las ejecuta. Cuando el agente cambia un archivo a través de Blade, el turno lo indica y puedes aceptarlo o rechazarlo en el editor.",
       "signIn": {
         "title": "{{name}} necesita que inicies sesión",
         "help": "Elige un método de inicio de sesión. El propio agente se encarga del proceso.",
@@ -374,6 +374,14 @@
         "resource": "Recurso {{uri}}",
         "other": "Contenido que Blade no puede mostrar",
         "truncated": "Recortado para mostrarlo."
+      },
+      "files": {
+        "written": "Cambiado a través de Blade (abre el archivo para aceptar o rechazar el cambio):",
+        "refused": {
+          "unsaved_changes": "Blade no ha dejado que el agente escriba en {{path}} porque tiene cambios sin guardar en el editor. Guárdalos o descártalos y vuelve a pedírselo.",
+          "protected": "Blade no ha dejado que el agente escriba en {{path}}: los datos de Git y los ajustes de Blade están fuera de su alcance.",
+          "outside_workspace": "Blade no ha dejado que el agente escriba en {{path}} porque está fuera del espacio de trabajo."
+        }
       },
       "stopReason": {
         "max_tokens": "El agente se ha detenido porque ha alcanzado su límite de tokens.",

@@ -5,20 +5,23 @@
 //! decision never holds the protocol reader.
 use super::{
     acp_config::{ConfigChange, SessionConfig},
+    acp_files::{FileError, WorkspaceFiles},
     RuntimeError,
 };
 use agent_client_protocol::{
     schema::{
         v1::{
             AuthMethod, AuthenticateRequest, CancelNotification, ClientCapabilities, ContentBlock,
-            EmbeddedResource, EmbeddedResourceResource, ErrorCode, ImageContent, Implementation,
-            InitializeRequest, InitializeResponse, McpServer, NewSessionRequest,
-            NewSessionResponse, PermissionOptionKind, PlanEntryPriority, PlanEntryStatus,
-            PromptRequest, PromptResponse, RequestPermissionOutcome, RequestPermissionRequest,
+            EmbeddedResource, EmbeddedResourceResource, ErrorCode, FileSystemCapabilities,
+            ImageContent, Implementation, InitializeRequest, InitializeResponse, McpServer,
+            NewSessionRequest, NewSessionResponse, PermissionOptionKind, PlanEntryPriority,
+            PlanEntryStatus, PromptRequest, PromptResponse, ReadTextFileRequest,
+            ReadTextFileResponse, RequestPermissionOutcome, RequestPermissionRequest,
             RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigOption,
             SessionConfigOptionValue, SessionId, SessionNotification, SessionUpdate,
             SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason, TextContent,
-            TextResourceContents, ToolCallContent, ToolCallStatus, ToolKind,
+            TextResourceContents, ToolCallContent, ToolCallStatus, ToolKind, WriteTextFileRequest,
+            WriteTextFileResponse,
         },
         ProtocolVersion,
     },
@@ -438,6 +441,18 @@ pub enum AcpEvent {
     TitleChanged {
         title: Option<String>,
     },
+    /// The agent changed a workspace file through Blade; the change can be
+    /// reviewed and rejected in the editor.
+    FileWritten {
+        turn: Option<u64>,
+        path: String,
+    },
+    /// Blade refused to let the agent write a file.
+    FileRefused {
+        turn: Option<u64>,
+        path: String,
+        reason: FileError,
+    },
     Usage {
         used: u64,
         size: u64,
@@ -589,6 +604,8 @@ enum Incoming {
         RequestPermissionRequest,
         Responder<RequestPermissionResponse>,
     ),
+    Read(ReadTextFileRequest, Responder<ReadTextFileResponse>),
+    Write(WriteTextFileRequest, Responder<WriteTextFileResponse>),
 }
 
 enum Command {
@@ -636,18 +653,21 @@ enum Applied {
     Mode(String),
 }
 
-/// Where the session works and the MCP servers it is given. Servers whose
+/// Where the session works, the MCP servers it is given and, when set, the
+/// workspace files the agent may read and write through Blade. Servers whose
 /// transport the agent did not advertise are left out before `session/new`.
 #[derive(Clone)]
 pub struct SessionSetup {
     pub cwd: PathBuf,
     pub mcp_servers: Vec<McpServer>,
+    pub files: Option<Arc<WorkspaceFiles>>,
 }
 impl From<PathBuf> for SessionSetup {
     fn from(cwd: PathBuf) -> Self {
         Self {
             cwd,
             mcp_servers: Vec::new(),
+            files: None,
         }
     }
 }
@@ -702,6 +722,7 @@ impl AcpSession {
         let actor = Actor {
             sink: sink.clone(),
             config: config.clone(),
+            files: setup.files.clone(),
             incoming,
             commands: command_rx,
             overflow: overflow.clone(),
@@ -726,6 +747,10 @@ impl AcpSession {
         let actor_ended = ended.clone();
         let update_tx = incoming_tx.clone();
         let update_overflow = overflow.clone();
+        let read_tx = incoming_tx.clone();
+        let read_overflow = overflow.clone();
+        let write_tx = incoming_tx.clone();
+        let write_overflow = overflow.clone();
         let permission_overflow = overflow;
         tokio::spawn(async move {
             let result = Client
@@ -751,7 +776,41 @@ impl AcpSession {
                                             RequestPermissionOutcome::Cancelled,
                                         ))
                                     }
-                                    Incoming::Update(_) => Ok(()),
+                                    _ => Ok(()),
+                                }
+                            }
+                        }
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: ReadTextFileRequest, responder, _connection| match read_tx
+                        .try_send(Incoming::Read(request, responder))
+                    {
+                        Ok(()) => Ok(()),
+                        Err(error) => {
+                            read_overflow.store(true, Ordering::Release);
+                            match error.into_inner() {
+                                Incoming::Read(_, responder) => responder.respond_with_error(
+                                    agent_client_protocol::Error::internal_error(),
+                                ),
+                                _ => Ok(()),
+                            }
+                        }
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: WriteTextFileRequest, responder, _connection| {
+                        match write_tx.try_send(Incoming::Write(request, responder)) {
+                            Ok(()) => Ok(()),
+                            Err(error) => {
+                                write_overflow.store(true, Ordering::Release);
+                                match error.into_inner() {
+                                    Incoming::Write(_, responder) => responder.respond_with_error(
+                                        agent_client_protocol::Error::internal_error(),
+                                    ),
+                                    _ => Ok(()),
                                 }
                             }
                         }
@@ -880,6 +939,7 @@ struct Parked {
 struct Actor {
     sink: Sink,
     config: Arc<std::sync::Mutex<SessionConfig>>,
+    files: Option<Arc<WorkspaceFiles>>,
     incoming: mpsc::Receiver<Incoming>,
     commands: mpsc::Receiver<Command>,
     overflow: Arc<AtomicBool>,
@@ -1220,7 +1280,78 @@ impl Actor {
                 }
             }
             Incoming::Permission(request, responder) => self.park(request, responder),
+            Incoming::Read(request, responder) => {
+                let files = match self.files_for(&request.session_id) {
+                    Ok(files) => files,
+                    Err(error) => {
+                        let _ = responder.respond_with_error(error);
+                        return;
+                    }
+                };
+                tokio::task::spawn_blocking(move || {
+                    let _ = match files.read(&request.path, request.line, request.limit) {
+                        Ok(content) => responder.respond(ReadTextFileResponse::new(content)),
+                        Err(error) => {
+                            responder.respond_with_error(error.to_protocol(&request.path))
+                        }
+                    };
+                });
+            }
+            Incoming::Write(request, responder) => {
+                let files = match self.files_for(&request.session_id) {
+                    Ok(files) => files,
+                    Err(error) => {
+                        let _ = responder.respond_with_error(error);
+                        return;
+                    }
+                };
+                let sink = self.sink.clone();
+                let turn = self.prompting;
+                tokio::task::spawn_blocking(move || {
+                    let _ = match files.write(&request.path, &request.content) {
+                        Ok(written) => {
+                            if let Some(path) = written {
+                                sink(AcpEvent::FileWritten {
+                                    turn,
+                                    path: clip(&path.to_string_lossy(), MAX_DESCRIPTION),
+                                });
+                            }
+                            responder.respond(WriteTextFileResponse::new())
+                        }
+                        Err(error) => {
+                            if matches!(
+                                error,
+                                FileError::UnsavedChanges
+                                    | FileError::Protected
+                                    | FileError::OutsideWorkspace
+                            ) {
+                                sink(AcpEvent::FileRefused {
+                                    turn,
+                                    path: clip(&request.path.to_string_lossy(), MAX_DESCRIPTION),
+                                    reason: error,
+                                });
+                            }
+                            responder.respond_with_error(error.to_protocol(&request.path))
+                        }
+                    };
+                });
+            }
         }
+    }
+
+    /// The workspace files, for a request that belongs to this session.
+    fn files_for(
+        &self,
+        session: &SessionId,
+    ) -> Result<Arc<WorkspaceFiles>, agent_client_protocol::Error> {
+        let files = self
+            .files
+            .clone()
+            .ok_or_else(agent_client_protocol::Error::method_not_found)?;
+        if self.session.as_ref() != Some(session) {
+            return Err(agent_client_protocol::Error::invalid_params());
+        }
+        Ok(files)
     }
 
     fn park(
@@ -1439,7 +1570,11 @@ async fn open(
     setup: SessionSetup,
 ) -> Result<(AgentSnapshot, Option<NewSessionResponse>, SessionSetup), RuntimeError> {
     let initialize = InitializeRequest::new(ProtocolVersion::V1)
-        .client_capabilities(ClientCapabilities::default())
+        .client_capabilities(
+            ClientCapabilities::new().fs(FileSystemCapabilities::new()
+                .read_text_file(setup.files.is_some())
+                .write_text_file(setup.files.is_some())),
+        )
         .client_info(Implementation::new(
             "zaguan-blade",
             env!("CARGO_PKG_VERSION"),
@@ -1921,6 +2056,131 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn the_agent_reads_and_writes_workspace_files_through_blade() {
+        use crate::{document_service::DocumentService, integrations::acp_files::NoJournal};
+        let dir = tempfile::tempdir().unwrap();
+        let documents = Arc::new(DocumentService::new(dir.path().to_path_buf()));
+        let root = documents.workspace_root().to_path_buf();
+        std::fs::write(root.join("main.rs"), "one\ntwo\nthree\n").unwrap();
+        documents.sync("open.rs", Some(1), "unsaved\n").unwrap();
+        std::fs::write(root.join("open.rs"), "saved\n").unwrap();
+
+        let (client, agent) = tokio::io::duplex(1 << 20);
+        let (read, write) = tokio::io::split(client);
+        let (agent_read, agent_write) = tokio::io::split(agent);
+        let mut wire = Wire {
+            input: BufReader::new(agent_read).lines(),
+            output: agent_write,
+        };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink_events = events.clone();
+        let setup = SessionSetup {
+            cwd: root.clone(),
+            mcp_servers: Vec::new(),
+            files: Some(Arc::new(WorkspaceFiles::new(
+                documents.clone(),
+                Arc::new(NoJournal),
+            ))),
+        };
+        let start = AcpSession::start(
+            read,
+            write,
+            setup,
+            Arc::new(move |event| sink_events.lock().unwrap().push(event)),
+        );
+        let agent = async {
+            let initialize = wire.expect("initialize").await;
+            assert_eq!(
+                initialize["params"]["clientCapabilities"]["fs"],
+                json!({"readTextFile":true,"writeTextFile":true})
+            );
+            wire.reply(&initialize, json!({"protocolVersion":1})).await;
+            let session = wire.expect("session/new").await;
+            wire.reply(&session, json!({"sessionId":"s1"})).await;
+        };
+        let (started, ()) = tokio::join!(start, agent);
+        let _session = started.unwrap().session;
+
+        let path = |name: &str| root.join(name).to_string_lossy().into_owned();
+        let mut call = async |id: u64, method: &str, params: Value| {
+            wire.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))
+                .await;
+            let answer = wire.read().await;
+            assert_eq!(answer["id"], id, "unexpected message: {answer}");
+            answer
+        };
+        let answer = call(
+            1,
+            "fs/read_text_file",
+            json!({"sessionId":"s1","path":path("main.rs"),"line":2,"limit":1}),
+        )
+        .await;
+        assert_eq!(answer["result"], json!({"content":"two\n"}));
+        let answer = call(
+            2,
+            "fs/read_text_file",
+            json!({"sessionId":"s1","path":path("open.rs")}),
+        )
+        .await;
+        assert_eq!(
+            answer["result"]["content"], "unsaved\n",
+            "the editor's text wins"
+        );
+        let answer = call(
+            3,
+            "fs/read_text_file",
+            json!({"sessionId":"other","path":path("main.rs")}),
+        )
+        .await;
+        assert_eq!(answer["error"]["code"], -32602);
+        let answer = call(
+            4,
+            "fs/read_text_file",
+            json!({"sessionId":"s1","path":path("gone.rs")}),
+        )
+        .await;
+        assert_eq!(answer["error"]["code"], -32002);
+
+        let answer = call(
+            5,
+            "fs/write_text_file",
+            json!({"sessionId":"s1","path":path("src/new.rs"),"content":"fn main() {}\n"}),
+        )
+        .await;
+        assert_eq!(answer["result"], json!({}));
+        assert_eq!(
+            std::fs::read_to_string(root.join("src/new.rs")).unwrap(),
+            "fn main() {}\n"
+        );
+        let answer = call(
+            6,
+            "fs/write_text_file",
+            json!({"sessionId":"s1","path":path("open.rs"),"content":"theirs\n"}),
+        )
+        .await;
+        assert_eq!(answer["error"]["code"], -32603);
+        assert!(answer["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unsaved changes"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("open.rs")).unwrap(),
+            "saved\n"
+        );
+
+        let events = events.lock().unwrap().clone();
+        assert!(events.contains(&AcpEvent::FileWritten {
+            turn: None,
+            path: path("src/new.rs"),
+        }));
+        assert!(events.contains(&AcpEvent::FileRefused {
+            turn: None,
+            path: path("open.rs"),
+            reason: FileError::UnsavedChanges,
+        }));
+    }
+
+    #[tokio::test]
     async fn session_new_carries_the_servers_the_agent_can_use() {
         use agent_client_protocol::schema::v1::{
             EnvVariable, HttpHeader, McpServerHttp, McpServerStdio,
@@ -1945,6 +2205,7 @@ pub(crate) mod tests {
                         .headers(vec![HttpHeader::new("x-token", "t")]),
                 ),
             ],
+            files: None,
         };
         let start = AcpSession::start(read, write, setup, Arc::new(|_| {}));
         let agent = async {

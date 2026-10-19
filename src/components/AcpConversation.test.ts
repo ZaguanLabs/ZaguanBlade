@@ -68,6 +68,20 @@ for (const [language, translation] of Object.entries({ en, es })) {
         assert.ok(!exited.includes(escape(strings.end)));
     });
 
+    test(`files the agent wrote through Blade are listed and refusals are explained in ${language}`, async () => {
+        let chat = addPrompt(startAgentChat(status(true)), 1, 'Edit');
+        chat = applyAcpEvent(chat, { type: 'file_refused', turn: 1, path: '/w/src/lib.rs', reason: 'unsaved_changes' });
+        chat = applyAcpEvent(chat, { type: 'file_written', turn: 1, path: '/w/src/main.rs' });
+        chat = applyAcpEvent(chat, { type: 'file_written', turn: 1, path: '/w/src/main.rs' });
+        chat = applyAcpEvent(chat, { type: 'file_refused', turn: 1, path: '/w/.git/config', reason: 'protected' });
+        assert.deepEqual(chat.turns[0].files.map(file => file.path), ['/w/src/lib.rs', '/w/src/main.rs', '/w/.git/config']);
+        const html = await render(chat);
+        assert.ok(html.includes(escape(strings.files.written)));
+        assert.equal(html.split('>/w/src/main.rs</button>').length, 2);
+        assert.ok(html.includes(escape(strings.files.refused.unsaved_changes.replace('{{path}}', '/w/src/lib.rs'))));
+        assert.ok(html.includes(escape(strings.files.refused.protected.replace('{{path}}', '/w/.git/config'))));
+    });
+
     test(`the agent's settings show as its own controls and lock during a turn in ${language}`, async () => {
         let chat = applyAcpEvent(startAgentChat(status(true)), { type: 'config_changed', config: { modes: null, options: [
             { id: 'model', name: 'Model', description: null, category: 'model', type: 'select', current_value: 'a/1', groups: [
