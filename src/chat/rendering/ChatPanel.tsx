@@ -1,6 +1,8 @@
 import { McpTurnPanel } from '../../components/McpTurnPanel';
 import { McpChatNotice } from '../../components/McpChatNotice';
 import { AcpAgentMenu } from '../../components/AcpAgentMenu';
+import { AcpStoredNotice } from '../../components/AcpStoredNotice';
+import { storedTurns } from '../../utils/acpConversation';
 import { AcpConversationView } from '../../components/AcpConversation';
 import { useAcpConversation } from '../../hooks/useAcpConversation';
 import React, { useCallback, useMemo, useState } from 'react';
@@ -205,6 +207,12 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
         setActiveTab('chat');
     }, [attachAgent, onLoadConversation]);
 
+    // The transcript stays: it is shown as the session's earlier turns.
+    const handleAgentReconnected = useCallback((status: Parameters<typeof attachAgent>[0]) => {
+        attachAgent(status, storedTurns(messages));
+        setActiveTab('chat');
+    }, [attachAgent, messages]);
+
     const openLocalAiSettings = useCallback(() => {
         document.dispatchEvent(new CustomEvent('open-settings', { detail: { section: 'localai' } }));
     }, []);
@@ -360,10 +368,7 @@ const ChatPanelComponent: React.FC<ChatPanelProps> = ({
                 </div>
             )}
             {agent.storedOwner && (
-                <div role="status" className="mx-3 mt-2 rounded-[calc(var(--panel-radius)*0.65)] border border-(--border-subtle) bg-(--bg-surface) px-3 py-2 text-xs">
-                    <p className="m-0 font-medium text-(--fg-primary)">{t('chat.agent.ended.title', { name: agent.storedOwner })}</p>
-                    <p className="m-0 text-(--fg-secondary)">{t('chat.agent.ended.help')}</p>
-                </div>
+                <AcpStoredNotice stored={agent.storedOwner} workspaceRoot={workspaceRoot} onReconnected={handleAgentReconnected} />
             )}
             {chatMode === 'planning' && latestPlanText && !agent.storedOwner && (
                 <div className="px-3 pb-1 pt-2">

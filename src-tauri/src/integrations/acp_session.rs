@@ -16,16 +16,17 @@ use agent_client_protocol::{
             CreateTerminalRequest, CreateTerminalResponse, EmbeddedResource,
             EmbeddedResourceResource, ErrorCode, FileSystemCapabilities, ImageContent,
             Implementation, InitializeRequest, InitializeResponse, KillTerminalRequest,
-            KillTerminalResponse, McpServer, NewSessionRequest, NewSessionResponse,
-            PermissionOptionKind, PlanEntryPriority, PlanEntryStatus, PromptRequest,
-            PromptResponse, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
-            ReleaseTerminalResponse, RequestPermissionOutcome, RequestPermissionRequest,
-            RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigOption,
-            SessionConfigOptionValue, SessionId, SessionNotification, SessionUpdate,
-            SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason,
-            TerminalOutputRequest, TerminalOutputResponse, TextContent, TextResourceContents,
-            ToolCallContent, ToolCallStatus, ToolKind, WaitForTerminalExitRequest,
-            WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
+            KillTerminalResponse, LoadSessionRequest, McpServer, NewSessionRequest,
+            NewSessionResponse, PermissionOptionKind, PlanEntryPriority, PlanEntryStatus,
+            PromptRequest, PromptResponse, ReadTextFileRequest, ReadTextFileResponse,
+            ReleaseTerminalRequest, ReleaseTerminalResponse, RequestPermissionOutcome,
+            RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
+            SelectedPermissionOutcome, SessionConfigOption, SessionConfigOptionValue, SessionId,
+            SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+            SetSessionModeRequest, StopReason, TerminalOutputRequest, TerminalOutputResponse,
+            TextContent, TextResourceContents, ToolCallContent, ToolCallStatus, ToolKind,
+            WaitForTerminalExitRequest, WaitForTerminalExitResponse, WriteTextFileRequest,
+            WriteTextFileResponse,
         },
         ProtocolVersion,
     },
@@ -70,6 +71,8 @@ pub(super) const MAX_DESCRIPTION: usize = 2048;
 const MAX_PROMPT_BYTES: usize = 8 * 1024 * 1024;
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(30);
 const SESSION_TIMEOUT: Duration = Duration::from_secs(60);
+/// `session/load` replays the whole history first.
+const LOAD_TIMEOUT: Duration = Duration::from_secs(180);
 /// Agent-driven sign-in may wait on a browser.
 const AUTH_TIMEOUT: Duration = Duration::from_secs(300);
 /// After `session/cancel`, how long the agent has to end the turn.
@@ -727,7 +730,7 @@ type Pending = Pin<Box<dyn Future<Output = Finished> + Send>>;
 enum Finished {
     Prompt(u64, Result<PromptResponse, agent_client_protocol::Error>),
     Authenticated(
-        Result<NewSessionResponse, RuntimeError>,
+        Result<Opened, RuntimeError>,
         oneshot::Sender<Result<String, RuntimeError>>,
     ),
     Configured(
@@ -753,6 +756,29 @@ pub struct SessionSetup {
     pub files: Option<Arc<WorkspaceFiles>>,
     /// When set, the agent may run commands in terminals Blade owns.
     pub terminals: Option<Arc<Terminals>>,
+    /// The agent's earlier session for this conversation, to continue.
+    pub resume: Option<String>,
+}
+
+/// How the agent's session for this conversation began.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Reopened {
+    New,
+    /// The agent continued its earlier session (`session/resume`).
+    Resumed,
+    /// The agent reloaded its earlier session (`session/load`); the history it
+    /// replayed is already in Blade's transcript and is not shown again.
+    Loaded,
+    /// The agent could not continue its earlier session and started afresh.
+    Replaced,
+}
+
+/// A session the agent opened.
+struct Opened {
+    session_id: SessionId,
+    config: SessionConfig,
+    how: Reopened,
 }
 impl From<PathBuf> for SessionSetup {
     fn from(cwd: PathBuf) -> Self {
@@ -761,6 +787,7 @@ impl From<PathBuf> for SessionSetup {
             mcp_servers: Vec::new(),
             files: None,
             terminals: None,
+            resume: None,
         }
     }
 }
@@ -786,6 +813,7 @@ pub struct AcpSession {
     finished: CancellationToken,
     pub snapshot: Arc<AgentSnapshot>,
     config: Arc<std::sync::Mutex<SessionConfig>>,
+    reopened: Arc<std::sync::Mutex<Option<Reopened>>>,
 }
 
 pub struct Started {
@@ -812,9 +840,13 @@ impl AcpSession {
         let overflow = Arc::new(AtomicBool::new(false));
         let finished = CancellationToken::new();
         let config: Arc<std::sync::Mutex<SessionConfig>> = Arc::default();
+        let reopened: Arc<std::sync::Mutex<Option<Reopened>>> = Arc::default();
+        let replaying = Arc::new(AtomicBool::new(false));
         let actor = Actor {
             sink: sink.clone(),
             config: config.clone(),
+            reopened: reopened.clone(),
+            replaying: replaying.clone(),
             files: setup.files.clone(),
             terminals: setup.terminals.clone(),
             incoming,
@@ -841,6 +873,7 @@ impl AcpSession {
         let actor_ended = ended.clone();
         let update_tx = incoming_tx.clone();
         let update_overflow = overflow.clone();
+        let update_replaying = replaying.clone();
         let read_tx = incoming_tx.clone();
         let read_overflow = overflow.clone();
         let write_tx = incoming_tx.clone();
@@ -876,6 +909,11 @@ impl AcpSession {
             let result = builder
                 .on_receive_notification(
                     async move |notification: SessionNotification, _connection| {
+                        if update_replaying.load(Ordering::Acquire)
+                            && replayed(&notification.update)
+                        {
+                            return Ok(());
+                        }
                         if update_tx.try_send(Incoming::Update(notification)).is_err() {
                             update_overflow.store(true, Ordering::Release);
                         }
@@ -967,6 +1005,7 @@ impl AcpSession {
                     finished,
                     snapshot,
                     config,
+                    reopened,
                 },
                 session_id,
             }),
@@ -1026,6 +1065,11 @@ impl AcpSession {
             .await?
     }
 
+    /// How the session began; `None` until it exists (it may need a sign-in).
+    pub fn reopened(&self) -> Option<Reopened> {
+        self.reopened.lock().ok().and_then(|reopened| *reopened)
+    }
+
     /// The agent's current session settings.
     pub fn config(&self) -> SessionConfig {
         self.config
@@ -1058,6 +1102,9 @@ struct Parked {
 struct Actor {
     sink: Sink,
     config: Arc<std::sync::Mutex<SessionConfig>>,
+    reopened: Arc<std::sync::Mutex<Option<Reopened>>>,
+    /// Set while `session/load` replays history Blade already keeps.
+    replaying: Arc<AtomicBool>,
     files: Option<Arc<WorkspaceFiles>>,
     terminals: Option<Arc<Terminals>>,
     incoming: mpsc::Receiver<Incoming>,
@@ -1090,7 +1137,7 @@ impl Actor {
         let opened = tokio::select! {
             biased;
             _ = self.eof.cancelled() => Err(RuntimeError::ProtocolFailed),
-            opened = open(&connection, setup) => opened,
+            opened = open(&connection, setup, &self.replaying) => opened,
         };
         let (snapshot, session, setup) = match opened {
             Ok(opened) => opened,
@@ -1102,7 +1149,7 @@ impl Actor {
         let snapshot = Arc::new(snapshot);
         live.store(true, Ordering::Release);
         self.snapshot = Some(snapshot.clone());
-        let session = session.map(|response| self.adopt(response));
+        let session = session.map(|opened| self.adopt(opened));
         self.session = session.clone();
         if started
             .send(Ok((snapshot, session.map(|id| id.to_string()))))
@@ -1234,6 +1281,8 @@ impl Actor {
                 }
                 let connection = connection.clone();
                 let setup = setup.clone();
+                let snapshot = self.snapshot.clone()?;
+                let replaying = self.replaying.clone();
                 Some(Box::pin(async move {
                     let result = async {
                         tokio::time::timeout(
@@ -1248,7 +1297,7 @@ impl Actor {
                             ErrorCode::AuthRequired => RuntimeError::AuthorizationDenied,
                             _ => RuntimeError::AuthorizationFailed,
                         })?;
-                        new_session(&connection, setup).await
+                        open_session(&connection, &snapshot, setup, &replaying).await
                     }
                     .await;
                     Finished::Authenticated(result, reply)
@@ -1342,13 +1391,13 @@ impl Actor {
         after
     }
 
-    /// Takes the settings a new session declared and returns its id.
-    fn adopt(&self, response: NewSessionResponse) -> SessionId {
-        self.change_config(|config| {
-            *config =
-                SessionConfig::new(response.config_options.as_deref(), response.modes.as_ref())
-        });
-        response.session_id
+    /// Takes the settings the session declared and returns its id.
+    fn adopt(&self, opened: Opened) -> SessionId {
+        self.change_config(|config| *config = opened.config);
+        if let Ok(mut reopened) = self.reopened.lock() {
+            *reopened = Some(opened.how);
+        }
+        opened.session_id
     }
 
     fn finish(&mut self, finished: Finished) {
@@ -1374,8 +1423,8 @@ impl Actor {
                 }
             }
             Finished::Authenticated(result, reply) => {
-                let result = result.map(|response| {
-                    let session = self.adopt(response);
+                let result = result.map(|opened| {
+                    let session = self.adopt(opened);
                     self.session = Some(session.clone());
                     session.to_string()
                 });
@@ -1713,7 +1762,8 @@ fn merge(
 async fn open(
     connection: &ConnectionTo<Agent>,
     setup: SessionSetup,
-) -> Result<(AgentSnapshot, Option<NewSessionResponse>, SessionSetup), RuntimeError> {
+    replaying: &AtomicBool,
+) -> Result<(AgentSnapshot, Option<Opened>, SessionSetup), RuntimeError> {
     let initialize = InitializeRequest::new(ProtocolVersion::V1)
         .client_capabilities(
             ClientCapabilities::new()
@@ -1738,11 +1788,110 @@ async fn open(
     }
     let snapshot = AgentSnapshot::from_response(&response);
     let setup = setup.supported_by(&snapshot);
-    match new_session(connection, setup.clone()).await {
+    match open_session(connection, &snapshot, setup.clone(), replaying).await {
         Ok(session) => Ok((snapshot, Some(session), setup)),
         Err(RuntimeError::AuthenticationRequired) => Ok((snapshot, None, setup)),
         Err(error) => Err(error),
     }
+}
+
+/// What `session/load` replays from the earlier conversation and Blade
+/// already keeps. Setting changes go too: the load answer carries the current
+/// settings, and replayed ones would undo them. Titles, command lists and
+/// usage still apply.
+fn replayed(update: &SessionUpdate) -> bool {
+    matches!(
+        update,
+        SessionUpdate::UserMessageChunk(_)
+            | SessionUpdate::AgentMessageChunk(_)
+            | SessionUpdate::AgentThoughtChunk(_)
+            | SessionUpdate::ToolCall(_)
+            | SessionUpdate::ToolCallUpdate(_)
+            | SessionUpdate::Plan(_)
+            | SessionUpdate::ConfigOptionUpdate(_)
+            | SessionUpdate::CurrentModeUpdate(_)
+    )
+}
+
+/// Continues the conversation's earlier session when the agent can (resume
+/// first: it does not replay), otherwise starts a new one.
+async fn open_session(
+    connection: &ConnectionTo<Agent>,
+    snapshot: &AgentSnapshot,
+    setup: SessionSetup,
+    replaying: &AtomicBool,
+) -> Result<Opened, RuntimeError> {
+    let refused = |error: agent_client_protocol::Error| match error.code {
+        ErrorCode::AuthRequired => RuntimeError::AuthenticationRequired,
+        _ => RuntimeError::ProtocolFailed,
+    };
+    let earlier = setup
+        .resume
+        .clone()
+        .filter(|id| !id.is_empty() && id.len() <= MAX_LABEL);
+    if let Some(earlier) = &earlier {
+        let session_id = SessionId::new(earlier.as_str());
+        let reopened = if snapshot.resume_session {
+            tokio::time::timeout(
+                SESSION_TIMEOUT,
+                connection
+                    .send_request(
+                        ResumeSessionRequest::new(session_id.clone(), setup.cwd.clone())
+                            .mcp_servers(setup.mcp_servers.clone()),
+                    )
+                    .block_task(),
+            )
+            .await
+            .map_err(|_| RuntimeError::TimedOut)
+            .and_then(|result| result.map_err(refused))
+            .map(|response| (response.config_options, response.modes, Reopened::Resumed))
+        } else if snapshot.load_session {
+            // The SDK runs notification handlers in arrival order before it
+            // routes the response, so the whole replay sees this flag.
+            replaying.store(true, Ordering::Release);
+            let loaded = tokio::time::timeout(
+                LOAD_TIMEOUT,
+                connection
+                    .send_request(
+                        LoadSessionRequest::new(session_id.clone(), setup.cwd.clone())
+                            .mcp_servers(setup.mcp_servers.clone()),
+                    )
+                    .block_task(),
+            )
+            .await;
+            replaying.store(false, Ordering::Release);
+            loaded
+                .map_err(|_| RuntimeError::TimedOut)
+                .and_then(|result| result.map_err(refused))
+                .map(|response| (response.config_options, response.modes, Reopened::Loaded))
+        } else {
+            Err(RuntimeError::UnsupportedResult)
+        };
+        match reopened {
+            Ok((options, modes, how)) => {
+                return Ok(Opened {
+                    session_id,
+                    config: SessionConfig::new(options.as_deref(), modes.as_ref()),
+                    how,
+                })
+            }
+            Err(RuntimeError::AuthenticationRequired) => {
+                return Err(RuntimeError::AuthenticationRequired)
+            }
+            // The agent no longer has it; a new session follows.
+            Err(_) => {}
+        }
+    }
+    let response = new_session(connection, setup).await?;
+    Ok(Opened {
+        session_id: response.session_id,
+        config: SessionConfig::new(response.config_options.as_deref(), response.modes.as_ref()),
+        how: if earlier.is_some() {
+            Reopened::Replaced
+        } else {
+            Reopened::New
+        },
+    })
 }
 
 async fn new_session(
@@ -2021,6 +2170,16 @@ pub(crate) mod tests {
         impl Future<Output = Result<Started, RuntimeError>>,
         Fixture,
     ) {
+        connect_with(PathBuf::from("/workspace").into())
+    }
+
+    fn connect_with(
+        setup: SessionSetup,
+    ) -> (
+        Wire,
+        impl Future<Output = Result<Started, RuntimeError>>,
+        Fixture,
+    ) {
         let (client, agent) = tokio::io::duplex(1 << 20);
         let (read, write) = tokio::io::split(client);
         let (agent_read, agent_write) = tokio::io::split(agent);
@@ -2037,7 +2196,7 @@ pub(crate) mod tests {
                 input: BufReader::new(agent_read).lines(),
                 output: agent_write,
             },
-            AcpSession::start(read, write, PathBuf::from("/workspace"), sink),
+            AcpSession::start(read, write, setup, sink),
             Fixture { events, notify },
         )
     }
@@ -2229,6 +2388,7 @@ pub(crate) mod tests {
                 Arc::new(NoJournal),
             ))),
             terminals: None,
+            resume: None,
         };
         let start = AcpSession::start(
             read,
@@ -2351,6 +2511,7 @@ pub(crate) mod tests {
                 root.clone(),
                 vec![("PATH".into(), path)],
             ))),
+            resume: None,
         };
         let start = AcpSession::start(
             read,
@@ -2483,6 +2644,7 @@ pub(crate) mod tests {
             ],
             files: None,
             terminals: None,
+            resume: None,
         };
         let start = AcpSession::start(read, write, setup, Arc::new(|_| {}));
         let agent = async {
@@ -2736,6 +2898,159 @@ pub(crate) mod tests {
         tokio::time::timeout(Duration::from_secs(5), session.finished())
             .await
             .unwrap();
+    }
+
+    /// Starts a session that continues `earlier`, with an agent that
+    /// advertises `capabilities`.
+    async fn reopen(
+        capabilities: Value,
+        agent: impl AsyncFnOnce(&mut Wire),
+    ) -> (Wire, Started, Fixture) {
+        let setup = SessionSetup {
+            resume: Some("earlier".into()),
+            ..PathBuf::from("/workspace").into()
+        };
+        let (mut wire, start, fixture) = connect_with(setup);
+        let handshake = async {
+            let initialize = wire.expect("initialize").await;
+            wire.reply(
+                &initialize,
+                json!({"protocolVersion":1,"agentCapabilities":capabilities}),
+            )
+            .await;
+            agent(&mut wire).await;
+        };
+        let (started, ()) = tokio::join!(start, handshake);
+        (wire, started.unwrap(), fixture)
+    }
+
+    #[tokio::test]
+    async fn a_stored_conversation_resumes_its_session_without_a_replay() {
+        let (_wire, started, _fixture) = reopen(
+            json!({"loadSession":true,"sessionCapabilities":{"resume":{}}}),
+            async |wire| {
+                let resume = wire.expect("session/resume").await;
+                assert_eq!(resume["params"]["sessionId"], "earlier");
+                assert_eq!(resume["params"]["cwd"], "/workspace");
+                wire.reply(
+                    &resume,
+                    json!({"configOptions":[select_option("model","b",&["a","b"])]}),
+                )
+                .await;
+            },
+        )
+        .await;
+        assert_eq!(started.session_id.as_deref(), Some("earlier"));
+        assert_eq!(started.session.reopened(), Some(Reopened::Resumed));
+        assert_eq!(
+            current(&started.session.config(), "model").as_deref(),
+            Some("b")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_loaded_session_skips_its_replay_but_shows_what_follows() {
+        let (mut wire, started, fixture) = reopen(json!({"loadSession":true}), async |wire| {
+            let load = wire.expect("session/load").await;
+            assert_eq!(load["params"]["sessionId"], "earlier");
+            let replay = |update: Value| {
+                json!({"jsonrpc":"2.0","method":"session/update",
+                    "params":{"sessionId":"earlier","update":update}})
+            };
+            wire.send(replay(json!({"sessionUpdate":"user_message_chunk",
+                "content":{"type":"text","text":"old question"}})))
+                .await;
+            wire.send(replay(json!({"sessionUpdate":"agent_message_chunk",
+                "content":{"type":"text","text":"old answer"}})))
+                .await;
+            wire.send(replay(
+                json!({"sessionUpdate":"tool_call","toolCallId":"old",
+                "title":"Old edit","status":"completed"}),
+            ))
+            .await;
+            wire.send(replay(json!({"sessionUpdate":"config_option_update",
+                "configOptions":[select_option("model","a",&["a","b"])]})))
+                .await;
+            wire.send(replay(
+                json!({"sessionUpdate":"session_info_update","title":"Kept"}),
+            ))
+            .await;
+            wire.reply(
+                &load,
+                json!({"configOptions":[select_option("model","b",&["a","b"])]}),
+            )
+            .await;
+        })
+        .await;
+        let session = started.session;
+        assert_eq!(session.reopened(), Some(Reopened::Loaded));
+        let prompt = async {
+            let prompt = wire.expect("session/prompt").await;
+            assert_eq!(prompt["params"]["sessionId"], "earlier");
+            wire.send(json!({"jsonrpc":"2.0","method":"session/update",
+                "params":{"sessionId":"earlier","update":{"sessionUpdate":"agent_message_chunk",
+                "content":{"type":"text","text":"new answer"}}}}))
+                .await;
+            wire.reply(&prompt, json!({"stopReason":"end_turn"})).await;
+        };
+        let (turn, ()) = tokio::join!(session.prompt(vec![PromptPart::Text("hi".into())]), prompt);
+        assert_eq!(turn, Ok(1));
+        fixture
+            .wait_for(|event| matches!(event, AcpEvent::TurnEnded { turn: 1, .. }))
+            .await;
+        let events = fixture.events();
+        let texts: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                AcpEvent::MessageChunk {
+                    content: ContentView::Text { text },
+                    ..
+                } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["new answer"]);
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, AcpEvent::ToolCall { .. })));
+        assert!(
+            events.iter().all(|event| match event {
+                AcpEvent::ConfigChanged { config } =>
+                    current(config, "model").as_deref() == Some("b"),
+                _ => true,
+            }),
+            "only the current settings are shown"
+        );
+        assert!(events.iter().any(
+            |event| matches!(event, AcpEvent::TitleChanged { title } if title.as_deref() == Some("Kept"))
+        ));
+        assert_eq!(
+            current(&session.config(), "model").as_deref(),
+            Some("b"),
+            "the replayed setting does not undo the current one"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_agent_that_cannot_continue_starts_a_new_session() {
+        let (_wire, started, _fixture) =
+            reopen(json!({"sessionCapabilities":{"resume":{}}}), async |wire| {
+                let resume = wire.expect("session/resume").await;
+                wire.fail(&resume, -32002).await;
+                let session = wire.expect("session/new").await;
+                wire.reply(&session, json!({"sessionId":"s2"})).await;
+            })
+            .await;
+        assert_eq!(started.session_id.as_deref(), Some("s2"));
+        assert_eq!(started.session.reopened(), Some(Reopened::Replaced));
+
+        let (_wire, started, _fixture) = reopen(json!({}), async |wire| {
+            let session = wire.expect("session/new").await;
+            wire.reply(&session, json!({"sessionId":"s3"})).await;
+        })
+        .await;
+        assert_eq!(started.session_id.as_deref(), Some("s3"));
+        assert_eq!(started.session.reopened(), Some(Reopened::Replaced));
     }
 
     #[tokio::test]

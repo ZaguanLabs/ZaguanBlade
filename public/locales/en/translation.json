@@ -407,7 +407,16 @@
       },
       "ended": {
         "title": "This conversation was run by {{name}}",
-        "help": "Its session has ended. The transcript stays here; start a new agent conversation to continue."
+        "help": "Its session has ended. Reconnect to continue where you left off; the transcript stays here."
+      },
+      "reconnect": {
+        "action": "Reconnect {{name}}",
+        "unavailable": "This agent is no longer set up or is turned off. Check it in Settings, under MCP / ACP."
+      },
+      "reopened": {
+        "resumed": "{{name}} picked up its earlier session for this conversation.",
+        "loaded": "{{name}} reloaded its earlier session for this conversation.",
+        "replaced": "{{name}} couldn't continue its earlier session and started a new one. It doesn't remember the turns above."
       }
     }
   },

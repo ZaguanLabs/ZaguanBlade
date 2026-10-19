@@ -4,7 +4,7 @@
 use super::{
     acp_config::SessionConfig,
     acp_forward::ForwardingView,
-    acp_session::{AcpSession, AgentSnapshot, TurnRecorder},
+    acp_session::{AcpSession, AgentSnapshot, Reopened, TurnRecorder},
     process::SupervisedProcess,
     RuntimeError,
 };
@@ -40,6 +40,8 @@ pub struct AgentStatus {
     pub forwarding: ForwardingView,
     /// The agent's session settings (model, effort, mode…).
     pub config: SessionConfig,
+    /// How the session began; `None` until it exists.
+    pub reopened: Option<Reopened>,
 }
 
 impl LiveAgent {
@@ -78,6 +80,7 @@ impl LiveAgent {
                 .unwrap_or(false),
             forwarding: self.forwarding.clone(),
             config: self.session.config(),
+            reopened: self.session.reopened(),
         }
     }
 

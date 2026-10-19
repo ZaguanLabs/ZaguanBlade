@@ -18,6 +18,8 @@ export interface AgentTurn {
     stopReason: AcpStopReason | null;
     error: string | null;
     truncated: boolean;
+    /** From the saved transcript, before this session; live events never change it. */
+    stored?: boolean;
 }
 
 export interface AgentChat {
@@ -32,8 +34,25 @@ export interface AgentChat {
     terminals: Record<string, AcpTerminal>;
 }
 
-export function startAgentChat(status: AcpAgentStatus): AgentChat {
-    return { status, turns: [], permissions: [], exited: null, title: null, usage: null, terminals: {} };
+export function startAgentChat(status: AcpAgentStatus, history: AgentTurn[] = []): AgentChat {
+    return { status, turns: history, permissions: [], exited: null, title: null, usage: null, terminals: {} };
+}
+
+/** The saved transcript as finished turns. Their numbers are negative, so
+ * they never meet the session's own turns, which count from 1. */
+export function storedTurns(messages: ReadonlyArray<{ role: string; content: string; reasoning?: string }>): AgentTurn[] {
+    const turns: AgentTurn[] = [];
+    for (const message of messages) {
+        const last = turns[turns.length - 1];
+        if (message.role === 'User') {
+            turns.push({ ...emptyTurn(0, message.content), state: 'ended', stored: true });
+        } else if (message.role === 'Assistant') {
+            const reply = { text: message.content, thoughts: message.reasoning ?? '' };
+            if (last && !last.text && !last.thoughts) Object.assign(last, reply);
+            else turns.push({ ...emptyTurn(0), ...reply, state: 'ended', stored: true });
+        }
+    }
+    return turns.map((turn, index) => ({ ...turn, turn: index - turns.length }));
 }
 
 function emptyTurn(turn: number, prompt = ''): AgentTurn {
@@ -44,12 +63,12 @@ function emptyTurn(turn: number, prompt = ''): AgentTurn {
  * when events arrive before the prompt call returned. */
 function withTurn(chat: AgentChat, turn: number | null, change: (current: AgentTurn) => AgentTurn): AgentChat {
     const index = turn === null ? chat.turns.length - 1 : chat.turns.findIndex(entry => entry.turn === turn);
-    if (index >= 0) {
+    if (index >= 0 && !chat.turns[index].stored) {
         const turns = chat.turns.slice();
         turns[index] = change(turns[index]);
         return { ...chat, turns };
     }
-    if (turn === null) return chat;
+    if (turn === null || index >= 0) return chat;
     return { ...chat, turns: [...chat.turns, change(emptyTurn(turn))] };
 }
 
@@ -147,12 +166,13 @@ export class AcpStartRequest {
         return review;
     }
 
-    async start(): Promise<AcpAgentStatus | null> {
+    /** With `conversationId`, the agent reconnects to that stored conversation. */
+    async start(conversationId?: string): Promise<AcpAgentStatus | null> {
         if (this.disposed || !this.ticket || this.running) return null;
         this.running = true;
         const ticketId = this.ticket;
         try {
-            return await this.invoke<AcpAgentStatus>('start_acp_conversation', { ticketId });
+            return await this.invoke<AcpAgentStatus>('start_acp_conversation', conversationId ? { ticketId, conversationId } : { ticketId });
         } finally { this.ticket = null; }
     }
 

@@ -140,6 +140,7 @@ export function AcpConversationView({ chat, busy, error, send, cancel, answer, a
     const agent = chat.status.snapshot.agent;
     const running = runningTurn(chat);
     const live = !chat.exited;
+    const reopened = chat.status.reopened && chat.status.reopened !== 'new' ? chat.status.reopened : null;
     const canSend = live && chat.status.ready && !running && !busy && draft.trim().length > 0;
     useEffect(() => { if (!running) setStopping(false); }, [running]);
     useEffect(() => { bottom.current?.scrollIntoView?.({ block: 'end' }); }, [chat.turns, chat.permissions]);
@@ -170,7 +171,11 @@ export function AcpConversationView({ chat, busy, error, send, cancel, answer, a
                 </div>
                 {terminalMethods.map(method => <p key={method.id} className="text-(--fg-tertiary)">{t('chat.agent.signIn.terminal', { method: method.name })}</p>)}
             </div> : null}
-            {chat.turns.map(turn => <Turn key={turn.turn} turn={turn} terminals={chat.terminals} onOpenFile={onOpenFile} />)}
+            {chat.turns.filter(turn => turn.stored).map(turn => <Turn key={turn.turn} turn={turn} terminals={chat.terminals} onOpenFile={onOpenFile} />)}
+            {reopened ? <p role="status" className={reopened === 'replaced' ? 'text-(--state-warning)' : 'text-(--fg-tertiary)'}>
+                {t(`chat.agent.reopened.${reopened}`, { name })}
+            </p> : null}
+            {chat.turns.filter(turn => !turn.stored).map(turn => <Turn key={turn.turn} turn={turn} terminals={chat.terminals} onOpenFile={onOpenFile} />)}
             {chat.permissions.map(request => <PermissionCard key={request.request_id} name={name} request={request} terminals={chat.terminals} busy={busy}
                 answer={optionId => answer(request.request_id, optionId)} />)}
             {chat.exited ? <p role="status" className="text-(--fg-tertiary)">

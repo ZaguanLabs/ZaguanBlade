@@ -2,19 +2,26 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { AcpAgentStatus, AcpConfigChange, AcpEventPayload, AcpSessionConfig } from '../types/acp';
-import { addPrompt, applyAcpEvent, startAgentChat, withConfig, type AgentChat } from '../utils/acpConversation';
+import { addPrompt, applyAcpEvent, startAgentChat, withConfig, type AgentChat, type AgentTurn } from '../utils/acpConversation';
 import { integrationProbeErrorKey } from '../utils/integrationProbe';
 
 interface ConversationOwner {
     id: string;
-    execution?: { agent_name: string } | null;
+    execution?: { agent_id: string; agent_name: string } | null;
+}
+
+/** A stored conversation an agent ran, which it can reconnect to. */
+export interface StoredAgentConversation {
+    conversationId: string;
+    agentId: string;
+    name: string;
 }
 
 /** The active conversation's ACP agent, when it has one. A live session is
  * shown from its events; a stored one only names the agent that ran it. */
 export function useAcpConversation() {
     const [chat, setChat] = useState<AgentChat | null>(null);
-    const [storedOwner, setStoredOwner] = useState<string | null>(null);
+    const [storedOwner, setStoredOwner] = useState<StoredAgentConversation | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const conversation = useRef<string | null>(null);
@@ -27,9 +34,10 @@ export function useAcpConversation() {
         return () => { void unlisten.then(stop => stop()); };
     }, []);
 
-    const attach = useCallback((status: AcpAgentStatus) => {
+    /** `history`: the stored transcript, shown before the session's own turns. */
+    const attach = useCallback((status: AcpAgentStatus, history: AgentTurn[] = []) => {
         conversation.current = status.conversation_id;
-        setChat(startAgentChat(status));
+        setChat(startAgentChat(status, history));
         setStoredOwner(null);
         setError(null);
         setBusy(false);
@@ -53,7 +61,7 @@ export function useAcpConversation() {
                 if (conversation.current !== live.conversation_id) attach(live);
             } else {
                 detach();
-                setStoredOwner(owner.execution.agent_name);
+                setStoredOwner({ conversationId: owner.id, agentId: owner.execution.agent_id, name: owner.execution.agent_name });
             }
         } catch { detach(); }
     }, [attach, detach]);

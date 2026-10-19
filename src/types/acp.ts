@@ -63,7 +63,13 @@ export interface AcpAgentStatus {
     ready: boolean;
     forwarding?: AcpForwardingView;
     config?: AcpSessionConfig;
+    /** How the session began; null until it exists. */
+    reopened?: AcpReopened | null;
 }
+
+/** `resumed`/`loaded`: the agent continued the conversation's earlier
+ * session. `replaced`: it could not, and started afresh. */
+export type AcpReopened = 'new' | 'resumed' | 'loaded' | 'replaced';
 
 export type AcpContent =
     | { type: 'text'; text: string }

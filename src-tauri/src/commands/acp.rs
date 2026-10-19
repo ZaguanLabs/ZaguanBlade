@@ -160,23 +160,88 @@ pub async fn prepare_acp_conversation(
         .map_err(|_| RuntimeError::LaunchFailed)?
 }
 
-/// Starts the approved agent and a new conversation that it owns. The
-/// previous conversation is saved and any previous agent session ends.
+/// Updates the active conversation's agent record and saves it.
+fn save_execution(
+    app: &AppHandle,
+    conversation_id: &str,
+    update: impl FnOnce(&mut ConversationExecution),
+) -> Result<(), RuntimeError> {
+    let state = app.state::<AppState>();
+    state
+        .with_conversation_store(|store| {
+            let delta = {
+                let mut conversation = state
+                    .conversation
+                    .lock()
+                    .map_err(|_| "Conversation unavailable".to_string())?;
+                if conversation.metadata.id != conversation_id {
+                    return Err("Conversation changed".to_string());
+                }
+                let Some(execution) = conversation.metadata.execution.as_mut() else {
+                    return Err("Not an agent conversation".to_string());
+                };
+                update(execution);
+                let start = store.changed_tail_start(conversation_id, conversation.absolute_len());
+                ConversationDelta::from_history(&conversation, start)
+            };
+            store.save_delta(delta)
+        })
+        .map_err(|_| RuntimeError::ConnectionNotReady)
+}
+
+/// The stored agent conversation to reconnect: the active one, run by an
+/// agent and without a live session.
+fn stored_execution(
+    state: &AppState,
+    conversation_id: &str,
+) -> Result<ConversationExecution, RuntimeError> {
+    if state.integrations.agents.bound(conversation_id).is_ok() {
+        return Err(RuntimeError::Busy);
+    }
+    let conversation = state.conversation.lock().map_err(|_| RuntimeError::Busy)?;
+    if conversation.metadata.id != conversation_id {
+        return Err(RuntimeError::ConnectionNotReady);
+    }
+    conversation
+        .metadata
+        .execution
+        .clone()
+        .filter(|execution| execution.kind == "acp")
+        .ok_or(RuntimeError::InvalidArguments)
+}
+
+/// Starts the approved agent and a new conversation that it owns; the
+/// previous conversation is saved and any previous agent session ends. With
+/// `conversation_id`, the agent instead reconnects to that stored conversation
+/// and continues its earlier session when it can.
 #[tauri::command]
 pub async fn start_acp_conversation(
     app: AppHandle,
     window: tauri::WebviewWindow,
     state: tauri::State<'_, AppState>,
     ticket_id: Uuid,
+    conversation_id: Option<String>,
 ) -> Result<AgentStatus, RuntimeError> {
     local_only(&window)?;
     let documents = state
         .document_service()
         .map_err(|_| RuntimeError::WorkspaceChanged)?;
+    let stored = conversation_id
+        .as_deref()
+        .map(|id| stored_execution(&state, id))
+        .transpose()?;
     let launched = state
         .integrations
         .launch_agent(ticket_id, documents.clone())
         .await?;
+    if let Some(stored) = &stored {
+        if stored.agent_id != launched.integration.to_string()
+            || stored.workspace_id != launched.workspace.workspace_id
+        {
+            launched.process.shutdown().await;
+            return Err(RuntimeError::InvalidArguments);
+        }
+    }
     let conversation: Arc<OnceLock<String>> = Arc::default();
     let recorder: Arc<Mutex<TurnRecorder>> = Arc::default();
     let sink: Sink = {
@@ -222,6 +287,9 @@ pub async fn start_acp_conversation(
                     documents.workspace_root().to_path_buf(),
                     launched.environment.clone(),
                 ))),
+                resume: stored
+                    .as_ref()
+                    .and_then(|stored| stored.external_session_id.clone()),
             },
             sink,
         ) => started,
@@ -235,52 +303,52 @@ pub async fn start_acp_conversation(
     };
 
     end_agent_session_unless(&app, None);
-    crate::commands::chat::graceful_close_active_chat_session(state.inner()).await;
-    let execution = ConversationExecution {
-        kind: "acp".into(),
-        agent_id: launched.integration.to_string(),
-        agent_name: launched.name.clone(),
-        external_session_id: started.session_id.clone(),
-        workspace_id: launched.workspace.workspace_id.clone(),
-        protocol_version: started.session.snapshot.protocol_version,
-        capabilities: serde_json::to_value(&*started.session.snapshot).unwrap_or_default(),
-    };
-    let blocking_app = app.clone();
-    let model_id = format!("acp:{}", launched.integration);
-    let created = tokio::task::spawn_blocking(move || {
-        let state = blocking_app.state::<AppState>();
-        state.with_conversation_store(|store| {
-            let delta = {
-                let conversation = state.conversation.lock().unwrap();
-                (conversation.len() > 0).then(|| {
-                    let start = store
-                        .changed_tail_start(&conversation.metadata.id, conversation.absolute_len());
-                    ConversationDelta::from_history(&conversation, start)
+    let saved = match conversation_id {
+        Some(conversation_id) => {
+            let blocking_app = app.clone();
+            let id = conversation_id.clone();
+            let name = launched.name.clone();
+            let session_id = started.session_id.clone();
+            let snapshot = started.session.snapshot.clone();
+            tokio::task::spawn_blocking(move || {
+                save_execution(&blocking_app, &id, |execution| {
+                    execution.agent_name = name;
+                    execution.external_session_id = session_id;
+                    execution.protocol_version = snapshot.protocol_version;
+                    execution.capabilities = serde_json::to_value(&*snapshot).unwrap_or_default();
                 })
-            };
-            if let Some(delta) = delta {
-                store.save_delta(delta)?;
-            }
-            store.create_conversation(model_id, Some(execution))
-        })
-    })
-    .await
-    .map_err(|_| RuntimeError::ProtocolFailed)
-    .and_then(|created| created.map_err(|_| RuntimeError::ProtocolFailed));
-    let metadata = match created {
-        Ok(metadata) => metadata,
+            })
+            .await
+            .map_err(|_| RuntimeError::ProtocolFailed)
+            .and_then(|saved| saved)
+            .map(|()| conversation_id)
+        }
+        None => {
+            crate::commands::chat::graceful_close_active_chat_session(state.inner()).await;
+            create_conversation(
+                &app,
+                ConversationExecution {
+                    kind: "acp".into(),
+                    agent_id: launched.integration.to_string(),
+                    agent_name: launched.name.clone(),
+                    external_session_id: started.session_id.clone(),
+                    workspace_id: launched.workspace.workspace_id.clone(),
+                    protocol_version: started.session.snapshot.protocol_version,
+                    capabilities: serde_json::to_value(&*started.session.snapshot)
+                        .unwrap_or_default(),
+                },
+            )
+            .await
+        }
+    };
+    let conversation_id = match saved {
+        Ok(conversation_id) => conversation_id,
         Err(error) => {
             started.session.close();
             launched.process.shutdown().await;
             return Err(error);
         }
     };
-    let conversation_id = metadata.id.clone();
-    *state.conversation.lock().map_err(|_| RuntimeError::Busy)? =
-        ConversationHistory::from_stored(StoredConversation {
-            metadata,
-            messages: Vec::new(),
-        });
     let _ = conversation.set(conversation_id.clone());
     let forwarding = launched
         .forwarding
@@ -300,6 +368,43 @@ pub async fn start_acp_conversation(
         .agents
         .install(live, launched.process, workspace_cancel);
     Ok(status)
+}
+
+/// Saves the active conversation and makes a new one the agent owns.
+async fn create_conversation(
+    app: &AppHandle,
+    execution: ConversationExecution,
+) -> Result<String, RuntimeError> {
+    let model_id = format!("acp:{}", execution.agent_id);
+    let blocking_app = app.clone();
+    let metadata = tokio::task::spawn_blocking(move || {
+        let state = blocking_app.state::<AppState>();
+        state.with_conversation_store(|store| {
+            let delta = {
+                let conversation = state.conversation.lock().unwrap();
+                (conversation.len() > 0).then(|| {
+                    let start = store
+                        .changed_tail_start(&conversation.metadata.id, conversation.absolute_len());
+                    ConversationDelta::from_history(&conversation, start)
+                })
+            };
+            if let Some(delta) = delta {
+                store.save_delta(delta)?;
+            }
+            store.create_conversation(model_id, Some(execution))
+        })
+    })
+    .await
+    .map_err(|_| RuntimeError::ProtocolFailed)
+    .and_then(|created| created.map_err(|_| RuntimeError::ProtocolFailed))?;
+    let conversation_id = metadata.id.clone();
+    let state = app.state::<AppState>();
+    *state.conversation.lock().map_err(|_| RuntimeError::Busy)? =
+        ConversationHistory::from_stored(StoredConversation {
+            metadata,
+            messages: Vec::new(),
+        });
+    Ok(conversation_id)
 }
 
 /// The live agent session of a conversation, if it has one.
@@ -444,6 +549,7 @@ pub async fn set_acp_config(
 /// Runs one of the agent's own sign-in methods, then creates its session.
 #[tauri::command]
 pub async fn authenticate_acp_agent(
+    app: AppHandle,
     window: tauri::WebviewWindow,
     state: tauri::State<'_, AppState>,
     conversation_id: String,
@@ -455,13 +561,14 @@ pub async fn authenticate_acp_agent(
     if let Ok(mut current) = live.session_id.lock() {
         *current = Some(session_id.clone());
     }
-    if let Ok(mut conversation) = state.conversation.lock() {
-        if conversation.metadata.id == conversation_id {
-            if let Some(execution) = conversation.metadata.execution.as_mut() {
-                execution.external_session_id = Some(session_id);
-            }
-        }
-    }
+    // The conversation keeps the session even if saving fails now; the
+    // agent's next turn saves it again.
+    let _ = tokio::task::spawn_blocking(move || {
+        save_execution(&app, &conversation_id, |execution| {
+            execution.external_session_id = Some(session_id)
+        })
+    })
+    .await;
     Ok(live.status())
 }
 

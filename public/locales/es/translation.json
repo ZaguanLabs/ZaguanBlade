@@ -407,7 +407,16 @@
       },
       "ended": {
         "title": "Esta conversación la gestionó {{name}}",
-        "help": "Su sesión ha finalizado. La transcripción se conserva aquí; inicia una nueva conversación con el agente para continuar."
+        "help": "Su sesión ha finalizado. Vuelve a conectarte para seguir donde lo dejaste; la transcripción se conserva aquí."
+      },
+      "reconnect": {
+        "action": "Reconectar con {{name}}",
+        "unavailable": "Este agente ya no está configurado o está desactivado. Revísalo en Ajustes, en MCP / ACP."
+      },
+      "reopened": {
+        "resumed": "{{name}} ha retomado su sesión anterior de esta conversación.",
+        "loaded": "{{name}} ha recargado su sesión anterior de esta conversación.",
+        "replaced": "{{name}} no ha podido retomar su sesión anterior y ha empezado una nueva. No recuerda los turnos de arriba."
       }
     }
   },

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AcpAgentStatus, AcpToolCall } from '../types/acp';
-import { AcpStartRequest, addPrompt, applyAcpEvent, runningTurn, startAgentChat } from './acpConversation';
+import { AcpStartRequest, addPrompt, applyAcpEvent, runningTurn, startAgentChat, storedTurns } from './acpConversation';
 
 const status: AcpAgentStatus = {
     conversation_id: 'c1', integration_id: 'agent', name: 'Agent', ready: true,
@@ -78,4 +78,38 @@ test('a disposed start request cancels its approval and never starts the agent',
     assert.equal(await request.start(), null);
     assert.deepEqual(calls.map(([command]) => command), ['prepare_acp_conversation', 'cancel_integration_test']);
     assert.deepEqual(calls[1][1], { ticketId: 't1' });
+});
+
+test('a reconnected chat shows the stored transcript before its own turns and never changes it', () => {
+    const history = storedTurns([
+        { role: 'User', content: 'First' },
+        { role: 'Assistant', content: 'One', reasoning: 'Thinking' },
+        { role: 'Assistant', content: 'More' },
+        { role: 'System', content: 'ignored' },
+        { role: 'User', content: 'Second' },
+    ]);
+    assert.deepEqual(history.map(turn => [turn.turn, turn.prompt, turn.text, turn.thoughts, turn.state, turn.stored]), [
+        [-3, 'First', 'One', 'Thinking', 'ended', true],
+        [-2, '', 'More', '', 'ended', true],
+        [-1, 'Second', '', '', 'ended', true],
+    ]);
+    let chat = startAgentChat(status, history);
+    // An update outside any turn has no live turn to go to.
+    chat = applyAcpEvent(chat, { type: 'message_chunk', turn: null, content: { type: 'text', text: 'stray' } });
+    assert.equal(chat.turns[2].text, '');
+    chat = addPrompt(chat, 1, 'Third');
+    chat = applyAcpEvent(chat, { type: 'message_chunk', turn: null, content: { type: 'text', text: 'Three' } });
+    assert.deepEqual(chat.turns.map(turn => turn.text), ['One', 'More', '', 'Three']);
+});
+
+test('reconnecting starts the agent for the stored conversation', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = [];
+    const invoke = async <T,>(command: string, args: Record<string, unknown>): Promise<T> => {
+        calls.push([command, args]);
+        return (command === 'prepare_acp_conversation' ? { ticket_id: 't1', kind: 'process', executable: '/bin/agent', cwd: '/w', args: [] } : status) as T;
+    };
+    const request = new AcpStartRequest(invoke);
+    await request.prepare('agent', 'rev', '/w');
+    assert.equal(await request.start('c1'), status);
+    assert.deepEqual(calls[1], ['start_acp_conversation', { ticketId: 't1', conversationId: 'c1' }]);
 });

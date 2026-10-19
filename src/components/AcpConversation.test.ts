@@ -7,7 +7,7 @@ import { I18nextProvider } from 'react-i18next';
 import en from '../../public/locales/en/translation.json';
 import es from '../../public/locales/es/translation.json';
 import type { AcpAgentStatus } from '../types/acp';
-import { addPrompt, applyAcpEvent, startAgentChat, type AgentChat } from '../utils/acpConversation';
+import { addPrompt, applyAcpEvent, startAgentChat, storedTurns, type AgentChat } from '../utils/acpConversation';
 import { AcpConversationView } from './AcpConversation';
 import { enabledAgents } from './AcpAgentMenu';
 
@@ -124,6 +124,20 @@ for (const [language, translation] of Object.entries({ en, es })) {
             modes: { current_mode_id: 'ask', modes: [{ value: 'ask', name: 'Ask', description: null }, { value: 'code', name: 'Code', description: null }] } } }));
         assert.ok(legacy.includes(`<span>${escape(strings.config.mode)}</span>`));
         assert.ok(legacy.includes('<option value="code">Code</option>'));
+    });
+
+    test(`a reconnected session says whether the agent remembers the stored turns in ${language}`, async () => {
+        const history = storedTurns([{ role: 'User', content: 'Earlier question' }, { role: 'Assistant', content: 'Earlier answer' }]);
+        const notice = (key: 'resumed' | 'replaced') => escape(strings.reopened[key].replace('{{name}}', 'Fixture Agent'));
+        const resumed = await render(addPrompt(startAgentChat({ ...status(true), reopened: 'resumed' }, history), 1, 'Next question'));
+        assert.ok(resumed.includes(notice('resumed')));
+        assert.ok(resumed.indexOf('Earlier answer') < resumed.indexOf(notice('resumed')));
+        assert.ok(resumed.indexOf(notice('resumed')) < resumed.indexOf('Next question'));
+        const replaced = await render(startAgentChat({ ...status(true), reopened: 'replaced' }, history));
+        assert.ok(replaced.includes(notice('replaced')));
+        assert.ok(!replaced.includes(escape(strings.working)), 'stored turns are finished');
+        const fresh = await render(startAgentChat({ ...status(true), reopened: 'new' }));
+        assert.ok(!Object.values(strings.reopened).some(text => fresh.includes(escape(text.replace('{{name}}', 'Fixture Agent')))));
     });
 }
 
