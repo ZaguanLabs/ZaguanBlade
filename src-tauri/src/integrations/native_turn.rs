@@ -75,6 +75,8 @@ pub struct NativeMcpTurn {
     elicitations: Mutex<HashMap<Uuid, PendingElicitation>>,
     seen: Mutex<HashSet<String>>,
     blocked: Mutex<Option<&'static str>>,
+    /// Tools a cloud request left out, by the name the model would call.
+    withheld: Mutex<Vec<(String, ExcludedTool)>>,
     /// The project's YOLO mode: calls are allowed without asking.
     auto_approve: AtomicBool,
 }
@@ -114,7 +116,12 @@ impl NativeMcpTurn {
                             .ok()
                     });
                     if let Some(binding) = binding {
-                        catalog.add(status.connection_id, &binding.definition.name, &snapshot);
+                        catalog.add(
+                            status.connection_id,
+                            status.integration_id,
+                            &binding.definition.name,
+                            &snapshot,
+                        );
                     }
                 }
             }
@@ -130,6 +137,7 @@ impl NativeMcpTurn {
             elicitations: Mutex::new(HashMap::new()),
             seen: Mutex::new(HashSet::new()),
             blocked: Mutex::new(remote.then_some("remote")),
+            withheld: Mutex::new(Vec::new()),
             auto_approve: AtomicBool::new(false),
         }))
     }
@@ -170,12 +178,19 @@ impl NativeMcpTurn {
                 .map(|entry| entry.view.clone())
                 .collect()
         };
+        let withheld = self.withheld.lock().map_err(|_| RuntimeError::Busy)?;
         Ok(TurnState {
             turn_id: self.id,
             conversation_id: self.conversation,
-            available: self.catalog.tools.len(),
+            available: self.catalog.tools.len() - withheld.len(),
             limit: MAX_NATIVE_TOOLS,
-            excluded: self.catalog.excluded.clone(),
+            excluded: self
+                .catalog
+                .excluded
+                .iter()
+                .chain(withheld.iter().map(|(_, tool)| tool))
+                .cloned()
+                .collect(),
             blocked: *self.blocked.lock().map_err(|_| RuntimeError::Busy)?,
             pending,
             elicitations,
@@ -202,6 +217,65 @@ impl NativeMcpTurn {
     pub fn block(&self, reason: &'static str) {
         if let Ok(mut blocked) = self.blocked.lock() {
             *blocked = Some(reason);
+        }
+    }
+    /// Blocks the turn unless it already is, keeping the first reason.
+    fn block_if_open(&self, reason: &'static str) {
+        if let Ok(mut blocked) = self.blocked.lock() {
+            blocked.get_or_insert(reason);
+        }
+    }
+    /// `tool_catalog.external` for a Zaguán cloud request. Tools zcoderd could
+    /// not accept are withheld and shown as excluded.
+    pub fn cloud_tools(&self) -> Vec<Value> {
+        if !self.is_current() || self.blocked.lock().map(|b| b.is_some()).unwrap_or(true) {
+            return Vec::new();
+        }
+        let (entries, excluded) = self.catalog.cloud_entries();
+        if let Ok(mut withheld) = self.withheld.lock() {
+            *withheld = excluded;
+        }
+        entries
+    }
+    /// The cloud server cannot take MCP tools, so this turn has none.
+    pub fn cloud_unsupported(&self) {
+        if self.has_tools() {
+            self.block_if_open("cloud_unsupported");
+        }
+    }
+    /// zcoderd's acknowledgement of the catalog sent with this turn. Without a
+    /// matching revision the tools the model sees are unknown, so none are used.
+    pub fn cloud_acknowledged(
+        &self,
+        acknowledged: bool,
+        omitted: &[crate::blade_ws_client::OmittedTool],
+    ) {
+        if !acknowledged {
+            self.block_if_open("cloud_unacknowledged");
+            return;
+        }
+        let Ok(mut withheld) = self.withheld.lock() else {
+            return;
+        };
+        for omission in omitted {
+            let Some(tool) = self.catalog.tools.get(&omission.alias) else {
+                continue;
+            };
+            if withheld.iter().any(|(name, _)| *name == omission.alias) {
+                continue;
+            }
+            withheld.push((
+                omission.alias.clone(),
+                ExcludedTool {
+                    server_name: tool.server_name.clone(),
+                    tool_name: tool.original_name.clone(),
+                    reason: if omission.reason == "tool_limit" {
+                        "budget"
+                    } else {
+                        "schema"
+                    },
+                },
+            ));
         }
     }
     pub fn respond(&self, request: Uuid, allow: bool) -> Result<(), RuntimeError> {
@@ -356,6 +430,15 @@ impl NativeMcpTurn {
             .tools
             .get(&call.function.name)
             .ok_or(RuntimeError::InvalidCatalog)?;
+        if self
+            .withheld
+            .lock()
+            .map_err(|_| RuntimeError::Busy)?
+            .iter()
+            .any(|(name, _)| *name == call.function.name)
+        {
+            return Err(RuntimeError::InvalidCatalog.into());
+        }
         if call.id.is_empty() || call.id.len() > 256 || call.id.chars().any(char::is_control) {
             return Err(RuntimeError::InvalidArguments.into());
         }
@@ -455,6 +538,52 @@ impl NativeMcpTurn {
         result
     }
 }
+/// Longest `content` zcoderd accepts in an external tool result.
+const MAX_CLOUD_RESULT_BYTES: usize = 16 * 1024;
+
+/// What a Zaguán cloud model gets back for an MCP call: the text projection
+/// or the error code, at most 16 KiB, and whether the call ran. Rich content
+/// and the saved result stay on this machine.
+pub fn cloud_result(result: &ToolResult) -> crate::blade_ws_client::ToolResult {
+    let envelope: Value = serde_json::from_str(&result.content).unwrap_or(Value::Null);
+    let payload = &envelope["result"];
+    let error = payload["error"].as_str().map(str::to_owned);
+    let outcome = payload["outcome"].as_str().unwrap_or("unknown").to_owned();
+    let mut content = match &error {
+        Some(code) => format!("The MCP call failed: {code}."),
+        None => payload["projection"]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+    };
+    let hidden = payload["projection"]["non_text_blocks"]
+        .as_u64()
+        .unwrap_or(0);
+    let mut note = String::new();
+    if hidden > 0 {
+        note = format!("\n[{hidden} non-text blocks stayed on the user's machine]");
+    }
+    if payload["projection"]["truncated"].as_bool() == Some(true)
+        || content.len() + note.len() > MAX_CLOUD_RESULT_BYTES
+    {
+        note.push_str("\n[truncated]");
+    }
+    let mut end = MAX_CLOUD_RESULT_BYTES
+        .saturating_sub(note.len())
+        .min(content.len());
+    while !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    content.truncate(end);
+    content.push_str(&note);
+    crate::blade_ws_client::ToolResult {
+        success: result.success && error.is_none() && outcome == "completed",
+        content,
+        error,
+        outcome: Some(outcome),
+    }
+}
+
 /// Requests left unanswered when their call ends are withdrawn; dropping the
 /// answer channel tells the server the user cancelled.
 struct ElicitationGuard<'a> {
@@ -472,5 +601,58 @@ impl Drop for ElicitationGuard<'_> {
 impl Drop for NativeMcpTurn {
     fn drop(&mut self) {
         self.cancel.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn envelope(result: Value) -> ToolResult {
+        ToolResult {
+            success: result["error"].is_null(),
+            content: json!({"mcp_result_version":1,"result":result}).to_string(),
+            error: None,
+            skipped: false,
+        }
+    }
+
+    #[test]
+    fn cloud_results_are_bounded_text_with_their_outcome() {
+        let long = envelope(json!({"outcome":"completed",
+            "projection":{"text":"é".repeat(20_000),"truncated":false,"non_text_blocks":2,"is_error":false}}));
+        let sent = cloud_result(&long);
+        assert!(sent.success);
+        assert!(sent.content.len() <= MAX_CLOUD_RESULT_BYTES);
+        assert!(sent.content.ends_with("[truncated]"));
+        assert!(sent.content.contains("2 non-text blocks"));
+        assert_eq!(sent.outcome.as_deref(), Some("completed"));
+
+        let tool_error = envelope(json!({"outcome":"completed",
+            "projection":{"text":"no such file","truncated":false,"non_text_blocks":0,"is_error":true}}));
+        let sent = cloud_result(&ToolResult {
+            success: false,
+            ..tool_error
+        });
+        assert!(!sent.success);
+        assert_eq!(sent.content, "no such file");
+        assert_eq!(sent.error, None);
+
+        let unknown = cloud_result(&envelope(
+            json!({"error":"timed_out","outcome":"unknown","retry":false}),
+        ));
+        assert!(!unknown.success);
+        assert_eq!(unknown.error.as_deref(), Some("timed_out"));
+        assert_eq!(unknown.outcome.as_deref(), Some("unknown"));
+        assert!(unknown.content.contains("timed_out"));
+
+        let garbled = cloud_result(&ToolResult {
+            success: true,
+            content: "not json".into(),
+            error: None,
+            skipped: false,
+        });
+        assert!(!garbled.success);
+        assert_eq!(garbled.outcome.as_deref(), Some("unknown"));
     }
 }

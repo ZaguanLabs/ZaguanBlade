@@ -1089,7 +1089,7 @@
       },
       "connection": {
         "title": "Conexión MCP activa",
-        "help": "Las herramientas conectadas están disponibles en las nuevas conversaciones de Ollama y proveedores compatibles con OpenAI, con permiso para cada llamada. Las conversaciones de Zaguán en la nube aún no son compatibles. El servidor sigue en ejecución al cerrar Ajustes.",
+        "help": "Las herramientas conectadas están disponibles en las nuevas conversaciones, con permiso para cada llamada. Con los modelos de Zaguán en la nube, las descripciones de las herramientas y los resultados que permitas se envían al proveedor del modelo. El servidor sigue en ejecución al cerrar Ajustes.",
         "connect": "Conectar",
         "saveAndConnect": "Guardar y conectar",
         "disconnect": "Desconectar",
@@ -1836,7 +1836,6 @@
     "notice": {
       "notConnected_one": "{{names}} no está conectado, así que este modelo no puede usar sus herramientas.",
       "notConnected_other": "{{names}} no están conectados, así que este modelo no puede usar sus herramientas.",
-      "cloudModel": "Los modelos de Zaguán en la nube aún no pueden usar herramientas MCP. Elige un modelo de Ollama o compatible con OpenAI para usar tus servidores conectados.",
       "openSettings": "Abrir ajustes de MCP"
     },
     "title": "Herramientas MCP",
@@ -1851,7 +1850,9 @@
       "provider": "Este modelo no admite llamadas nativas a herramientas.",
       "budget": "El catálogo combinado de herramientas supera el límite de este proveedor.",
       "uncertain": "No se conoce el resultado de una llamada MCP. Se han bloqueado las demás llamadas MCP de este turno; comprueba el servicio externo antes de volver a intentarlo.",
-      "model_changed": "Has cambiado el modelo seleccionado. Se ha detenido este turno; envía un nuevo mensaje para continuar con el nuevo modelo."
+      "model_changed": "Has cambiado el modelo seleccionado. Se ha detenido este turno; envía un nuevo mensaje para continuar con el nuevo modelo.",
+      "cloud_unsupported": "Este servidor de Zaguán no admite herramientas MCP, así que no están disponibles en este turno.",
+      "cloud_unacknowledged": "Zaguán no ha confirmado qué herramientas MCP ofreció al modelo, así que no están disponibles en este turno. Envía un nuevo mensaje para volver a intentarlo."
     },
     "approval": "¿Permitir que {{server}} ejecute {{tool}}?",
     "approvalHelp": "Esta herramienta externa puede acceder a archivos o servicios. El permiso se aplica solo a estos argumentos y a esta llamada, y caduca a los 60 segundos.",

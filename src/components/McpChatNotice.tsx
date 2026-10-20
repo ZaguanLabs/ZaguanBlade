@@ -5,20 +5,17 @@ import { X } from 'lucide-react';
 import type { IntegrationConfigSnapshot, IntegrationDefinition, McpConnectionStatus } from '../types/integrations';
 import { useMcpConnections } from '../hooks/useMcpConnections';
 
-export type McpChatNoticeState = { kind: 'not_connected'; names: string[] } | { kind: 'cloud_model' } | null;
+export type McpChatNoticeState = { kind: 'not_connected'; names: string[] } | null;
 
-const LOCAL_PROVIDERS = new Set(['ollama', 'openai-compat']);
 const STARTING = new Set(['connecting', 'connected', 'refreshing']);
 
 /** Why enabled MCP servers will not reach the next message, if they won't.
- * Only Ollama and OpenAI-compatible models receive MCP tools, and only from
- * connected servers. */
+ * Every model receives MCP tools, but only from connected servers. What a
+ * Zaguán server cannot take shows in the turn panel once it answers. */
 export function mcpChatNotice(entries: IntegrationDefinition[], statuses: McpConnectionStatus[], provider?: string): McpChatNoticeState {
+    if (!provider) return null;
     const servers = entries.filter(entry => entry.enabled && entry.connection.protocol === 'mcp');
     const phase = (id: string) => statuses.find(status => status.integration_id === id)?.phase;
-    if (!LOCAL_PROVIDERS.has(provider ?? '')) {
-        return servers.some(server => phase(server.id) === 'connected') ? { kind: 'cloud_model' } : null;
-    }
     const idle = servers.filter(server => !STARTING.has(phase(server.id) ?? 'disconnected'));
     return idle.length ? { kind: 'not_connected', names: idle.map(server => server.name) } : null;
 }
@@ -27,9 +24,7 @@ export function McpChatNoticeView({ notice, onOpenSettings, onDismiss }: { notic
     const { t } = useTranslation();
     return <div role="status" className="flex shrink-0 items-start gap-2 border-b border-(--border-subtle) px-4 py-2 text-xs text-(--fg-secondary)">
         <p className="min-w-0 flex-1">
-            {notice.kind === 'cloud_model'
-                ? t('mcpChat.notice.cloudModel')
-                : t('mcpChat.notice.notConnected', { count: notice.names.length, names: notice.names.join(', ') })}
+            {t('mcpChat.notice.notConnected', { count: notice.names.length, names: notice.names.join(', ') })}
             {' '}
             <button type="button" className="text-(--accent-mention) hover:underline" onClick={onOpenSettings}>{t('mcpChat.notice.openSettings')}</button>
         </p>

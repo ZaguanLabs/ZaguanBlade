@@ -296,6 +296,9 @@ pub struct ToolResult {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// For external (MCP) calls: `completed`, `not_started` or `unknown`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -368,6 +371,8 @@ struct ToolResultPayload {
     content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     model_id: Option<String>,
 }
@@ -694,6 +699,10 @@ impl BladeWsClient {
                 crate::integrations::cloud_catalog::CAPABILITY.to_string(),
                 serde_json::Value::Bool(true),
             );
+            capabilities.insert(
+                crate::integrations::cloud_catalog::EXTERNAL_CAPABILITY.to_string(),
+                serde_json::Value::Bool(true),
+            );
 
             let auth_msg = WsBaseMessage {
                 id: "auth-1".to_string(),
@@ -900,6 +909,7 @@ impl BladeWsClient {
             success: result.success,
             content: result.content,
             error: result.error,
+            outcome: result.outcome,
             model_id,
         };
 
@@ -2054,6 +2064,7 @@ mod tests {
             success: true,
             content: "ok".to_string(),
             error: None,
+            outcome: None,
             model_id: Some("model".to_string()),
         })
         .unwrap();

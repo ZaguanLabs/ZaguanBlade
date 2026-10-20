@@ -11,6 +11,7 @@ const MAX_SCHEMA_BYTES: usize = 128 * 1024;
 #[derive(Clone)]
 pub struct NativeTool {
     pub target: CallTarget,
+    pub integration_id: Uuid,
     pub server_name: String,
     pub original_name: String,
     pub schema: Value,
@@ -28,7 +29,13 @@ pub struct NativeCatalog {
     bytes: usize,
 }
 impl NativeCatalog {
-    pub fn add(&mut self, connection: Uuid, server_name: &str, catalog: &McpCatalog) {
+    pub fn add(
+        &mut self,
+        connection: Uuid,
+        integration: Uuid,
+        server_name: &str,
+        catalog: &McpCatalog,
+    ) {
         for tool in catalog.tools() {
             let name = self.function_name(server_name, &tool.definition.name, &tool.alias);
             let parameters = Value::Object((*tool.definition.input_schema).clone());
@@ -64,12 +71,66 @@ impl NativeCatalog {
                         alias: tool.alias.clone(),
                         catalog_revision: catalog.revision().into(),
                     },
+                    integration_id: integration,
                     server_name: server_name.into(),
                     original_name: tool.definition.name.to_string(),
                     schema,
                 },
             );
         }
+    }
+}
+impl NativeCatalog {
+    /// `tool_catalog.external` entries for a cloud request, keyed by the same
+    /// names the model calls, and the tools left out. zcoderd refuses a whole
+    /// request over one entry it cannot accept, so a schema with a `$ref` key
+    /// holding anything but a local reference (zcoderd checks every key, data
+    /// included) stays local, as does anything past the 128 KiB budget.
+    pub fn cloud_entries(&self) -> (Vec<Value>, Vec<(String, ExcludedTool)>) {
+        let (mut entries, mut excluded, mut bytes) = (Vec::new(), Vec::new(), 2);
+        for (name, tool) in &self.tools {
+            let parameters = &tool.schema["function"]["parameters"];
+            let entry = json!({"alias":name,
+                "origin":{"kind":"mcp","integration_id":tool.integration_id,"server_name":tool.server_name},
+                "tool_name":tool.original_name,"description":tool.schema["function"]["description"],
+                "input_schema":parameters});
+            let size = serde_json::to_vec(&entry)
+                .map(|v| v.len() + 1)
+                .unwrap_or(usize::MAX);
+            let reason = if !only_local_refs(parameters) {
+                Some("schema")
+            } else if size > MAX_SCHEMA_BYTES.saturating_sub(bytes) {
+                Some("budget")
+            } else {
+                None
+            };
+            match reason {
+                Some(reason) => excluded.push((
+                    name.clone(),
+                    ExcludedTool {
+                        server_name: tool.server_name.clone(),
+                        tool_name: tool.original_name.clone(),
+                        reason,
+                    },
+                )),
+                None => {
+                    bytes += size;
+                    entries.push(entry);
+                }
+            }
+        }
+        (entries, excluded)
+    }
+}
+/// zcoderd's rule: every `$ref` key, wherever it appears, holds a local reference.
+fn only_local_refs(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => map.iter().all(|(key, child)| {
+            (key != "$ref" || child.as_str().is_some_and(|r| r.starts_with('#')))
+                && only_local_refs(child)
+        }),
+        Value::Array(items) => items.iter().all(only_local_refs),
+        _ => true,
     }
 }
 impl NativeCatalog {
@@ -181,7 +242,7 @@ mod tests {
     fn bounded_catalog_preserves_constraints_and_reports_omissions() {
         let input = catalog(Uuid::new_v4(), 35);
         let mut output = NativeCatalog::default();
-        output.add(Uuid::new_v4(), "Fixture", &input);
+        output.add(Uuid::new_v4(), Uuid::new_v4(), "Fixture", &input);
         assert_eq!(output.tools.len(), 32);
         assert_eq!(output.excluded.len(), 3);
         for tool in output.tools.values() {
@@ -195,8 +256,18 @@ mod tests {
     #[test]
     fn names_are_isolated_and_external_refs_are_rejected_without_mutation() {
         let mut output = NativeCatalog::default();
-        output.add(Uuid::new_v4(), "First", &catalog(Uuid::new_v4(), 1));
-        output.add(Uuid::new_v4(), "Second", &catalog(Uuid::new_v4(), 1));
+        output.add(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "First",
+            &catalog(Uuid::new_v4(), 1),
+        );
+        output.add(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "Second",
+            &catalog(Uuid::new_v4(), 1),
+        );
         assert_eq!(output.tools.len(), 2);
         assert!(output.tools.contains_key("mcp__first__tool_00"));
         assert!(output.tools.contains_key("mcp__second__tool_00"));
@@ -214,13 +285,71 @@ mod tests {
         ));
     }
     #[test]
+    fn cloud_entries_carry_origin_and_leave_out_what_zcoderd_would_refuse() {
+        let mut output = NativeCatalog::default();
+        output.add(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "Bit Lantern",
+            &catalog(Uuid::new_v4(), 1),
+        );
+        let docs = Uuid::new_v4();
+        let mut builder = CatalogBuilder::new(Uuid::new_v4());
+        builder.push(serde_json::from_value(json!({"name":"search","description":"Find code",
+            "inputSchema":{"type":"object","properties":{"q":{"type":"string","maxLength":9007199254740993u64}},"$defs":{"a":{"type":"string"}},"items":{"$ref":"#/$defs/a"}}})).unwrap()).unwrap();
+        output.add(Uuid::new_v4(), docs, "Docs", &builder.finish().unwrap());
+        // Blade accepts a property named `$ref`; zcoderd does not.
+        assert_eq!(output.tools.len(), 2);
+        let (entries, excluded) = output.cloud_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["alias"], "mcp__docs__search");
+        assert_eq!(entries[0]["origin"]["kind"], "mcp");
+        assert_eq!(entries[0]["origin"]["integration_id"], docs.to_string());
+        assert_eq!(entries[0]["origin"]["server_name"], "Docs");
+        assert_eq!(entries[0]["tool_name"], "search");
+        assert_eq!(
+            entries[0]["input_schema"]["properties"]["q"]["maxLength"],
+            9007199254740993u64
+        );
+        assert!(entries[0]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Find code"));
+        assert_eq!(excluded.len(), 1);
+        assert_eq!(excluded[0].0, "mcp__bit_lantern__tool_00");
+        assert_eq!(excluded[0].1.reason, "schema");
+        assert!(only_local_refs(&json!({"items":[{"$ref":"#/a"}]})));
+        assert!(!only_local_refs(&json!({"default":{"$ref":"literal"}})));
+    }
+    #[test]
     fn model_names_are_readable_valid_and_never_shared() {
         let mut output = NativeCatalog::default();
-        output.add(Uuid::new_v4(), "Bit Lantern", &catalog(Uuid::new_v4(), 1));
-        output.add(Uuid::new_v4(), "bit-lantern!", &catalog(Uuid::new_v4(), 1));
-        output.add(Uuid::new_v4(), "Bit Lantern", &catalog(Uuid::new_v4(), 1));
-        output.add(Uuid::new_v4(), &"ñ".repeat(80), &catalog(Uuid::new_v4(), 1));
         output.add(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "Bit Lantern",
+            &catalog(Uuid::new_v4(), 1),
+        );
+        output.add(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "bit-lantern!",
+            &catalog(Uuid::new_v4(), 1),
+        );
+        output.add(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "Bit Lantern",
+            &catalog(Uuid::new_v4(), 1),
+        );
+        output.add(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            &"ñ".repeat(80),
+            &catalog(Uuid::new_v4(), 1),
+        );
+        output.add(
+            Uuid::new_v4(),
             Uuid::new_v4(),
             &"long".repeat(40),
             &catalog(Uuid::new_v4(), 1),

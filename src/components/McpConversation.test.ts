@@ -29,6 +29,11 @@ for (const [language, translation] of Object.entries({ en, es })) {
         assert.ok(html.includes('&lt;script&gt;'));
         assert.ok(!html.includes('<script>'));
         assert.ok(!html.includes('mcpChat.'));
+        for (const blocked of ['cloud_unsupported', 'cloud_unacknowledged'] as const) {
+            const shown = renderToStaticMarkup(createElement(I18nextProvider, { i18n },
+                createElement(McpTurnView, { state: { ...state, blocked, pending: [] }, busy: false, error: null, respond: () => {} })));
+            assert.ok(shown.includes(translation.mcpChat.blocked[blocked].replace(/'/g, '&#x27;')));
+        }
     });
     test(`server requests for input are shown as text and answered only by the user in ${language}`, async () => {
         const i18n = createInstance();

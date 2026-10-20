@@ -2339,6 +2339,91 @@ for line in sys.stdin:
         fixture.runtime.shutdown().await;
     }
     #[tokio::test]
+    async fn cloud_turns_offer_their_tools_and_honour_zcoderd_answers() {
+        use super::super::native_turn::{cloud_result, NativeMcpTurn};
+        use crate::blade_ws_client::OmittedTool;
+        let fixture = Fixture::new("normal");
+        fixture.connect().await;
+        fixture.phase(ConnectionPhase::Connected).await;
+        let turn = || {
+            NativeMcpTurn::new(
+                fixture.runtime.clone(),
+                fixture.documents.clone(),
+                Uuid::new_v4(),
+                false,
+            )
+            .unwrap()
+        };
+
+        let answered = turn();
+        answered.set_auto_approve(true);
+        let tools = answered.cloud_tools();
+        assert_eq!(tools.len(), 1);
+        let alias = tools[0]["alias"].as_str().unwrap().to_owned();
+        assert_eq!(answered.schemas()[0]["function"]["name"], alias.as_str());
+        assert_eq!(tools[0]["origin"]["kind"], "mcp");
+        assert_eq!(tools[0]["tool_name"], "search");
+        assert_eq!(tools[0]["input_schema"]["type"], "object");
+        answered.cloud_acknowledged(true, &[]);
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            answered.execute(&native_call(&answered, "cloud-1")),
+        )
+        .await
+        .unwrap();
+        let sent = cloud_result(&result);
+        assert!(sent.success, "{}", result.content);
+        assert_eq!(sent.outcome.as_deref(), Some("completed"));
+        assert_eq!(sent.error, None);
+        assert!(!sent.content.is_empty() && !sent.content.contains("mcp_result_version"));
+        assert_eq!(fixture.call_count(), 1);
+
+        let omitted = turn();
+        omitted.cloud_tools();
+        omitted.cloud_acknowledged(
+            true,
+            &[OmittedTool {
+                alias: alias.clone(),
+                reason: "tool_limit".into(),
+            }],
+        );
+        let state = omitted.state().unwrap();
+        assert_eq!(state.available, 0);
+        assert_eq!(state.excluded[0].reason, "budget");
+        let refused = cloud_result(&omitted.execute(&native_call(&omitted, "cloud-2")).await);
+        assert!(!refused.success);
+        assert_eq!(refused.outcome.as_deref(), Some("not_started"));
+        assert_eq!(refused.error.as_deref(), Some("invalid_catalog"));
+
+        let unacknowledged = turn();
+        unacknowledged.cloud_tools();
+        unacknowledged.cloud_acknowledged(false, &[]);
+        assert_eq!(
+            unacknowledged.state().unwrap().blocked,
+            Some("cloud_unacknowledged")
+        );
+        assert!(unacknowledged.cloud_tools().is_empty());
+
+        let unsupported = turn();
+        unsupported.cloud_unsupported();
+        assert_eq!(
+            unsupported.state().unwrap().blocked,
+            Some("cloud_unsupported")
+        );
+        let remote = NativeMcpTurn::new(
+            fixture.runtime.clone(),
+            fixture.documents.clone(),
+            Uuid::new_v4(),
+            true,
+        )
+        .unwrap();
+        remote.cloud_unsupported();
+        assert_eq!(remote.state().unwrap().blocked, Some("remote"));
+        assert!(remote.cloud_tools().is_empty());
+        assert_eq!(fixture.call_count(), 1);
+        fixture.runtime.shutdown().await;
+    }
+    #[tokio::test]
     async fn native_conversation_consent_artifacts_and_remote_gate() {
         use super::super::{native_turn::NativeMcpTurn, result_artifact::ArtifactRef};
         for mode in ["normal", "modern", "tool_error"] {

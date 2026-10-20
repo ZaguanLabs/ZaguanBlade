@@ -1089,7 +1089,7 @@
       },
       "connection": {
         "title": "Live MCP connection",
-        "help": "Connected tools are available in new Ollama and OpenAI-compatible conversations, with approval for each call. Zaguán cloud conversations are not supported yet. Closing Settings leaves the server running.",
+        "help": "Connected tools are available in new conversations, with approval for each call. With Zaguán cloud models, tool descriptions and the results you allow are sent to the model provider. Closing Settings leaves the server running.",
         "connect": "Connect",
         "saveAndConnect": "Save and connect",
         "disconnect": "Disconnect",
@@ -1836,7 +1836,6 @@
     "notice": {
       "notConnected_one": "{{names}} is not connected, so this model can't use its tools.",
       "notConnected_other": "{{names}} are not connected, so this model can't use their tools.",
-      "cloudModel": "Zaguán cloud models can't use MCP tools yet. Choose an Ollama or OpenAI-compatible model to use your connected servers.",
       "openSettings": "Open MCP settings"
     },
     "title": "MCP tools",
@@ -1851,7 +1850,9 @@
       "provider": "This model does not support native tool calls.",
       "budget": "The combined tool catalog exceeds this provider’s limit.",
       "uncertain": "An MCP call has an uncertain outcome. Further MCP calls are blocked for this turn; check the external service before trying again.",
-      "model_changed": "The selected model changed. This turn was stopped; send a new message to continue with the new model."
+      "model_changed": "The selected model changed. This turn was stopped; send a new message to continue with the new model.",
+      "cloud_unsupported": "This Zaguán server can't take MCP tools, so they're unavailable in this turn.",
+      "cloud_unacknowledged": "Zaguán didn't confirm which MCP tools it offered the model, so they're unavailable in this turn. Send a new message to try again."
     },
     "approval": "Allow {{server}} to run {{tool}}?",
     "approvalHelp": "This external tool may access files or services. Approval applies only to these arguments and this call, and expires after 60 seconds.",

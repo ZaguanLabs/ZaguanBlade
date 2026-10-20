@@ -713,7 +713,9 @@ pub async fn handle_send_message<R: Runtime>(
         if window.label() == "main"
             && matches!(
                 selection.provider,
-                crate::providers::ProviderId::Ollama | crate::providers::ProviderId::OpenAiCompat
+                crate::providers::ProviderId::Ollama
+                    | crate::providers::ProviderId::OpenAiCompat
+                    | crate::providers::ProviderId::Zaguan
             )
         {
             if let (Ok(documents), Ok(conversation_id)) = (

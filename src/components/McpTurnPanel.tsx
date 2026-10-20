@@ -11,7 +11,7 @@ export interface McpTurnState {
     available: number;
     limit: number;
     excluded: Array<{ server_name: string; tool_name: string; reason: 'schema' | 'budget' }>;
-    blocked: 'remote' | 'provider' | 'budget' | 'uncertain' | 'model_changed' | null;
+    blocked: 'remote' | 'provider' | 'budget' | 'uncertain' | 'model_changed' | 'cloud_unsupported' | 'cloud_unacknowledged' | null;
     pending: Array<{ request_id: string; server_name: string; tool_name: string; arguments: unknown }>;
     elicitations?: McpElicitation[];
 }

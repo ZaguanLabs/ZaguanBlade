@@ -1016,6 +1016,7 @@ impl ChatManager {
 
         let ws_client = Arc::new(BladeWsClient::new(blade_url.clone(), api_key.clone()));
         self.ws_client = Some(ws_client.clone());
+        let native_mcp = self.native_mcp.clone();
         let session_id = self.session_id.clone();
         let model_id = model_id.to_string();
         let chat_request_id = BladeWsClient::new_chat_request_id();
@@ -1059,6 +1060,7 @@ impl ChatManager {
                     // Keep the latest reasoning chunk so we can skip an immediate duplicate text chunk.
                     let mut last_reasoning_chunk: Option<String> = None;
                     let mut sent_catalog_revision: Option<String> = None;
+                    let mut sent_external_tools = false;
                     while let Some(event) = ws_rx.recv().await {
                         match event {
                             crate::blade_ws_client::BladeWsEvent::Connected {
@@ -1071,17 +1073,37 @@ impl ChatManager {
                                     crate::index_policy::enabled(Path::new(&workspace_info.root))
                                         .unwrap_or(false);
                                 // With the negotiated catalog zcoderd follows the index setting
-                                // itself; otherwise the legacy tools field carries it.
-                                let catalog = capabilities
-                                    .iter()
-                                    .any(|c| c == crate::integrations::cloud_catalog::CAPABILITY)
-                                    .then(|| {
-                                        crate::integrations::cloud_catalog::CloudToolCatalog::new(
-                                            index_enabled,
-                                        )
-                                    });
+                                // itself; otherwise the legacy tools field carries it. MCP tools
+                                // need the catalog and the external-tools capability.
+                                let supports =
+                                    |keyword: &str| capabilities.iter().any(|c| c == keyword);
+                                let catalog_supported =
+                                    supports(crate::integrations::cloud_catalog::CAPABILITY);
+                                let external = match &native_mcp {
+                                    Some(turn)
+                                        if catalog_supported
+                                            && supports(
+                                                crate::integrations::cloud_catalog::EXTERNAL_CAPABILITY,
+                                            ) =>
+                                    {
+                                        turn.cloud_tools()
+                                    }
+                                    Some(turn) => {
+                                        turn.cloud_unsupported();
+                                        Vec::new()
+                                    }
+                                    None => Vec::new(),
+                                };
+                                let catalog = catalog_supported.then(|| {
+                                    crate::integrations::cloud_catalog::CloudToolCatalog::new(
+                                        index_enabled,
+                                        external,
+                                    )
+                                });
                                 sent_catalog_revision =
                                     catalog.as_ref().map(|c| c.revision().to_string());
+                                sent_external_tools =
+                                    catalog.as_ref().is_some_and(|c| c.has_external());
                                 let legacy_tools =
                                     (catalog.is_none() && !index_enabled).then(|| {
                                         crate::index_policy::filter_tools(
@@ -1144,6 +1166,14 @@ impl ChatManager {
                                     eprintln!(
                                         "[CHAT MGR] zcoderd omitted catalog tools: {:?}",
                                         omitted_tools
+                                    );
+                                }
+                                if let (true, Some(turn)) = (sent_external_tools, &native_mcp) {
+                                    turn.cloud_acknowledged(
+                                        applied_tool_catalog_revision.is_some()
+                                            && applied_tool_catalog_revision
+                                                == sent_catalog_revision,
+                                        &omitted_tools,
                                     );
                                 }
                                 ws_client.set_session_id(session_id.clone()).await;
@@ -2807,21 +2837,25 @@ impl ChatManager {
             // Send ALL results sequentially
             // RFC: Large Tool Result Handling - truncate in local mode
             for (call, result) in &results {
-                let tool_content = result.to_tool_content_for_tool(&call.function.name);
-
-                let tool_result = crate::blade_ws_client::ToolResult {
-                    success: result.success,
-                    content: tool_content,
-                    error: if result.success {
-                        None
-                    } else {
-                        Some(
-                            result
-                                .error
-                                .clone()
-                                .unwrap_or_else(|| "Tool execution failed".to_string()),
-                        )
-                    },
+                // MCP results go back as bounded text with their outcome.
+                let tool_result = if call.function.name.starts_with("mcp_") {
+                    crate::integrations::native_turn::cloud_result(result)
+                } else {
+                    crate::blade_ws_client::ToolResult {
+                        success: result.success,
+                        content: result.to_tool_content_for_tool(&call.function.name),
+                        error: if result.success {
+                            None
+                        } else {
+                            Some(
+                                result
+                                    .error
+                                    .clone()
+                                    .unwrap_or_else(|| "Tool execution failed".to_string()),
+                            )
+                        },
+                        outcome: None,
+                    }
                 };
 
                 if let Err(e) = ws_client

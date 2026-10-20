@@ -18,7 +18,7 @@ const status = (id: string, phase: McpConnectionStatus['phase']): McpConnectionS
 });
 const agent: IntegrationDefinition = { id: 'agent', name: 'Agent', enabled: true, connection: { protocol: 'acp', process: newIntegrationProcess('agent'), mcp_servers: [] } };
 
-test('local models are told which enabled servers are not connected', () => {
+test('models are told which enabled servers are not connected', () => {
     const entries = [server('a', 'Bit Lantern'), server('b', 'Docs'), server('c', 'Off', false), agent];
     assert.deepEqual(mcpChatNotice(entries, [], 'ollama'), { kind: 'not_connected', names: ['Bit Lantern', 'Docs'] });
     assert.deepEqual(mcpChatNotice(entries, [status('a', 'connected'), status('b', 'failed')], 'openai-compat'), { kind: 'not_connected', names: ['Docs'] });
@@ -26,11 +26,11 @@ test('local models are told which enabled servers are not connected', () => {
     assert.equal(mcpChatNotice([agent, server('c', 'Off', false)], [], 'ollama'), null);
 });
 
-test('cloud models are told only when a connected server goes unused', () => {
+test('cloud models get connected servers like local ones', () => {
     const entries = [server('a', 'Bit Lantern')];
-    assert.equal(mcpChatNotice(entries, [], 'zaguan'), null);
+    assert.deepEqual(mcpChatNotice(entries, [], 'zaguan'), { kind: 'not_connected', names: ['Bit Lantern'] });
+    assert.equal(mcpChatNotice(entries, [status('a', 'connected')], 'zaguan'), null);
     assert.equal(mcpChatNotice(entries, [], undefined), null);
-    assert.deepEqual(mcpChatNotice(entries, [status('a', 'connected')], 'zaguan'), { kind: 'cloud_model' });
 });
 
 for (const [language, translation] of Object.entries({ en, es })) {
@@ -44,8 +44,6 @@ for (const [language, translation] of Object.entries({ en, es })) {
         assert.ok(one.includes(translation.mcpChat.notice.openSettings));
         const two = render({ kind: 'not_connected', names: ['A', 'B'] });
         assert.ok(two.includes(translation.mcpChat.notice.notConnected_other.replace('{{names}}', 'A, B').replace(/'/g, '&#x27;')));
-        const cloud = render({ kind: 'cloud_model' });
-        assert.ok(cloud.includes(translation.mcpChat.notice.cloudModel.replace(/'/g, '&#x27;')));
-        assert.ok(!(one + two + cloud).includes('mcpChat.'));
+        assert.ok(!(one + two).includes('mcpChat.'));
     });
 }
