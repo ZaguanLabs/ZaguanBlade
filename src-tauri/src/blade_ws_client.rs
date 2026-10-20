@@ -2103,6 +2103,148 @@ mod tests {
         }
     }
 
+    async fn next_json(
+        ws: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    ) -> Value {
+        loop {
+            let frame = tokio::time::timeout(Duration::from_secs(10), ws.next())
+                .await
+                .expect("client message")
+                .expect("open socket")
+                .expect("valid frame");
+            if let Message::Text(text) = frame {
+                return serde_json::from_str(text.as_ref()).unwrap();
+            }
+        }
+    }
+
+    async fn next_event(events: &mut mpsc::UnboundedReceiver<BladeWsEvent>) -> BladeWsEvent {
+        tokio::time::timeout(Duration::from_secs(10), events.recv())
+            .await
+            .expect("client event")
+            .expect("open channel")
+    }
+
+    /// A fake zcoderd on a local socket: the catalog is negotiated, sent in
+    /// place of legacy tools, acknowledged, and an external call comes back
+    /// with its outcome.
+    #[tokio::test]
+    async fn a_fake_zcoderd_sees_the_negotiated_catalog_and_outcomes_on_the_wire() {
+        use crate::integrations::cloud_catalog::{CloudRequest, CAPABILITY, EXTERNAL_CAPABILITY};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let auth = next_json(&mut ws).await;
+            assert_eq!(auth["type"], "authenticate");
+            assert_eq!(auth["payload"]["capabilities"][CAPABILITY], true);
+            assert_eq!(auth["payload"]["capabilities"][EXTERNAL_CAPABILITY], true);
+            let send = |value: Value| Message::Text(value.to_string().into());
+            ws.send(send(serde_json::json!({"type":"authenticated","id":"auth-1","payload":{
+                "user_id":"user","server_version":"0.21.26","capabilities":[CAPABILITY, EXTERNAL_CAPABILITY]}})))
+                .await
+                .unwrap();
+            let chat = next_json(&mut ws).await;
+            assert_eq!(chat["type"], "chat_request");
+            assert!(chat["payload"].get("tools").is_none());
+            let catalog = &chat["payload"]["tool_catalog"];
+            assert_eq!(catalog["builtin"]["mode"], "allow_list");
+            assert_eq!(catalog["builtin"]["symbols_index_enabled"], false);
+            let revision = catalog["revision"].clone();
+            ws.send(send(serde_json::json!({"type":"session_created","id":chat["id"],"payload":{
+                "session_id":"sess-1","model_id":"model","applied_tool_catalog_revision":revision,"omitted_tools":[]}})))
+                .await
+                .unwrap();
+            ws.send(send(
+                serde_json::json!({"type":"tool_call","id":chat["id"],"payload":{
+                "tool_call_id":"call-1","tool_name":"mcp__docs__search",
+                "arguments":{"q":"x","limit":9007199254740993u64}}}),
+            ))
+            .await
+            .unwrap();
+            let result = next_json(&mut ws).await;
+            assert_eq!(result["type"], "tool_result");
+            assert_eq!(result["payload"]["tool_call_id"], "call-1");
+            assert_eq!(result["payload"]["outcome"], "unknown");
+            assert_eq!(result["payload"]["error"], "timed_out");
+            assert_eq!(result["payload"]["success"], false);
+        });
+
+        let client = BladeWsClient::new(format!("http://127.0.0.1:{port}"), "key".into());
+        let mut events = client.connect(None).await.unwrap();
+        let BladeWsEvent::Connected { capabilities, .. } = next_event(&mut events).await else {
+            panic!("expected the authenticated event first");
+        };
+        let request = CloudRequest::new(&capabilities, false, None, || panic!("no legacy tools"));
+        let catalog = serde_json::to_value(request.catalog.as_ref().unwrap()).unwrap();
+        client
+            .send_message_with_storage_mode_and_id(
+                "chat-1".into(),
+                None,
+                "model".into(),
+                "hello".into(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                request.legacy_tools.clone(),
+                None,
+                None,
+                Some(catalog),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let BladeWsEvent::Session {
+            applied_tool_catalog_revision,
+            omitted_tools,
+            ..
+        } = next_event(&mut events).await
+        else {
+            panic!("expected session_created");
+        };
+        assert!(request.acknowledge(
+            None,
+            applied_tool_catalog_revision.as_deref(),
+            &omitted_tools
+        ));
+        let BladeWsEvent::ToolCall {
+            id,
+            name,
+            arguments,
+            ..
+        } = next_event(&mut events).await
+        else {
+            panic!("expected the external call");
+        };
+        assert_eq!(
+            (id.as_str(), name.as_str()),
+            ("call-1", "mcp__docs__search")
+        );
+        assert_eq!(arguments["limit"], 9007199254740993u64);
+        client
+            .send_tool_result(
+                "sess-1".into(),
+                id,
+                ToolResult {
+                    success: false,
+                    content: "The MCP call failed: timed_out.".into(),
+                    error: Some("timed_out".into()),
+                    outcome: Some("unknown".into()),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
     #[test]
     fn parses_the_tool_catalog_acknowledgement_from_session_created() {
         let (tx, mut rx) = mpsc::unbounded_channel();

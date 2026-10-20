@@ -2395,21 +2395,39 @@ for line in sys.stdin:
         assert_eq!(refused.outcome.as_deref(), Some("not_started"));
         assert_eq!(refused.error.as_deref(), Some("invalid_catalog"));
 
+        // The same decisions the chat manager makes for each kind of server.
+        use super::super::cloud_catalog::{CloudRequest, CAPABILITY, EXTERNAL_CAPABILITY};
+        let both = [CAPABILITY.to_string(), EXTERNAL_CAPABILITY.to_string()];
+        let sent = turn();
+        let request = CloudRequest::new(&both, true, Some(&sent), Vec::new);
+        let catalog = serde_json::to_value(request.catalog.as_ref().unwrap()).unwrap();
+        assert_eq!(catalog["external"][0]["alias"], alias.as_str());
+        let revision = catalog["revision"].as_str().unwrap();
+        assert!(request.acknowledge(Some(&sent), Some(revision), &[]));
+        assert_eq!(sent.state().unwrap().blocked, None);
+        assert_eq!(sent.state().unwrap().available, 1);
+
         let unacknowledged = turn();
-        unacknowledged.cloud_tools();
-        unacknowledged.cloud_acknowledged(false, &[]);
+        let request = CloudRequest::new(&both, true, Some(&unacknowledged), Vec::new);
+        assert!(!request.acknowledge(Some(&unacknowledged), Some("stale"), &[]));
         assert_eq!(
             unacknowledged.state().unwrap().blocked,
             Some("cloud_unacknowledged")
         );
         assert!(unacknowledged.cloud_tools().is_empty());
 
-        let unsupported = turn();
-        unsupported.cloud_unsupported();
-        assert_eq!(
-            unsupported.state().unwrap().blocked,
-            Some("cloud_unsupported")
-        );
+        for capabilities in [vec![CAPABILITY.to_string()], Vec::new()] {
+            let unsupported = turn();
+            let request = CloudRequest::new(&capabilities, true, Some(&unsupported), Vec::new);
+            assert!(request
+                .catalog
+                .as_ref()
+                .is_none_or(|catalog| !catalog.has_external()));
+            assert_eq!(
+                unsupported.state().unwrap().blocked,
+                Some("cloud_unsupported")
+            );
+        }
         let remote = NativeMcpTurn::new(
             fixture.runtime.clone(),
             fixture.documents.clone(),

@@ -5,7 +5,10 @@
 //! With `client_external_tools_v1` it also offers the turn's MCP tools under
 //! the names the model calls; their calls come back to Blade to run.
 
+use super::native_turn::NativeMcpTurn;
+use crate::blade_ws_client::OmittedTool;
 use serde::Serialize;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 /// Negotiated in `authenticate` and listed in `authenticated.capabilities`.
@@ -66,9 +69,96 @@ impl CloudToolCatalog {
     }
 }
 
+/// What one cloud chat request sends for tools, decided from zcoderd's
+/// `authenticated.capabilities`.
+pub(crate) struct CloudRequest {
+    pub legacy_tools: Option<Vec<Value>>,
+    pub catalog: Option<CloudToolCatalog>,
+}
+
+impl CloudRequest {
+    /// With the negotiated catalog zcoderd follows the index setting itself;
+    /// otherwise the legacy `tools` field carries it. MCP tools need the
+    /// catalog and the external-tools capability; without them the turn's MCP
+    /// tools are switched off.
+    pub(crate) fn new(
+        capabilities: &[String],
+        index_enabled: bool,
+        turn: Option<&NativeMcpTurn>,
+        legacy_tools: impl FnOnce() -> Vec<Value>,
+    ) -> Self {
+        let supports = |keyword: &str| capabilities.iter().any(|c| c == keyword);
+        let catalog_supported = supports(CAPABILITY);
+        let external = match turn {
+            Some(turn) if catalog_supported && supports(EXTERNAL_CAPABILITY) => turn.cloud_tools(),
+            Some(turn) => {
+                turn.cloud_unsupported();
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
+        let catalog = catalog_supported.then(|| CloudToolCatalog::new(index_enabled, external));
+        Self {
+            legacy_tools: (catalog.is_none() && !index_enabled).then(legacy_tools),
+            catalog,
+        }
+    }
+
+    /// Applies zcoderd's answer from `session_created` to the turn whose MCP
+    /// tools were sent. False when a catalog was sent and its revision was not
+    /// confirmed.
+    pub(crate) fn acknowledge(
+        &self,
+        turn: Option<&NativeMcpTurn>,
+        applied: Option<&str>,
+        omitted: &[OmittedTool],
+    ) -> bool {
+        let Some(catalog) = &self.catalog else {
+            return true;
+        };
+        let confirmed = applied == Some(catalog.revision());
+        if let (true, Some(turn)) = (catalog.has_external(), turn) {
+            turn.cloud_acknowledged(confirmed, omitted);
+        }
+        confirmed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn keywords(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn each_server_kind_gets_the_tools_field_it_understands() {
+        let legacy = || vec![serde_json::json!({"name":"read_file"})];
+        let both = keywords(&[CAPABILITY, EXTERNAL_CAPABILITY]);
+
+        let new = CloudRequest::new(&both, false, None, legacy);
+        assert!(new.legacy_tools.is_none());
+        let catalog = new.catalog.as_ref().unwrap();
+        assert!(!catalog.builtin.symbols_index_enabled && !catalog.has_external());
+        assert!(new.acknowledge(None, Some(catalog.revision()), &[]));
+        assert!(!new.acknowledge(None, Some("other"), &[]));
+        assert!(!new.acknowledge(None, None, &[]));
+
+        let part_a = CloudRequest::new(&keywords(&[CAPABILITY]), true, None, legacy);
+        assert!(part_a.catalog.is_some() && part_a.legacy_tools.is_none());
+
+        let old_index_off = CloudRequest::new(&keywords(&["host_skills_v1"]), false, None, legacy);
+        assert!(old_index_off.catalog.is_none());
+        assert_eq!(old_index_off.legacy_tools.unwrap().len(), 1);
+        let old_index_on = CloudRequest::new(&[], true, None, || panic!("not needed"));
+        assert!(old_index_on.catalog.is_none() && old_index_on.legacy_tools.is_none());
+        assert!(old_index_on.acknowledge(None, None, &[]));
+        // The external keyword alone means nothing without the catalog.
+        let external_only =
+            CloudRequest::new(&keywords(&[EXTERNAL_CAPABILITY]), true, None, legacy);
+        assert!(external_only.catalog.is_none());
+    }
 
     #[test]
     fn the_cloud_catalog_lists_only_what_blade_runs_and_follows_the_index() {

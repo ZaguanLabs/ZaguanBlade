@@ -1059,8 +1059,9 @@ impl ChatManager {
                     // Some providers may emit the same content as both reasoning and text chunks.
                     // Keep the latest reasoning chunk so we can skip an immediate duplicate text chunk.
                     let mut last_reasoning_chunk: Option<String> = None;
-                    let mut sent_catalog_revision: Option<String> = None;
-                    let mut sent_external_tools = false;
+                    let mut cloud_request: Option<
+                        crate::integrations::cloud_catalog::CloudRequest,
+                    > = None;
                     while let Some(event) = ws_rx.recv().await {
                         match event {
                             crate::blade_ws_client::BladeWsEvent::Connected {
@@ -1072,45 +1073,24 @@ impl ChatManager {
                                 let index_enabled =
                                     crate::index_policy::enabled(Path::new(&workspace_info.root))
                                         .unwrap_or(false);
-                                // With the negotiated catalog zcoderd follows the index setting
-                                // itself; otherwise the legacy tools field carries it. MCP tools
-                                // need the catalog and the external-tools capability.
-                                let supports =
-                                    |keyword: &str| capabilities.iter().any(|c| c == keyword);
-                                let catalog_supported =
-                                    supports(crate::integrations::cloud_catalog::CAPABILITY);
-                                let external = match &native_mcp {
-                                    Some(turn)
-                                        if catalog_supported
-                                            && supports(
-                                                crate::integrations::cloud_catalog::EXTERNAL_CAPABILITY,
-                                            ) =>
-                                    {
-                                        turn.cloud_tools()
-                                    }
-                                    Some(turn) => {
-                                        turn.cloud_unsupported();
-                                        Vec::new()
-                                    }
-                                    None => Vec::new(),
-                                };
-                                let catalog = catalog_supported.then(|| {
-                                    crate::integrations::cloud_catalog::CloudToolCatalog::new(
+                                let mut request =
+                                    crate::integrations::cloud_catalog::CloudRequest::new(
+                                        &capabilities,
                                         index_enabled,
-                                        external,
-                                    )
-                                });
-                                sent_catalog_revision =
-                                    catalog.as_ref().map(|c| c.revision().to_string());
-                                sent_external_tools =
-                                    catalog.as_ref().is_some_and(|c| c.has_external());
-                                let legacy_tools =
-                                    (catalog.is_none() && !index_enabled).then(|| {
-                                        crate::index_policy::filter_tools(
-                                            get_tool_definitions_for_model(&model_id, true),
-                                            false,
-                                        )
-                                    });
+                                        native_mcp.as_deref(),
+                                        || {
+                                            crate::index_policy::filter_tools(
+                                                get_tool_definitions_for_model(&model_id, true),
+                                                false,
+                                            )
+                                        },
+                                    );
+                                let legacy_tools = request.legacy_tools.take();
+                                let catalog = request
+                                    .catalog
+                                    .as_ref()
+                                    .map(|c| serde_json::to_value(c).expect("catalog serializes"));
+                                cloud_request = Some(request);
 
                                 // Send chat message with storage mode (RFC-002)
                                 if let Err(e) = ws_client
@@ -1127,9 +1107,7 @@ impl ChatManager {
                                         legacy_tools,
                                         None,
                                         None,
-                                        catalog.map(|c| {
-                                            serde_json::to_value(c).expect("catalog serializes")
-                                        }),
+                                        catalog,
                                         None,
                                         None,
                                     )
@@ -1154,26 +1132,22 @@ impl ChatManager {
                                 //     "[CHAT MGR] Session event: session_id={}, model={}",
                                 //     session_id, model_id
                                 // );
-                                if sent_catalog_revision.is_some()
-                                    && applied_tool_catalog_revision != sent_catalog_revision
-                                {
-                                    eprintln!(
-                                        "[CHAT MGR] zcoderd applied tool catalog {:?}, expected {:?}",
-                                        applied_tool_catalog_revision, sent_catalog_revision
-                                    );
+                                if let Some(request) = &cloud_request {
+                                    if !request.acknowledge(
+                                        native_mcp.as_deref(),
+                                        applied_tool_catalog_revision.as_deref(),
+                                        &omitted_tools,
+                                    ) {
+                                        eprintln!(
+                                            "[CHAT MGR] zcoderd applied tool catalog {:?}, not the one sent",
+                                            applied_tool_catalog_revision
+                                        );
+                                    }
                                 }
                                 if !omitted_tools.is_empty() {
                                     eprintln!(
                                         "[CHAT MGR] zcoderd omitted catalog tools: {:?}",
                                         omitted_tools
-                                    );
-                                }
-                                if let (true, Some(turn)) = (sent_external_tools, &native_mcp) {
-                                    turn.cloud_acknowledged(
-                                        applied_tool_catalog_revision.is_some()
-                                            && applied_tool_catalog_revision
-                                                == sent_catalog_revision,
-                                        &omitted_tools,
                                     );
                                 }
                                 ws_client.set_session_id(session_id.clone()).await;
