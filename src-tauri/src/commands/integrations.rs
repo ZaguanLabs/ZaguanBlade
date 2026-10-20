@@ -674,3 +674,63 @@ pub async fn get_mcp_result_artifact(
     }
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    /// Remote control opens other webviews, and every integration or agent
+    /// command must refuse them before touching state. A new command without a
+    /// guard fails here.
+    #[test]
+    fn every_integration_and_agent_command_refuses_other_windows() {
+        // `desktop_only` also matches `runtime_desktop_only`.
+        let guards = [
+            "desktop_only(&window)",
+            "local_only(&window)",
+            "feature_servers(&window,",
+        ];
+        let mut checked = 0;
+        for (file, source) in [
+            ("integrations.rs", include_str!("integrations.rs")),
+            ("acp.rs", include_str!("acp.rs")),
+        ] {
+            // Spelled in two parts so this test is not split as a command.
+            for command in source.split(concat!("#[tauri::", "command]")).skip(1) {
+                let name = command
+                    .split("fn ")
+                    .nth(1)
+                    .and_then(|rest| rest.split('(').next())
+                    .unwrap();
+                // The body ends at the first line that closes an item.
+                let body = command.split("\n}\n").next().unwrap();
+                assert!(
+                    body.contains("window: tauri::WebviewWindow"),
+                    "{file}: {name} does not take its window"
+                );
+                assert!(
+                    guards.iter().any(|guard| body.contains(guard)),
+                    "{file}: {name} is not guarded"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 40, "only {checked} commands found");
+        let source = include_str!("integrations.rs");
+        let shared = source.split("fn feature_servers(").nth(1).unwrap();
+        assert!(shared
+            .split("\n}\n")
+            .next()
+            .unwrap()
+            .contains("runtime_desktop_only(window)?"));
+        for (source, helper) in [
+            (source, "fn desktop_only("),
+            (include_str!("acp.rs"), "fn local_only("),
+        ] {
+            let body = source.split(helper).nth(1).unwrap();
+            assert!(body
+                .split("\n}\n")
+                .next()
+                .unwrap()
+                .contains(r#"window.label() != "main""#));
+        }
+    }
+}

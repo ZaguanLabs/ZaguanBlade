@@ -298,6 +298,13 @@ mod tests {
             Ok(None)
         }
     }
+    /// A keyring that is locked or has no service running.
+    struct LockedSecrets;
+    impl SecretStore for LockedSecrets {
+        fn get(&self, _: Uuid, _: &str) -> Result<Option<String>, RuntimeError> {
+            Err(RuntimeError::SecretUnavailable)
+        }
+    }
     fn config() -> ProcessConfig {
         ProcessConfig {
             command: "/bin/sh".into(),
@@ -331,6 +338,32 @@ mod tests {
         assert!(matches!(
             PreparedProcess::resolve(&config, Uuid::new_v4(), root.path(), &NoSecrets),
             Err(RuntimeError::SecretMissing)
+        ));
+    }
+
+    #[test]
+    fn a_locked_keyring_stops_the_launch_instead_of_dropping_the_variable() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = config();
+        config.env.insert(
+            "MODE".into(),
+            ConfigValue::Text {
+                value: "fast".into(),
+            },
+        );
+        // Nothing to read from the keyring, so a locked one does not matter.
+        assert!(
+            PreparedProcess::resolve(&config, Uuid::new_v4(), root.path(), &LockedSecrets).is_ok()
+        );
+        config.env.insert(
+            "TOKEN".into(),
+            ConfigValue::Secret {
+                name: "token".into(),
+            },
+        );
+        assert!(matches!(
+            PreparedProcess::resolve(&config, Uuid::new_v4(), root.path(), &LockedSecrets),
+            Err(RuntimeError::SecretUnavailable)
         ));
     }
 

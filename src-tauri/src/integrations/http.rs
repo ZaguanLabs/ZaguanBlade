@@ -1287,6 +1287,42 @@ mod tests {
     }
 
     #[test]
+    fn a_locked_keyring_is_reported_not_sent_as_a_missing_header() {
+        struct Locked;
+        impl SecretStore for Locked {
+            fn get(&self, _: Uuid, _: &str) -> Result<Option<String>, RuntimeError> {
+                Err(RuntimeError::SecretUnavailable)
+            }
+        }
+        let secrets: Arc<dyn SecretStore> = Arc::new(Locked);
+        let plain = BTreeMap::from([(
+            "X-Client".into(),
+            ConfigValue::Text {
+                value: "blade".into(),
+            },
+        )]);
+        assert!(PreparedHttp::resolve(
+            "https://example.com/mcp",
+            &plain,
+            None,
+            Uuid::new_v4(),
+            &secrets
+        )
+        .is_ok());
+        assert_eq!(
+            PreparedHttp::resolve(
+                "https://example.com/mcp",
+                &headers(),
+                None,
+                Uuid::new_v4(),
+                &secrets
+            )
+            .err(),
+            Some(RuntimeError::SecretUnavailable)
+        );
+    }
+
+    #[test]
     fn resolution_binds_secrets_and_flags_plain_http_to_other_hosts() {
         let secrets = Arc::new(Secrets::default());
         let id = Uuid::new_v4();

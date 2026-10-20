@@ -694,6 +694,37 @@ pub(super) mod tests {
         );
     }
 
+    /// A locked keyring is an error the user can act on, never "signed out":
+    /// that would offer a fresh sign-in and overwrite working tokens.
+    #[tokio::test]
+    async fn a_locked_keyring_is_not_mistaken_for_signed_out() {
+        struct Locked;
+        impl SecretStore for Locked {
+            fn get(&self, _: Uuid, _: &str) -> Result<Option<String>, RuntimeError> {
+                Err(RuntimeError::SecretUnavailable)
+            }
+        }
+        let id = Uuid::new_v4();
+        let url = "https://mcp.example.com";
+        assert_eq!(
+            signed_in(&Locked, id, url),
+            Err(RuntimeError::SecretUnavailable)
+        );
+        assert_eq!(
+            write(&Locked, id, &persisted(url, "token")),
+            Err(RuntimeError::SecretUnavailable)
+        );
+        let locked: Arc<dyn SecretStore> = Arc::new(Locked);
+        assert_eq!(
+            sign_out(locked.clone(), id).await,
+            Err(RuntimeError::SecretUnavailable)
+        );
+        assert!(matches!(
+            manager(locked, id, url).await,
+            Err(RuntimeError::SecretUnavailable)
+        ));
+    }
+
     #[test]
     fn callback_pages_escape_server_independent_text() {
         let response = page("200 OK", "<script>alert(1)</script> & done");
