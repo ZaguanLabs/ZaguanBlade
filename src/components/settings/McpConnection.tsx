@@ -18,7 +18,7 @@ export interface LiveConnectionContext {
     setRemembered?: (remembered: boolean) => void;
 }
 const buttonClass = 'rounded-md border border-(--border-default) px-3 py-2 text-sm text-(--fg-secondary) hover:bg-(--bg-surface-hover) disabled:opacity-50';
-export function McpConnection({ entry, revision, workspacePath, canTest, live }: ConnectionTestContext & { entry: IntegrationDefinition; live: LiveConnectionContext }) {
+export function McpConnection({ entry, revision, workspacePath, canTest, saveFirst, live }: ConnectionTestContext & { entry: IntegrationDefinition; live: LiveConnectionContext }) {
     const { t } = useTranslation();
     const request = useRef<McpConnectionRequest | null>(null);
     const operation = useRef(0);
@@ -27,6 +27,10 @@ export function McpConnection({ entry, revision, workspacePath, canTest, live }:
     const [error, setError] = useState<string | null>(null);
     const [catalog, setCatalog] = useState<McpCatalog | null>(null);
     const [automatic, setAutomatic] = useState(true);
+    const [saving, setSaving] = useState(false);
+    // Set while unsaved settings are being saved for Connect; the connection
+    // starts once the saved revision arrives.
+    const connectAfterSave = useRef(false);
     const status = live.status;
     useEffect(() => {
         setReview(null); setBusy(false); setError(null);
@@ -55,6 +59,18 @@ export function McpConnection({ entry, revision, workspacePath, canTest, live }:
         } catch (failure) {
             if (request.current === current) { setError(integrationProbeErrorKey(failure)); cancel(); }
         } finally { if (request.current === current) setBusy(false); }
+    };
+    useEffect(() => {
+        if (!connectAfterSave.current || !canTest) return;
+        connectAfterSave.current = false;
+        void prepare();
+    }, [canTest, revision]);
+    const start = async () => {
+        if (canTest) { void prepare(); return; }
+        if (!saveFirst || saving) return;
+        connectAfterSave.current = true; setSaving(true); setError(null);
+        try { if (!await saveFirst()) connectAfterSave.current = false; }
+        finally { setSaving(false); }
     };
     const connect = async () => {
         const current = request.current;
@@ -91,12 +107,14 @@ export function McpConnection({ entry, revision, workspacePath, canTest, live }:
         <p className="text-xs text-(--fg-tertiary)">{t('settings.integrations.connection.help')}</p>
         <p role="status" className="text-sm text-(--fg-secondary)">{t(`settings.integrations.connection.${live.phase === 'ready' ? status?.phase ?? 'disconnected' : live.phase === 'failed' ? 'statusUnavailable' : 'checking'}`)}</p>
         <div className="flex flex-wrap gap-2">
-            {!active ? <button type="button" className={buttonClass} disabled={live.phase !== 'ready' || !entry.enabled || !canTest || !revision || !workspacePath || busy || !!review} onClick={() => void prepare()}>{t('settings.integrations.connection.connect')}</button> : null}
+            {!active ? <button type="button" className={buttonClass} disabled={live.phase !== 'ready' || !entry.enabled || !(canTest || saveFirst) || saving || !revision || !workspacePath || busy || !!review} onClick={() => void start()}>
+                {t(`settings.integrations.connection.${!canTest && (saveFirst || saving) ? 'saveAndConnect' : 'connect'}`)}
+            </button> : null}
             {active ? <button type="button" className={buttonClass} disabled={busy || status.phase === 'stopping'} onClick={() => void control('disconnect_mcp')}>{t('settings.integrations.connection.disconnect')}</button> : null}
             {status?.phase === 'connected' ? <button type="button" className={buttonClass} disabled={busy || !canTest} onClick={() => void control('refresh_mcp_catalog')}>{t('settings.integrations.connection.refresh')}</button> : null}
             {busy && request.current ? <button type="button" className={buttonClass} onClick={cancel}>{t('common.cancel')}</button> : null}
         </div>
-        {!entry.enabled || !canTest ? <p className="text-xs text-(--fg-tertiary)">{t('settings.integrations.connection.enableFirst')}</p> : null}
+        {!entry.enabled ? <p className="text-xs text-(--fg-tertiary)">{t('settings.integrations.connection.enableFirst')}</p> : null}
         {live.remembered ? <div className="space-y-1">
             <p className="text-xs text-(--fg-tertiary)">{t('settings.integrations.connection.automatic')}</p>
             <button type="button" className={buttonClass} disabled={busy} onClick={() => void forget()}>{t('settings.integrations.connection.forget')}</button>

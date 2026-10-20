@@ -298,8 +298,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
         setLoadedSettings(prev => ({ ...prev, account }));
     }, []);
 
-    const handleSave = () => {
-        if (isSaving || isLoading || !isLoaded || !hasChanges || integrationRevision === null) return;
+    /** Saves every draft change and keeps Settings open. Resolves true once
+     * everything is written, false when nothing was saved or saving failed. */
+    const saveChanges = async (): Promise<boolean> => {
+        if (isSaving || isLoading || !isLoaded || !hasChanges || integrationRevision === null) return false;
         const session = settingsSession.current;
 
         const settingsSnapshot = settings;
@@ -310,43 +312,45 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
         setIsSaving(true);
         setError(null);
 
-        void (async () => {
-            try {
-                const payload = (value: SettingsState): SettingsPayload => ({
-                    remote: frontendRemoteToBackend(value),
-                    local: frontendLocalToBackend(value),
-                    project: projectSettingsToBackend(value),
-                    integrations: value.integrationConfig,
-                });
-                await saveSettingsChanges(payload(settingsSnapshot), payload(loadedSettingsSnapshot), workspacePathSnapshot, integrationRevision, {
-                    invoke: async <T,>(command: string, args: Record<string, unknown>): Promise<T> => {
-                        try { return await invoke<T>(command, args); }
-                        catch (error) {
-                            if (command === 'save_integration_settings') {
-                                throw Object.assign(new Error(i18n.t(integrationErrorKey(error))), { cause: error });
-                            }
-                            throw error;
+        try {
+            const payload = (value: SettingsState): SettingsPayload => ({
+                remote: frontendRemoteToBackend(value),
+                local: frontendLocalToBackend(value),
+                project: projectSettingsToBackend(value),
+                integrations: value.integrationConfig,
+            });
+            await saveSettingsChanges(payload(settingsSnapshot), payload(loadedSettingsSnapshot), workspacePathSnapshot, integrationRevision, {
+                invoke: async <T,>(command: string, args: Record<string, unknown>): Promise<T> => {
+                    try { return await invoke<T>(command, args); }
+                    catch (error) {
+                        if (command === 'save_integration_settings') {
+                            throw Object.assign(new Error(i18n.t(integrationErrorKey(error))), { cause: error });
                         }
-                    },
-                    emit: event => emit(event),
-                    changeLanguage: language => i18n.changeLanguage(normalizeAppLanguage(language)),
-                    integrationSaved: revision => {
-                        if (session === settingsSession.current) setIntegrationRevision(revision);
-                    },
-                    refreshModels,
-                });
+                        throw error;
+                    }
+                },
+                emit: event => emit(event),
+                changeLanguage: language => i18n.changeLanguage(normalizeAppLanguage(language)),
+                integrationSaved: revision => {
+                    if (session === settingsSession.current) setIntegrationRevision(revision);
+                },
+                refreshModels,
+            });
 
-                if (session === settingsSession.current) {
-                    setLoadedSettings(settingsSnapshot);
-                    setHasChanges(false);
-                    onClose();
-                }
-            } catch (error) {
-                if (session === settingsSession.current) setError(formatUnknownBackendError(error));
-            } finally {
-                if (session === settingsSession.current) setIsSaving(false);
-            }
-        })();
+            if (session !== settingsSession.current) return false;
+            setLoadedSettings(settingsSnapshot);
+            setHasChanges(false);
+            return true;
+        } catch (error) {
+            if (session === settingsSession.current) setError(formatUnknownBackendError(error));
+            return false;
+        } finally {
+            if (session === settingsSession.current) setIsSaving(false);
+        }
+    };
+
+    const handleSave = () => {
+        void saveChanges().then(saved => { if (saved) onClose(); });
     };
 
     if (!isOpen) return null;
@@ -444,7 +448,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, i
                                             workspace={settings.workspaceIntegrations} onWorkspaceChange={workspaceIntegrations => {
                                                 setSettings(previous => ({ ...previous, workspaceIntegrations })); setHasChanges(true);
                                             }}
-                                            workspacePath={workspacePath} canTest={isLoaded && !hasChanges && !isSaving} onChange={integrationConfig => {
+                                            workspacePath={workspacePath} canTest={isLoaded && !hasChanges && !isSaving}
+                                            saveFirst={isLoaded && hasChanges && !isSaving && integrationRevision !== null ? saveChanges : undefined} onChange={integrationConfig => {
                                             setSettings(previous => ({ ...previous, integrationConfig }));
                                             setHasChanges(true);
                                         }} />

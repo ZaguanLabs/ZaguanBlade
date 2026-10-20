@@ -11,6 +11,10 @@ export interface ConnectionTestContext {
     revision?: string | null;
     workspacePath?: string | null;
     canTest?: boolean;
+    /** Saves the unsaved settings without closing them, so a connection can
+     * start from the saved configuration. Set only while there is something
+     * to save. */
+    saveFirst?: () => Promise<boolean>;
 }
 
 const buttonClass = 'rounded-md border border-(--border-default) px-3 py-2 text-sm text-(--fg-secondary) hover:bg-(--bg-surface-hover) disabled:opacity-50';

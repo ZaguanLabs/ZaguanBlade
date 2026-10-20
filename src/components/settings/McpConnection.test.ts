@@ -29,7 +29,12 @@ for (const [language, translation] of Object.entries({ en, es })) {
         const failed = render({ ...status, phase: 'failed', error: 'integration_disabled' });
         assert.ok(failed.includes(translation.settings.integrations.test.errors.integration_disabled));
         assert.ok(!html.includes(translation.settings.integrations.connection.enableFirst));
-        const unsaved = renderToStaticMarkup(createElement(I18nextProvider, { i18n }, createElement(McpConnection, { entry, revision: 'saved', workspacePath: '/workspace', canTest: false, live: { status: undefined, phase: 'ready', update: () => {} } })));
-        assert.ok(unsaved.includes(translation.settings.integrations.connection.enableFirst));
+        const idle = (props: { entry: IntegrationDefinition; canTest: boolean; saveFirst?: () => Promise<boolean> }) => renderToStaticMarkup(createElement(I18nextProvider, { i18n },
+            createElement(McpConnection, { revision: 'saved', workspacePath: '/workspace', live: { status: undefined, phase: 'ready', update: () => {} }, ...props })));
+        const unsaved = idle({ entry, canTest: false, saveFirst: async () => true });
+        assert.ok(unsaved.includes(`>${translation.settings.integrations.connection.saveAndConnect}</button>`));
+        assert.ok(!unsaved.includes('disabled=""'));
+        assert.ok(idle({ entry, canTest: false }).includes(`disabled="">${translation.settings.integrations.connection.connect}</button>`));
+        assert.ok(idle({ entry: { ...entry, enabled: false }, canTest: true }).includes(translation.settings.integrations.connection.enableFirst));
     });
 }
