@@ -22,12 +22,6 @@ export function replaceIntegration(config: IntegrationConfig, entry: Integration
     return { ...config, entries: config.entries.map(existing => existing.id === entry.id ? entry : existing) };
 }
 
-/** Switches one entry on or off and leaves every other field as it was, so the
- * switch can be saved on its own on top of the saved configuration. */
-export function setIntegrationEnabled(config: IntegrationConfig, id: string, enabled: boolean): IntegrationConfig {
-    return { ...config, entries: config.entries.map(existing => existing.id === id ? { ...existing, enabled } : existing) };
-}
-
 const errorCodes = new Set([
     'unsupported_version', 'invalid_config', 'invalid_id', 'duplicate_id', 'invalid_name',
     'invalid_command', 'invalid_arguments', 'invalid_directory', 'invalid_environment',

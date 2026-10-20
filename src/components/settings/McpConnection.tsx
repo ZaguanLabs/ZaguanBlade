@@ -96,7 +96,7 @@ export function McpConnection({ entry, revision, workspacePath, canTest, live }:
             {status?.phase === 'connected' ? <button type="button" className={buttonClass} disabled={busy || !canTest} onClick={() => void control('refresh_mcp_catalog')}>{t('settings.integrations.connection.refresh')}</button> : null}
             {busy && request.current ? <button type="button" className={buttonClass} onClick={cancel}>{t('common.cancel')}</button> : null}
         </div>
-        {!entry.enabled ? <p className="text-xs text-(--fg-tertiary)">{t('settings.integrations.connection.enableFirst')}</p> : null}
+        {!entry.enabled || !canTest ? <p className="text-xs text-(--fg-tertiary)">{t('settings.integrations.connection.enableFirst')}</p> : null}
         {live.remembered ? <div className="space-y-1">
             <p className="text-xs text-(--fg-tertiary)">{t('settings.integrations.connection.automatic')}</p>
             <button type="button" className={buttonClass} disabled={busy} onClick={() => void forget()}>{t('settings.integrations.connection.forget')}</button>
