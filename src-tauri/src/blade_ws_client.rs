@@ -66,6 +66,8 @@ pub enum BladeWsEvent {
     Connected {
         user_id: String,
         server_version: String,
+        /// Keywords from `authenticated.capabilities`.
+        capabilities: Vec<String>,
     },
     HistoryListResponse {
         request_id: String,
@@ -85,6 +87,9 @@ pub enum BladeWsEvent {
         planning_mode: Option<bool>,
         runtime_mode: Option<String>,
         mode_source: Option<String>,
+        /// The tool catalog revision zcoderd applied to this request, when one was sent.
+        applied_tool_catalog_revision: Option<String>,
+        omitted_tools: Vec<OmittedTool>,
     },
     TextChunk {
         request_id: Option<String>,
@@ -276,6 +281,14 @@ pub struct OpenFileInfo {
     pub is_modified: bool,
 }
 
+/// A catalog tool zcoderd did not offer the model, with its reason
+/// (e.g. `schema_unsupported`, `tool_limit`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct OmittedTool {
+    pub alias: String,
+    pub reason: String,
+}
+
 /// Tool execution result
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolResult {
@@ -343,6 +356,8 @@ struct ChatRequestPayload {
     tool_choice: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     parallel_tool_calls: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_catalog: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -675,6 +690,10 @@ impl BladeWsClient {
                 serde_json::Value::Bool(true),
             );
             capabilities.insert("host_skills_v1".to_string(), serde_json::Value::Bool(true));
+            capabilities.insert(
+                crate::integrations::cloud_catalog::CAPABILITY.to_string(),
+                serde_json::Value::Bool(true),
+            );
 
             let auth_msg = WsBaseMessage {
                 id: "auth-1".to_string(),
@@ -807,6 +826,7 @@ impl BladeWsClient {
         tools: Option<Vec<Value>>,
         tool_choice: Option<Value>,
         parallel_tool_calls: Option<bool>,
+        tool_catalog: Option<Value>,
         tag: Option<String>,
         tags: Option<Vec<String>>,
     ) -> Result<(), String> {
@@ -832,6 +852,7 @@ impl BladeWsClient {
             tools,
             tool_choice,
             parallel_tool_calls,
+            tool_catalog,
         };
 
         let msg = WsBaseMessage {
@@ -1260,10 +1281,23 @@ impl BladeWsClient {
                     .unwrap_or("unknown")
                     .to_string();
 
+                let capabilities = msg
+                    .payload
+                    .get("capabilities")
+                    .and_then(|v| v.as_array())
+                    .map(|values| {
+                        values
+                            .iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
                 // eprintln!("[BLADE WS] Authenticated as {}", user_id);
                 let _ = tx.send(BladeWsEvent::Connected {
                     user_id,
                     server_version,
+                    capabilities,
                 });
             }
             "history_list_response" => {
@@ -1334,6 +1368,17 @@ impl BladeWsClient {
                     planning_mode,
                     runtime_mode,
                     mode_source,
+                    applied_tool_catalog_revision: msg
+                        .payload
+                        .get("applied_tool_catalog_revision")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                    omitted_tools: msg
+                        .payload
+                        .get("omitted_tools")
+                        .cloned()
+                        .and_then(|v| serde_json::from_value(v).ok())
+                        .unwrap_or_default(),
                 });
             }
             "text_chunk" => {
@@ -2000,6 +2045,7 @@ mod tests {
             tools: None,
             tool_choice: None,
             parallel_tool_calls: None,
+            tool_catalog: None,
         })
         .unwrap();
         let tool_payload = serde_json::to_value(ToolResultPayload {
@@ -2036,9 +2082,55 @@ mod tests {
             BladeWsEvent::Connected {
                 user_id,
                 server_version,
+                capabilities,
             } => {
                 assert_eq!(user_id, "user_abcdefgh");
                 assert_eq!(server_version, "2026.06.20");
+                assert_eq!(capabilities, vec!["tool_execution".to_string()]);
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_the_tool_catalog_acknowledgement_from_session_created() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let acknowledged = r#"{"type": "session_created", "id": "chat-1", "payload": {
+            "session_id": "sess-1", "model_id": "model",
+            "applied_tool_catalog_revision": "abc",
+            "omitted_tools": [{"alias": "mcp_x", "reason": "schema_unsupported"}]
+        }}"#;
+        BladeWsClient::parse_message(acknowledged, &tx).unwrap();
+        BladeWsClient::parse_message(
+            r#"{"type": "session_created", "id": "chat-2", "payload": {"session_id": "sess-1", "model_id": "model"}}"#,
+            &tx,
+        )
+        .unwrap();
+        match rx.try_recv().unwrap() {
+            BladeWsEvent::Session {
+                applied_tool_catalog_revision,
+                omitted_tools,
+                ..
+            } => {
+                assert_eq!(applied_tool_catalog_revision.as_deref(), Some("abc"));
+                assert_eq!(
+                    omitted_tools,
+                    vec![OmittedTool {
+                        alias: "mcp_x".into(),
+                        reason: "schema_unsupported".into()
+                    }]
+                );
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+        match rx.try_recv().unwrap() {
+            BladeWsEvent::Session {
+                applied_tool_catalog_revision,
+                omitted_tools,
+                ..
+            } => {
+                assert_eq!(applied_tool_catalog_revision, None);
+                assert!(omitted_tools.is_empty());
             }
             other => panic!("unexpected event: {:?}", other),
         }

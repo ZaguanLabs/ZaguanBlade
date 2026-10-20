@@ -1058,11 +1058,37 @@ impl ChatManager {
                     // Some providers may emit the same content as both reasoning and text chunks.
                     // Keep the latest reasoning chunk so we can skip an immediate duplicate text chunk.
                     let mut last_reasoning_chunk: Option<String> = None;
+                    let mut sent_catalog_revision: Option<String> = None;
                     while let Some(event) = ws_rx.recv().await {
                         match event {
-                            crate::blade_ws_client::BladeWsEvent::Connected { .. } => {
+                            crate::blade_ws_client::BladeWsEvent::Connected {
+                                capabilities,
+                                ..
+                            } => {
                                 // eprintln!("[CHAT MGR] Authenticated, sending chat message with session_id: {:?}", session_id);
                                 authenticated = true;
+                                let index_enabled =
+                                    crate::index_policy::enabled(Path::new(&workspace_info.root))
+                                        .unwrap_or(false);
+                                // With the negotiated catalog zcoderd follows the index setting
+                                // itself; otherwise the legacy tools field carries it.
+                                let catalog = capabilities
+                                    .iter()
+                                    .any(|c| c == crate::integrations::cloud_catalog::CAPABILITY)
+                                    .then(|| {
+                                        crate::integrations::cloud_catalog::CloudToolCatalog::new(
+                                            index_enabled,
+                                        )
+                                    });
+                                sent_catalog_revision =
+                                    catalog.as_ref().map(|c| c.revision().to_string());
+                                let legacy_tools =
+                                    (catalog.is_none() && !index_enabled).then(|| {
+                                        crate::index_policy::filter_tools(
+                                            get_tool_definitions_for_model(&model_id, true),
+                                            false,
+                                        )
+                                    });
 
                                 // Send chat message with storage mode (RFC-002)
                                 if let Err(e) = ws_client
@@ -1076,18 +1102,12 @@ impl ChatManager {
                                         storage_mode.clone(),
                                         mode.clone(),
                                         local_conversation_state.clone(),
-                                        (!crate::index_policy::enabled(Path::new(
-                                            &workspace_info.root,
-                                        ))
-                                        .unwrap_or(false))
-                                        .then(|| {
-                                            crate::index_policy::filter_tools(
-                                                get_tool_definitions_for_model(&model_id, true),
-                                                false,
-                                            )
+                                        legacy_tools,
+                                        None,
+                                        None,
+                                        catalog.map(|c| {
+                                            serde_json::to_value(c).expect("catalog serializes")
                                         }),
-                                        None,
-                                        None,
                                         None,
                                         None,
                                     )
@@ -1105,11 +1125,27 @@ impl ChatManager {
                                 planning_mode,
                                 runtime_mode,
                                 mode_source,
+                                applied_tool_catalog_revision,
+                                omitted_tools,
                             } => {
                                 // eprintln!(
                                 //     "[CHAT MGR] Session event: session_id={}, model={}",
                                 //     session_id, model_id
                                 // );
+                                if sent_catalog_revision.is_some()
+                                    && applied_tool_catalog_revision != sent_catalog_revision
+                                {
+                                    eprintln!(
+                                        "[CHAT MGR] zcoderd applied tool catalog {:?}, expected {:?}",
+                                        applied_tool_catalog_revision, sent_catalog_revision
+                                    );
+                                }
+                                if !omitted_tools.is_empty() {
+                                    eprintln!(
+                                        "[CHAT MGR] zcoderd omitted catalog tools: {:?}",
+                                        omitted_tools
+                                    );
+                                }
                                 ws_client.set_session_id(session_id.clone()).await;
                                 let _ = tx.send(ChatEvent::Session {
                                     session_id: session_id.clone(),

@@ -24,6 +24,7 @@ pub enum ConnectionState {
 struct AuthState {
     user_id: String,
     server_version: String,
+    capabilities: Vec<String>,
 }
 
 /// Manages a persistent WebSocket connection to zcoderd
@@ -211,6 +212,7 @@ impl WsConnectionManager {
             let _ = tx.send(BladeWsEvent::Connected {
                 user_id: auth_state.user_id,
                 server_version: auth_state.server_version,
+                capabilities: auth_state.capabilities,
             });
         }
 
@@ -233,12 +235,14 @@ impl WsConnectionManager {
                 BladeWsEvent::Connected {
                     user_id,
                     server_version,
+                    capabilities,
                 } => {
                     {
                         let mut auth_state = self.auth_state.write().await;
                         *auth_state = Some(AuthState {
                             user_id: user_id.clone(),
                             server_version: server_version.clone(),
+                            capabilities: capabilities.clone(),
                         });
                     }
                     {
@@ -488,6 +492,7 @@ impl WsConnectionManager {
         tools: Option<Vec<Value>>,
         tool_choice: Option<Value>,
         parallel_tool_calls: Option<bool>,
+        tool_catalog: Option<Value>,
         tag: Option<String>,
         tags: Option<Vec<String>>,
     ) -> Result<(), String> {
@@ -511,6 +516,7 @@ impl WsConnectionManager {
                 tools,
                 tool_choice,
                 parallel_tool_calls,
+                tool_catalog,
                 tag,
                 tags,
             )

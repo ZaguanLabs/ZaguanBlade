@@ -2104,6 +2104,29 @@ mod tests {
     }
 
     #[test]
+    fn client_tool_names_cover_every_defined_and_dispatched_tool() {
+        for definition in crate::ai_workflow::get_tool_definitions() {
+            let name = definition["name"].as_str().expect("tool name");
+            assert!(
+                crate::tools::CLIENT_TOOL_NAMES.contains(&name),
+                "{name} is missing from CLIENT_TOOL_NAMES"
+            );
+        }
+        let workspace = tempdir().expect("tempdir");
+        for name in crate::tools::CLIENT_TOOL_NAMES
+            .iter()
+            .filter(|name| **name != "run_command")
+        {
+            let result = execute_tool(workspace.path(), name, "{}");
+            let error = result.error.unwrap_or_default();
+            assert!(
+                !error.starts_with("unknown tool"),
+                "{name} is not dispatched"
+            );
+        }
+    }
+
+    #[test]
     fn execute_tool_supports_apply_patch_validated() {
         let workspace = tempdir().expect("tempdir");
         let file_path = workspace.path().join("example.txt");
@@ -3333,6 +3356,68 @@ pub struct EditorState {
     pub selection_start_line: Option<usize>,
     pub selection_end_line: Option<usize>,
 }
+
+/// Every built-in tool Blade runs itself for a model: the names
+/// `execute_tool_with_editor` dispatches, plus `run_command`, which `ai_workflow`
+/// runs. A cloud tool catalog offers only these besides zcoderd's own tools, so
+/// a tool missing here is never offered to cloud models.
+pub const CLIENT_TOOL_NAMES: &[&str] = &[
+    "read_file",
+    "write_file",
+    "write_file_validated",
+    "create_file",
+    "write_to_file",
+    "edit_file",
+    "grep_search",
+    "rg",
+    "codebase_search",
+    "list_directory",
+    "list_dir",
+    "get_editor_state",
+    "fast_context",
+    "symbol_search",
+    "semantic_anchor_search",
+    "symbol_resolve",
+    "symbol_related",
+    "symbol_references",
+    "edit_impact",
+    "symbol_graph",
+    "symbol_trace",
+    "symbol_path",
+    "symbol_query",
+    "symbol_architecture",
+    "symbol_schema",
+    "symbol_outline",
+    "read_file_range",
+    "list_skills",
+    "load_skill",
+    "apply_edit",
+    "apply_patch",
+    "apply_patch_validated",
+    "replace_file_content",
+    "multi_replace_file_content",
+    "get_workspace_structure",
+    "get_project_index_overview",
+    "get_project_index_chunk",
+    "read_many_files",
+    "batch",
+    "codebase_investigator",
+    "command_session",
+    "find_files",
+    "find_files_glob",
+    "glob",
+    "create_directory",
+    "delete_file",
+    "move_file",
+    "copy_file",
+    "get_file_info",
+    "open_file",
+    "goto_line",
+    "get_selection",
+    "replace_selection",
+    "insert_at_cursor",
+    "run_command",
+];
 
 pub fn execute_tool(workspace_root: &Path, tool_name: &str, raw_args: &str) -> ToolResult {
     execute_tool_with_editor::<tauri::Wry>(workspace_root, tool_name, raw_args, None, None)

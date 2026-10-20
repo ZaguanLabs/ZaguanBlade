@@ -9,6 +9,7 @@ pub mod acp_session;
 pub mod agent_sessions;
 pub(crate) mod call_result;
 pub mod catalog;
+pub mod cloud_catalog;
 pub mod config;
 pub mod connections;
 pub mod credentials;
