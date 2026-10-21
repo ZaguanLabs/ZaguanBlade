@@ -66,8 +66,8 @@
     "saved": "Guardado",
     "saveFailed": "No se pudo guardar",
     "readOnly": "Solo lectura",
-    "lineCount": "{count} líneas",
-    "cursorPosition": "Ln {line}, Col {column}",
+    "lineCount": "{{count}} líneas",
+    "cursorPosition": "Ln {{line}}, Col {{column}}",
     "encoding": "UTF-8",
     "language": "Idioma",
     "tabSize": "Tamaño de tabulación",
@@ -348,9 +348,9 @@
         "help": "Elige un método de inicio de sesión. El propio agente se encarga del proceso.",
         "none": "El agente no ofrece ningún método de inicio de sesión que Blade pueda usar.",
         "terminalAction": "{{method}} en un terminal",
-        "terminalHelp": "El inicio de sesión desde terminal ejecuta el propio programa de {{name}} en un terminal aquí. Sigue sus pasos; cuando termine correctamente, Blade volverá a iniciar el agente en esta conversación.",
+        "terminalHelp": "El inicio de sesión desde terminal ejecuta el propio programa de {{name}} en un terminal dentro de Blade. Sigue sus pasos; cuando termine correctamente, Blade volverá a iniciar el agente en esta conversación.",
         "terminalRunning": "Iniciando sesión con {{method}}. Sigue los pasos en el terminal de abajo.",
-        "terminalEnded": "El inicio de sesión con {{method}} terminó sin éxito. Su salida se mantiene abajo.",
+        "terminalEnded": "El inicio de sesión con {{method}} ha terminado sin éxito. Su salida se mantiene abajo.",
         "terminalFailed": "El inicio de sesión desde terminal no se completó. Vuelve a intentarlo o elige otro método.",
         "terminalCancel": "Cancelar inicio de sesión",
         "terminalClose": "Cerrar terminal"
@@ -370,7 +370,7 @@
       },
       "elicitation": {
         "title": "{{name}} solicita información",
-        "help": "Esta solicitud procede de {{name}}, no de Blade. Responde solo lo que estés dispuesto a compartir con él. Si la rechazas, el agente sabrá que no quieres responder; si la cancelas, la solicitud se descarta.",
+        "help": "Esta solicitud procede de {{name}}, no de Blade. Responde solo lo que quieras compartir con él. Si la rechazas, el agente sabrá que no quieres responder; si la cancelas, la solicitud se descarta.",
         "urlHelp": "{{name}} te pide continuar en una página de {{host}}. Comprueba la dirección completa antes de abrirla."
       },
       "tool": {
@@ -385,7 +385,7 @@
         "resource": "Recurso {{uri}}",
         "other": "Contenido que Blade no puede mostrar",
         "truncated": "Recortado para mostrarlo.",
-        "omitted": "No se guardaron {{count}} informes de herramientas más de este turno."
+        "omitted": "No se han conservado otros {{count}} informes de herramientas de este turno."
       },
       "files": {
         "written": "Cambiado a través de Blade (abre el archivo para aceptar o rechazar el cambio):",
@@ -397,14 +397,14 @@
       },
       "terminal": {
         "running": "En ejecución…",
-        "exited": "Terminó con el código {{code}}",
+        "exited": "Finalizado con el código {{code}}",
         "signal": "Detenido por {{signal}}",
         "truncated": "Solo se muestra la salida más reciente."
       },
       "stopReason": {
         "max_tokens": "El agente se ha detenido porque ha alcanzado su límite de tokens.",
         "max_turn_requests": "El agente se ha detenido porque ha alcanzado su límite de pasos por turno.",
-        "refusal": "El agente ha declinado continuar. No recordará este mensaje.",
+        "refusal": "El agente se ha negado a continuar. No recordará este mensaje.",
         "cancelled": "Detenido."
       },
       "failed": "El turno no ha terminado: {{reason}}",
@@ -532,7 +532,7 @@
     "nextChange": "Siguiente cambio",
     "previousChange": "Cambio anterior",
     "aiSuggestion": "Sugerencia de IA",
-    "pendingChanges": "{count} cambio(s) pendiente(s)",
+    "pendingChanges": "{{count}} cambio(s) pendiente(s)",
     "reviewChanges": "Revisa los cambios propuestos y pulsa Aceptar para aplicarlos o Rechazar para descartarlos.",
     "noChanges": "No hay cambios para revisar",
     "changeAccepted": "Cambio aceptado",
@@ -551,8 +551,8 @@
   "approval": {
     "title": "Aprobar cambios",
     "description": "La IA ha propuesto cambios en tu código. Revísalos y apruébalos.",
-    "filePending": "{count} archivo(s) pendiente(s) de revisión",
-    "hunkPending": "{count} fragmento(s) pendiente(s)",
+    "filePending": "{{count}} archivo(s) pendiente(s) de revisión",
+    "hunkPending": "{{count}} fragmento(s) pendiente(s)",
     "acceptHunk": "Aceptar este cambio",
     "rejectHunk": "Rechazar este cambio",
     "remove": "Quitar",
@@ -742,12 +742,12 @@
       "syncMetadataDescription": "Sincronizar títulos y etiquetas de conversaciones con el servidor (sin código)",
       "enableCache": "Activar caché",
       "cacheDescription": "Guardar en caché el contexto reciente para un acceso más rápido",
-      "maxCacheSize": "Tamaño máximo de caché: {size} MB"
+      "maxCacheSize": "Tamaño máximo de caché: {{size}} MB"
     },
     "context": {
       "title": "Ajustes de contexto",
       "description": "Configura cómo se monta y se comprime el contexto.",
-      "maxContextTokens": "Tokens máximos de contexto: {count}",
+      "maxContextTokens": "Tokens máximos de contexto: {{count}}",
       "tokenRangeMin": "2K",
       "tokenRangeMax": "32K",
       "tokenHelp": "Los valores más altos aportan más contexto, pero aumentan la latencia y el coste.",
@@ -942,7 +942,7 @@
       },
       "oauth": {
         "title": "Inicio de sesión con OAuth",
-        "enable": "Iniciar sesión mediante el servidor de autorización del servidor",
+        "enable": "Iniciar sesión con el servicio de autorización del servidor",
         "help": "Para servidores que usan OAuth. Blade abre la página de inicio de sesión en tu navegador y guarda los tokens obtenidos en el llavero del sistema, nunca en el archivo de ajustes. Los tokens solo se envían a la URL de este servidor.",
         "clientId": "ID de cliente (opcional)",
         "clientIdPlaceholder": "Déjalo vacío para que Blade se registre automáticamente",
@@ -1043,7 +1043,7 @@
         "add": "Añadir variable",
         "remove": "Eliminar {{name}}",
         "kind": "Origen del valor",
-        "text": "Texto sin cifrar",
+        "text": "Texto plano",
         "secret": "Referencia a una credencial",
         "secretName": "Nombre de la credencial",
         "value": "Valor",
@@ -1054,7 +1054,7 @@
         "store": "Guardar credencial",
         "delete": "Borrar credencial guardada",
         "stored": "Credencial guardada.",
-        "deleted": "Credencial guardada borrada."
+        "deleted": "Se ha borrado la credencial guardada."
       },
       "index": {
         "title": "Índice de símbolos integrado",
@@ -1095,7 +1095,7 @@
         "disconnect": "Desconectar",
         "refresh": "Actualizar herramientas",
         "enableFirst": "Activa este servidor para conectarlo.",
-        "remember": "Conectar automáticamente al abrir este espacio de trabajo, siempre que el lanzamiento no cambie",
+        "remember": "Conectar automáticamente al abrir este espacio de trabajo, siempre que la configuración de inicio no cambie",
         "automatic": "Se conecta automáticamente al abrir este espacio de trabajo. Cualquier cambio en el programa, sus argumentos, su entorno o el propio ejecutable requerirá una nueva revisión.",
         "forget": "Dejar de conectar automáticamente",
         "checking": "Comprobando la conexión…",
@@ -1147,9 +1147,9 @@
     "branch": "Rama",
     "noBranch": "sin rama",
     "saving": "Guardando...",
-    "changes": "{count} cambios",
-    "errors": "{count} errores",
-    "warnings": "{count} advertencias",
+    "changes": "{{count}} cambios",
+    "errors": "{{count}} errores",
+    "warnings": "{{count}} advertencias",
     "notifications": "Notificaciones",
     "sync": "Sincronizar",
     "extension": "Extensión",
@@ -1340,7 +1340,7 @@
     "useRegex": "Usar expresión regular",
     "filesInclude": "Archivos a incluir",
     "filesExclude": "Archivos a excluir",
-    "results": "{count} resultados en {files} archivos",
+    "results": "{{count}} resultados en {{files}} archivos",
     "noResults": "No se han encontrado resultados",
     "replace": "Reemplazar",
     "replaceAll": "Reemplazar todo"
@@ -1409,22 +1409,22 @@
     "fallbackCommitMessageMany": "Actualizar {{count}} archivos"
   },
   "errors": {
-    "fileNotFound": "Archivo no encontrado: {path}",
-    "permissionDenied": "Permiso denegado: {path}",
+    "fileNotFound": "Archivo no encontrado: {{path}}",
+    "permissionDenied": "Permiso denegado: {{path}}",
     "permissionDeniedGeneric": "Permiso denegado.",
-    "networkError": "Error de red: {message}",
+    "networkError": "Error de red: {{message}}",
     "unknownError": "Se ha producido un error desconocido",
-    "invalidInput": "Entrada no válida: {message}",
+    "invalidInput": "Entrada no válida: {{message}}",
     "noWorkspaceOpen": "No hay ningún espacio de trabajo abierto.",
-    "operationFailed": "La operación ha fallado: {message}",
-    "conflict": "Conflicto: {reason}",
+    "operationFailed": "La operación ha fallado: {{message}}",
+    "conflict": "Conflicto: {{reason}}",
     "pathOutsideWorkspace": "La ruta está fuera del espacio de trabajo actual.",
-    "modelNotFound": "Modelo no encontrado: {model}",
-    "versionMismatch": "Incompatibilidad de versión del protocolo. Se esperaba {expected}, se recibió {received}.",
+    "modelNotFound": "Modelo no encontrado: {{model}}",
+    "versionMismatch": "Incompatibilidad de versión del protocolo. Se esperaba {{expected}}, se recibió {{received}}.",
     "timeout": "La operación ha superado el tiempo de espera",
     "cancelled": "Operación cancelada",
     "notImplemented": "Función aún no implementada",
-    "apiError": "Error de API: {message}",
+    "apiError": "Error de API: {{message}}",
     "authenticationFailed": "Error de autenticación",
     "rateLimitExceeded": "Se ha superado el límite de peticiones. Vuelve a intentarlo más tarde.",
     "noModelSelected": "No hay ningún modelo seleccionado",
@@ -1547,7 +1547,7 @@
     "viewLogs": "Ver registros",
     "checkForUpdates": "Buscar actualizaciones",
     "about": "Acerca de Zaguán Blade",
-    "version": "Versión {version}",
+    "version": "Versión {{version}}",
     "license": "Licencia",
     "privacyPolicy": "Política de privacidad",
     "termsOfService": "Términos del servicio"
@@ -1562,11 +1562,11 @@
     "documenting": "Generando documentación...",
     "translating": "Traduciendo...",
     "optimizing": "Optimizando...",
-    "error": "La solicitud a la IA ha fallado: {message}",
+    "error": "La solicitud a la IA ha fallado: {{message}}",
     "noContext": "No hay contexto disponible",
     "contextTooLarge": "El contexto es demasiado grande",
     "rateLimited": "Límite alcanzado. Espera un momento.",
-    "modelUnavailable": "Modelo no disponible: {model}",
+    "modelUnavailable": "Modelo no disponible: {{model}}",
     "apiKeyMissing": "La clave API no está configurada",
     "apiKeyInvalid": "Clave API no válida"
   },
@@ -1852,7 +1852,7 @@
       "uncertain": "No se conoce el resultado de una llamada MCP. Se han bloqueado las demás llamadas MCP de este turno; comprueba el servicio externo antes de volver a intentarlo.",
       "model_changed": "Has cambiado el modelo seleccionado. Se ha detenido este turno; envía un nuevo mensaje para continuar con el nuevo modelo.",
       "cloud_unsupported": "Este servidor de Zaguán no admite herramientas MCP, así que no están disponibles en este turno.",
-      "cloud_unacknowledged": "Zaguán no ha confirmado qué herramientas MCP ofreció al modelo, así que no están disponibles en este turno. Envía un nuevo mensaje para volver a intentarlo."
+      "cloud_unacknowledged": "Zaguán no ha confirmado qué herramientas MCP ha ofrecido al modelo, así que no están disponibles en este turno. Envía un nuevo mensaje para volver a intentarlo."
     },
     "approval": "¿Permitir que {{server}} ejecute {{tool}}?",
     "approvalHelp": "Esta herramienta externa puede acceder a archivos o servicios. El permiso se aplica solo a estos argumentos y a esta llamada, y caduca a los 60 segundos.",
@@ -1861,7 +1861,7 @@
     "allow": "Permitir una vez",
     "elicitation": {
       "title": "{{server}} solicita información mientras ejecuta {{tool}}",
-      "help": "Esta solicitud procede del servidor externo, no de Blade. Responde solo lo que estés dispuesto a compartir con él. Si la rechazas, la herramienta continuará sin tu respuesta; si la cancelas, se detendrá.",
+      "help": "Esta solicitud procede del servidor externo, no de Blade. Responde solo lo que quieras compartir con él. Si la rechazas, la herramienta continuará sin tu respuesta; si la cancelas, se detendrá.",
       "urlHelp": "El servidor te pide continuar en una página de {{host}}. Comprueba la dirección completa antes de abrirla.",
       "submit": "Enviar respuesta",
       "open": "Abrir en el navegador",
@@ -1873,7 +1873,7 @@
     },
     "tool": "Herramienta MCP",
     "waiting": "Esperando a que permitas esta llamada en la parte superior del chat o a que responda la herramienta externa.",
-    "approvalExpired": "Nadie permitió esta llamada en 60 segundos, así que no se ha ejecutado. Vuelve a pedirlo para reintentarlo.",
+    "approvalExpired": "Nadie ha permitido esta llamada en 60 segundos, así que no se ha ejecutado. Pídelo de nuevo para volver a intentarlo.",
     "outcome": {
       "completed": "La herramienta externa ha respondido.",
       "unknown": "Resultado desconocido. La operación externa puede haberse realizado. Compruébalo antes de volver a intentarlo.",
