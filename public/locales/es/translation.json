@@ -404,7 +404,7 @@
       "stopReason": {
         "max_tokens": "El agente se ha detenido porque ha alcanzado su límite de tokens.",
         "max_turn_requests": "El agente se ha detenido porque ha alcanzado su límite de pasos por turno.",
-        "refusal": "El agente ha declinado continuar.",
+        "refusal": "El agente ha declinado continuar. No recordará este mensaje.",
         "cancelled": "Detenido."
       },
       "failed": "El turno no ha terminado: {{reason}}",

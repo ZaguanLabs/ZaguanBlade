@@ -3139,6 +3139,92 @@ pub(crate) mod tests {
         wire.expect("session/prompt").await;
     }
 
+    /// Agents ahead of Blade's protocol version send update kinds it does not
+    /// know; they are skipped, not fatal. Each stop reason ends its turn.
+    #[tokio::test]
+    async fn unknown_updates_are_skipped_and_every_stop_reason_ends_the_turn() {
+        let (mut wire, session, fixture) = ready().await;
+        for (turn, wire_reason, stop_reason) in [
+            (1, "refusal", StopReason::Refusal),
+            (2, "max_tokens", StopReason::MaxTokens),
+            (3, "max_turn_requests", StopReason::MaxTurnRequests),
+        ] {
+            assert_eq!(
+                session.prompt(vec![PromptPart::Text("Go".into())]).await,
+                Ok(turn)
+            );
+            let prompt = wire.expect("session/prompt").await;
+            if turn == 1 {
+                wire.update(json!({"sessionUpdate":"future_kind","detail":{"x":1}}))
+                    .await;
+                wire.update(json!({"sessionUpdate":"agent_message_chunk",
+                    "content":{"type":"text","text":"still here"},"futureField":true}))
+                    .await;
+            }
+            wire.reply(&prompt, json!({"stopReason":wire_reason})).await;
+            assert_eq!(
+                fixture
+                    .wait_for(
+                        |event| matches!(event, AcpEvent::TurnEnded { turn: t, .. } if *t == turn)
+                    )
+                    .await,
+                AcpEvent::TurnEnded { turn, stop_reason }
+            );
+        }
+        let events = fixture.events();
+        assert!(events.iter().any(|event| matches!(event,
+            AcpEvent::MessageChunk { content: ContentView::Text { text }, .. } if text == "still here")));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, AcpEvent::Exited { .. } | AcpEvent::TurnFailed { .. })));
+    }
+
+    /// Stop pressed as the turn ends: after the answer nothing is sent, and a
+    /// late answer that is not `cancelled` ends the turn without the forced stop.
+    #[tokio::test]
+    async fn a_cancel_after_or_racing_the_end_of_a_turn_leaves_the_session_usable() {
+        let (mut wire, session, fixture) = ready().await;
+        session
+            .prompt(vec![PromptPart::Text("Quick".into())])
+            .await
+            .unwrap();
+        let prompt = wire.expect("session/prompt").await;
+        wire.reply(&prompt, json!({"stopReason":"end_turn"})).await;
+        fixture
+            .wait_for(|event| matches!(event, AcpEvent::TurnEnded { turn: 1, .. }))
+            .await;
+        session.cancel().await.unwrap();
+        assert_eq!(
+            session.prompt(vec![PromptPart::Text("Race".into())]).await,
+            Ok(2)
+        );
+        // No session/cancel went out for the finished turn.
+        let prompt = wire.expect("session/prompt").await;
+        session.cancel().await.unwrap();
+        wire.expect("session/cancel").await;
+        wire.reply(&prompt, json!({"stopReason":"end_turn"})).await;
+        assert_eq!(
+            fixture
+                .wait_for(|event| matches!(event, AcpEvent::TurnEnded { turn: 2, .. }))
+                .await,
+            AcpEvent::TurnEnded {
+                turn: 2,
+                stop_reason: StopReason::EndTurn
+            }
+        );
+        // Past the cancel grace the agent is still running.
+        tokio::time::sleep(CANCEL_GRACE * 2).await;
+        assert!(!fixture
+            .events()
+            .iter()
+            .any(|event| matches!(event, AcpEvent::Exited { .. } | AcpEvent::TurnFailed { .. })));
+        assert_eq!(
+            session.prompt(vec![PromptPart::Text("Next".into())]).await,
+            Ok(3)
+        );
+        wire.expect("session/prompt").await;
+    }
+
     #[tokio::test]
     async fn an_agent_that_ignores_cancellation_is_stopped() {
         let (mut wire, session, fixture) = ready().await;

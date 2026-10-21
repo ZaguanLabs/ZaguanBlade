@@ -404,7 +404,7 @@
       "stopReason": {
         "max_tokens": "The agent stopped because it reached its token limit.",
         "max_turn_requests": "The agent stopped because it reached its step limit for one turn.",
-        "refusal": "The agent declined to continue.",
+        "refusal": "The agent declined to continue. It won't remember this message.",
         "cancelled": "Stopped."
       },
       "failed": "The turn did not finish: {{reason}}",

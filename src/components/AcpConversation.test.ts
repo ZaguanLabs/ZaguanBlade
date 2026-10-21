@@ -172,6 +172,17 @@ for (const [language, translation] of Object.entries({ en, es })) {
         assert.ok((await render(startAgentChat(withImages))).includes(attach));
     });
 
+    test(`a turn that stops early says why, and a normal end says nothing in ${language}`, async () => {
+        for (const reason of ['refusal', 'max_tokens', 'max_turn_requests', 'cancelled'] as const) {
+            const chat = applyAcpEvent(addPrompt(startAgentChat(status(true)), 1, 'Go'), { type: 'turn_ended', turn: 1, stop_reason: reason });
+            const html = await render(chat);
+            assert.ok(html.includes(escape(strings.stopReason[reason])), reason);
+            assert.ok(!html.includes(escape(strings.working)), reason);
+        }
+        const normal = await render(applyAcpEvent(addPrompt(startAgentChat(status(true)), 1, 'Go'), { type: 'turn_ended', turn: 1, stop_reason: 'end_turn' }));
+        assert.ok(!Object.values(strings.stopReason).some(text => normal.includes(escape(text))));
+    });
+
     test(`a reconnected session says whether the agent remembers the stored turns in ${language}`, async () => {
         const history = storedTurns([{ role: 'User', content: 'Earlier question' }, { role: 'Assistant', content: 'Earlier answer' }]);
         const notice = (key: 'resumed' | 'replaced') => escape(strings.reopened[key].replace('{{name}}', 'Fixture Agent'));
