@@ -64,9 +64,17 @@ fn fixture_source_dir() -> PathBuf {
 }
 
 /// Copy the fixture corpus into a fresh TempDir workspace.
+///
+/// Integration tests link the normal library, so the index policy reads the
+/// developer's real global settings. The workspace turns the Symbols Index on
+/// for itself, which takes precedence over a global "off".
 fn fixture_workspace() -> TempDir {
     let workspace = TempDir::new().expect("create fixture workspace");
     copy_dir_recursive(&fixture_source_dir(), workspace.path());
+    let settings = zblade_lib::project_settings::get_settings_path(workspace.path());
+    std::fs::create_dir_all(settings.parent().expect("settings parent")).expect("create .zblade/config");
+    std::fs::write(&settings, r#"{"integrations":{"symbols_index_enabled":true}}"#)
+        .expect("enable the Symbols Index for the fixture workspace");
     workspace
 }
 
